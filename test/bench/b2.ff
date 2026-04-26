@@ -1,0 +1,2 @@
+: bench  0 50000000 0 do  i +  loop ;
+bench  drop  quit

@@ -1,0 +1,9 @@
+: max2 2dup < if swap then drop ;
+3 7 max2 .
+9 4 max2 .
+: facti 1 swap 1 + 1 ?do i * loop ;
+5 facti .
+10 facti .
+: sumto 0 swap 1 + 1 ?do i + loop ;
+10 sumto .
+100 sumto .

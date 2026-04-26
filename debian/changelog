@@ -1,0 +1,7 @@
+libff (1.0.0-1) UNRELEASED; urgency=medium
+
+  * Initial release packaged as three binaries: libff1 (runtime),
+    libff-dev (static archive + headers + CMake config), and
+    libff-doc (HTML and PDF reference manual).
+
+ -- Mikhail Borisov <borisov@gmail.com>  Sat, 25 Apr 2026 12:00:00 +0000

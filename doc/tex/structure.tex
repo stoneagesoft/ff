@@ -1,0 +1,90 @@
+\usepackage{tocloft}
+\usepackage{verbatimbox}
+\usepackage{framed}
+\usepackage{tcolorbox}
+
+\renewcommand{\cftsecleader}{\cftdotfill{\cftdotsep}}
+%\cftsetpnumwidth{1.0cm}
+\def\l@figure{\@dottedtocline{1}{1.5em}{4em}}
+\def\l@table{\@dottedtocline{1}{1.5em}{4em}}
+
+\setcounter{secnumdepth}{5}
+\setcounter{tocdepth}{5}
+
+\let\latex@section\section
+\def\section{\pagebreak\secdef\my@section{\latex@section*}}
+\def\my@section[#1]#2{\latex@section[#2]{#1}\setrheader{\thesection~#1}\setcounter{figure}{0}}
+
+\let\latex@subsection\subsection
+\def\subsection{\secdef\my@subsection{\latex@subsection*}}
+\def\my@subsection[#1]#2{\latex@subsection[#2]{#1}\setrheader{\thesubsection~#1}}
+
+\let\latex@subsubsection\subsubsection
+\def\subsubsection{\secdef\my@subsubsection{\latex@subsubsection*}}
+\def\my@subsubsection[#1]#2{\latex@subsubsection[#2]{#1}\setrheader{\thesubsubsection~#1}}
+
+\let\latex@paragraph\paragraph
+\def\paragraph{\secdef\my@paragraph{\latex@paragraph*}}
+\def\my@paragraph[#1]#2{\latex@paragraph[#2]{#1}\setrheader{\theparagraph~#1}\mbox{}\\}
+
+\newtheoremstyle{thstyle}
+    {\topsep}   % ABOVESPACE
+    {\topsep}   % BELOWSPACE
+    {\itshape}  % BODYFONT
+    {0pt}       % INDENT (empty value is the same as 0pt)
+    {\bfseries} % HEADFONT
+    {.}         % HEADPUNCT
+    {5pt plus 1pt minus 1pt} % HEADSPACE
+    {}          % CUSTOM-HEAD-SPEC
+
+\theoremstyle{thstyle}
+
+\newtheorem{define}{Определение}[section]
+\newtheorem{example}{Пример}[section]
+
+\AtBeginDocument{\counterwithin{define}{subsection}}
+\AtBeginDocument{\counterwithin{example}{subsection}}
+\AtBeginDocument{\counterwithin{figure}{subsection}}
+\AtBeginDocument{\counterwithin{table}{subsection}}
+
+\newenvironment{fig}
+{
+    \begin{figure}[H]
+    \centering
+}
+{
+    \end{figure}
+}
+
+\newenvironment{colbox}[1]{%
+   \def\FrameCommand{\colorbox{#1}}%
+   \MakeFramed{\advance\hsize-\width \FrameRestore}}
+ {\endMakeFramed}
+
+
+\definecolor{implcolor}{HTML}{999999}
+
+\newtcolorbox[auto counter,number within=subsection]{impl}
+{%
+    boxrule=0.5pt,colback=implcolor!10!white,colframe=implcolor!75!black,fonttitle=\bfseries,
+    title=Пример реализации~\thetcbcounter%
+}
+
+\definecolor{warncolor}{HTML}{CC0000}
+
+\newtcolorbox[auto counter,number within=subsection]{warning}
+{%
+    boxrule=0.5pt,colback=warncolor!10!white,colframe=warncolor!75!black,fonttitle=\bfseries,
+    title=ПРЕДУПРЕЖДЕНИЕ~\thetcbcounter%
+}
+
+
+\definecolor{notecolor}{HTML}{00CC00}
+
+\newtcolorbox[auto counter,number within=subsection]{note}
+{%
+    boxrule=0.5pt,colback=notecolor!10!white,colframe=notecolor!75!black,fonttitle=\bfseries,
+    title=ЗАМЕЧАНИЕ~\thetcbcounter%
+}
+
+\makeindex

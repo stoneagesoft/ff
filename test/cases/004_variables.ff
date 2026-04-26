@@ -1,0 +1,8 @@
+variable v1
+42 v1 !
+v1 @ .
+v1 @ 8 + v1 !
+v1 @ .
+100 constant hundred
+hundred .
+hundred 5 + .

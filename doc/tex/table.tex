@@ -1,0 +1,165 @@
+\usepackage{longtable}[=v4.13]
+\usepackage{tabu}
+\usepackage{tabularray}
+\usepackage{multirow}
+\usepackage{colortbl}
+\usepackage{environ}
+
+\tabulinesep=^1mm_1mm
+
+\newtabulinestyle{dottedline=0.5pt on 0.5pt off 2pt}
+\newcommand{\dottedline}{\tabucline[dottedline]{-}}
+
+\newcommand{\topline}{\tabucline[1.5pt]{-}}
+\newcommand{\bottomline}{\tabucline[1.5pt]{-}}
+\newcommand{\midline}{\tabucline{-}}
+
+
+% --- Doxygen ≥ 1.16 table machinery ---
+% The new generated TeX wraps every doxygen-emitted table in
+% \begin{DoxyTable}{n}{caption}{label}{rowhead}{body}\end{DoxyTable}
+% where the body is rendered via tabularray. The previous one-argument
+% DoxyTable that lived here collided with the new shape, so we replace
+% it with the canonical 1.16 definition.
+
+% A length to hold the natural width of the most recent off-screen
+% rendering of a table (used to choose between fixed and flexible
+% columns). Defined via the expl3 layer because the rendering pass uses
+% l3kernel internals.
+\ExplSyntaxOn
+\dim_new:N \doxytablewidth
+\NewDocumentCommand \doxycalculatetablewidth {}
+  {%
+    \cs_set_protected:Nn \__tblr_build_whole:
+      {%
+        \__tblr_get_table_width:%
+        \dim_gset:Nn \doxytablewidth { \tablewidth }%
+      }%
+  }
+\ExplSyntaxOff
+
+% Theme used when the table has no caption.
+\NewTblrTheme{DoxyTableBareTheme}{%
+    \DefTblrTemplate{firsthead}{default}{}%
+    \DefTblrTemplate{middlehead, lasthead}{default}{}%
+    \DefTblrTemplate{contfoot-text}{default}{}%
+}
+
+% Theme used when the table carries a caption.
+\NewTblrTheme{DoxyTableCaptionTheme}{%
+    \SetTblrStyle{firsthead}{font=\bfseries}{}%
+    \DefTblrTemplate{middlehead, lasthead}{default}{}%
+    \DefTblrTemplate{contfoot-text}{default}{}%
+}
+
+% Top-level Doxygen-emitted table.
+% #1: number of columns (mandatory)
+% #2: caption text (may be empty)
+% #3: label (may be empty)
+% #4: 1 = first row is a heading, 0 = no heading
+% #5: body — cells separated by `&` and rows by `\\`
+\NewDocumentEnvironment{DoxyTable}{m +m m m +b}{%
+  \par%
+  \def\hascaption{#2}%
+  \def\haslabel{#3}%
+  \ifx\hascaption\empty%
+    \SetTblrOuter[longtblr]{theme=DoxyTableBareTheme,entry=none}%
+  \else%
+    \ifx\haslabel\empty%
+      \SetTblrOuter[longtblr]{theme=DoxyTableCaptionTheme,caption={#2}}%
+    \else%
+      \SetTblrOuter[longtblr]{theme=DoxyTableCaptionTheme,caption={#2},label={#3}}%
+    \fi%
+  \fi%
+  \begingroup%
+  \doxycalculatetablewidth%
+  \sbox0{% measure-only render to populate \doxytablewidth
+    \begin{tblr}{hlines,vlines,measure=vbox,colspec={*{#1}{l}}}%
+    #5%
+    \end{tblr}%
+  }%
+  \endgroup%
+  \ifdim\doxytablewidth>\linewidth% wide → flexible columns
+    \begin{longtblr}{hlines,vlines,%
+                     measure=vbox,%
+                     colspec={*{#1}{X[-1]}},%
+                     rowhead=#4}%
+    #5%
+    \end{longtblr}%
+  \else% fits → fixed left-aligned columns
+    \begin{longtblr}{hlines,vlines,%
+                     measure=vbox,%
+                     colspec={*{#1}{l}},%
+                     rowhead=#4}%
+    #5%
+    \end{longtblr}%
+  \fi%
+}{}%
+
+% Tables nested inside another table cell (no \longtblr — would break
+% the outer table's pagination).
+% #1: number of columns
+% #2: 1 = first row is a heading, 0 = no heading
+% #3: body
+\NewDocumentEnvironment{DoxyTableNested}{m m +b}{%
+  \begingroup%
+  \doxycalculatetablewidth%
+  \sbox0{%
+    \begin{tblr}{hlines,vlines,measure=vbox,colspec={*{#1}{l}}}%
+    #3%
+    \end{tblr}%
+  }%
+  \endgroup%
+  \ifdim\doxytablewidth>\linewidth%
+    \begin{tblr}{hlines,vlines,%
+                 measure=vbox,%
+                 colspec={*{#1}{X[-1]}},%
+                 rowhead=#2}%
+    #3%
+    \end{tblr}%
+  \else%
+    \begin{tblr}{hlines,vlines,%
+                 measure=vbox,%
+                 colspec={*{#1}{l}},%
+                 rowhead=#2}%
+    #3%
+    \end{tblr}%
+  \fi%
+}{}%
+
+% Parameter-table emitter — used by \DoxyParams etc when doxygen is
+% configured to emit the new tabularray form. Kept here even though the
+% legacy \DoxyParams in ff.sty still wins for the project's current
+% Doxyfile, because some sub-pages (struct fields) sometimes go through
+% this path.
+% #1: number of columns
+% #2: column-spec prefix (everything except the trailing column)
+% #3: title of the table
+% #4: body
+\NewDocumentCommand{\DoxyParamTable}{m m +m +m}{%
+  \SetTblrOuter[longtblr]{theme=DoxyTableBareTheme,entry=none}%
+  \begingroup%
+  \doxycalculatetablewidth%
+  \sbox0{%
+    \begin{tblr}{measure=vbox,colspec={*{#1}{|l}|}}%
+    \SetCell[c=#1]{l} \tf{#3} \\[1ex]%
+    \hline%
+    #4%
+    \end{tblr}%
+  }%
+  \endgroup%
+  \ifdim\doxytablewidth>\linewidth%
+    \edef\DoxyTableColSpec{#2X[-1]}%
+  \else%
+    \edef\DoxyTableColSpec{#2l}%
+  \fi%
+  \expanded{\noexpand\begin{longtblr}[l,theme=DoxyTableBareTheme]%
+          {vline{1-Z}={2-Z}{solid},%
+           measure=vbox,%
+           colspec=\DoxyTableColSpec}}%
+  \SetCell[c=#1]{l} \tf{#3} \\\nopagebreak%
+  \hline\nopagebreak%
+  #4%
+  \end{longtblr}%
+  \par\addvspace{6pt}%
+}

@@ -1,0 +1,49 @@
+% Header boxes.
+\newsavebox{\LHeader} % Left header.
+\newsavebox{\RHeader} % Right header.
+
+% Header boxes lengths.
+\newlength{\LHeaderLength}
+\newlength{\RHeaderLength}
+
+% Even - on a left page.
+\renewcommand{\@evenhead}
+{\raisebox{0pt}[\headheight][0pt]{% Block begin.
+\vbox{\hbox to\textwidth{\rm\thepage\hfil\strut
+\hfil\usebox{\LHeader}}\hrule}}% Block end.
+}
+
+% Odd - on a right page.
+\renewcommand{\@oddhead}
+{\raisebox{0pt}[\headheight][0pt]{% Block begin.
+\vbox{\hbox to\textwidth{\usebox{\RHeader}\hfil\strut
+\hfil\rm\thepage}\hrule}}% Block end.
+}
+
+\newcommand{\setlheader}[1] {%
+\settowidth{\LHeaderLength}{{\small\sl #1}}%
+\ifthenelse {%
+  \lengthtest{\LHeaderLength > 16cm}%
+} {%
+    \sbox{\LHeader}{\truncate{16cm}{\small\sl#1}}%
+} {%
+    \sbox{\LHeader}{{\small\sl #1}}%
+}%
+}
+
+\newcommand{\setrheader}[1] {%
+\settowidth{\RHeaderLength}{{\small\sl #1}}%
+\ifthenelse {%
+  \lengthtest{\RHeaderLength > 16cm}%
+} {%
+    \sbox{\RHeader}{\truncate{16cm}{\small\sl #1}}%
+} {%
+    \sbox{\RHeader}{{\small\sl #1}}%
+}%
+}
+
+\newcommand{\setheaders}[1]
+{
+    \setlheader{#1}
+    \setrheader{#1}
+}

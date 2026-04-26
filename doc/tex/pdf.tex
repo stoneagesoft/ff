@@ -1,0 +1,44 @@
+\usepackage{psfrag}
+%\usepackage{psboxit,pstricks}
+
+\usepackage{ifpdf}
+\ifpdf
+\usepackage[pdftex,
+            hyperindex,
+            pdffitwindow   = true,
+            pdfstartview   = Fit,
+            colorlinks     = true,
+            linkcolor      = companycolor,
+            filecolor      = blue,
+            citecolor      = darkgreen,
+            bookmarksopen  = true,
+            bookmarksopenlevel = 0,
+            plainpages     = false,
+            pdfpagelabels  = true,
+            pagebackref    = true,
+            pdftoolbar     = false,
+            unicode        = true
+           ]{hyperref}
+\else
+\usepackage[ps2pdf,
+            hyperindex,
+            pdffitwindow   = true,
+            pdfstartview   = Fit,
+            colorlinks     = true,
+            linkcolor      = companycolor,
+            filecolor      = blue,
+            citecolor      = darkgreen,
+            bookmarksopen  = true,
+            bookmarksopenlevel = 0,
+            plainpages     = false,
+            pdfpagelabels  = true,
+            pagebackref    = true,
+            pdftoolbar     = false,
+            unicode        = true
+           ]{hyperref}
+\usepackage{pspicture}
+\fi
+
+% To overcome problems with too many open files.
+\let\mypdfximage\pdfximage\def\pdfximage{\immediate\mypdfximage}
+\pdfminorversion=7

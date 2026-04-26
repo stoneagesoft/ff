@@ -1,0 +1,37 @@
+\newcommand{\thickrule}[1][1mm]{\noindent\leavevmode\hrule height#1}
+
+%\newcommand{\term}[1]{\emph{#1}\index{#1}}
+\newcommand{\lib}[1]{\texttt{#1}}
+\newcommand{\const}[1]{\texttt{\color{BlueGreen}{#1}}}
+\newcommand{\service}[1]{\textit{#1}}
+\newcommand{\class}[1]{\texttt{#1}}
+\newcommand{\type}[1]{\texttt{#1}}
+\newcommand{\macro}[1]{\texttt{#1}}
+\newcommand{\method}[1]{\texttt{\color{Periwinkle}{#1}}}
+\newcommand{\property}[1]{\texttt{\color{cyan}{#1}}}
+\newcommand{\signal}[1]{\texttt{\color{orange}{#1}}}
+\newcommand{\event}[1]{\texttt{\color{magenta}{#1}}}
+\newcommand{\status}[1]{\texttt{\color{magenta}{#1}}}
+\newcommand{\probe}[1]{\texttt{#1}}
+\newcommand{\app}[1]{\texttt{#1}}
+\newcommand{\shortcut}[1]{\texttt{[#1]}}
+\newcommand{\script}[1]{\texttt{#1}}
+\newcommand{\fpath}[1]{\texttt{#1}}
+\newcommand{\user}[1]{\texttt{#1}}
+\newcommand{\host}[1]{\texttt{#1}}
+\newcommand{\param}[1]{\textsl{\color{Sepia}{#1}}}
+\newcommand{\attr}[1]{\texttt{#1}}
+\newcommand{\agent}[1]{\term{#1}}
+\newcommand{\tcpproto}[2]{#1\textrightarrow{}TCP:#2}
+\newcommand{\udpproto}[2]{#1\textrightarrow{}UDP:#2}
+%\newcommand{\shell}[1]{\texttt{#1}}
+
+\newcommand{\fixme}{%
+    \begingroup
+        \colorbox{orange!50}{\texttt{FIXME}}%
+    \endgroup}
+
+\newcommand{\rightbox}{\cbox{\textbf{Верно}}{green}{white}}
+\newcommand{\wrongbox}{\cbox{\textbf{Неверно}}{red}{white}}
+
+\newcommand{\menu}[1]{\texttt{\StrSubstitute{#1}{,}{$\rightarrow$}}}

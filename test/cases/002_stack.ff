@@ -1,0 +1,5 @@
+1 2 swap . .
+3 4 over . . .
+1 2 3 rot . . .
+5 dup + .
+10 drop 20 .

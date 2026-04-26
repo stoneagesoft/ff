@@ -1,0 +1,4 @@
+usr/lib/*/libff.so
+usr/lib/*/libff_static.a
+usr/lib/*/cmake/ff/*
+usr/include/ff/*
