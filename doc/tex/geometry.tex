@@ -1,0 +1,38 @@
+% Use slightly tighter side margins than the doxygen default so long
+% function signatures and the hyperlinked identifier lists don't
+% overflow as often. Top/bottom stay at 1 in to leave room for
+% fancyhdr's header & footer rules.
+\usepackage[letterpaper,top=1in,bottom=1in,left=0.85in,right=0.85in]{geometry}
+\usepackage{setspace}
+
+% fancyhdr complains when headheight < the natural height of the header
+% content. The default 12pt is just shy of the 14.5pt fancyhdr wants for
+% a \scriptsize header, so set it explicitly here and pull \topmargin
+% back so the page geometry stays the same.
+\setlength{\headheight}{14.5pt}
+\addtolength{\topmargin}{-2.5pt}
+
+\pagestyle{empty}
+
+% Pages may be different in height.
+\raggedbottom
+
+% No first-line indentation on paragraphs; rely on \parskip (set in
+% header.tex) for visual separation instead.
+\setlength{\parindent}{0mm}
+
+\sloppy
+
+% Two letters may be put to the next line during hyphenation.
+\righthyphenmin=2
+
+% Spacing between items for enumerate and itemize.
+\let\tmpenumerate\enumerate
+\let\tmpendenumerate\endenumerate
+\renewenvironment{enumerate}{\tmpenumerate\setlength\itemsep{0em}}{\tmpendenumerate}
+
+\let\tmpitemize\itemize
+\let\tmpenditemize\enditemize
+\renewenvironment{itemize}{\tmpitemize\setlength\itemsep{0em}}{\tmpenditemize}
+
+\makeatletter

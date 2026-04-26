@@ -1,0 +1,19 @@
+\ ANS-style defer/is. The driver's vtracef is NULL so any error
+\ message is silenced; we observe the side-effects via stdout.
+
+defer hook
+
+: a 11 . ;
+: b 22 . ;
+
+\ Initial assignment.
+' a is hook
+hook
+
+\ Reassignment.
+' b is hook
+hook
+
+\ Reassignment back to a.
+' a is hook
+hook

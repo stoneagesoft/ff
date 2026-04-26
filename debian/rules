@@ -1,0 +1,54 @@
+#!/usr/bin/make -f
+
+# CMake-driven build for libff. Produces both the shared library and
+# the static archive in one configure pass; dh_install splits the
+# resulting tree across the three binary packages via the *.install
+# files in debian/.
+
+# The codebase compiles cleanly under Clang's warning set; GCC trips
+# on a few warnings inside the vendored md4c sources. Pin the toolchain
+# so an `apt build-dep` user gets a reproducible build.
+export CC  := clang
+export CXX := clang++
+
+BUILDDIR := $(CURDIR)/build
+
+%:
+	dh $@ --parallel --buildsystem=cmake --builddirectory=$(BUILDDIR)
+
+override_dh_auto_clean:
+	# build/ itself is tracked (contains a .empty placeholder); clean
+	# only its contents.
+	find $(BUILDDIR) -mindepth 1 ! -name .empty -delete 2>/dev/null || true
+	# Every artefact the doc/Makefile produces. Source files
+	# (doc/dot/*.dot, doc/images/*, doc/md/*.md except 01-changelog)
+	# stay; everything else goes.
+	rm -rf $(CURDIR)/doc/html
+	rm -rf $(CURDIR)/doc/latex
+	rm -f  $(CURDIR)/doc/ff-*.pdf
+	rm -f  $(CURDIR)/doc/doxy.log
+	rm -f  $(CURDIR)/doc/last-modified.tex
+	rm -f  $(CURDIR)/doc/md/01-changelog.md
+
+override_dh_auto_configure:
+	dh_auto_configure -- \
+	    -DCMAKE_INSTALL_PREFIX=/usr \
+	    -DCMAKE_INSTALL_DOCDIR=share/doc/libff-doc \
+	    -DCMAKE_VERBOSE_MAKEFILE=OFF \
+	    -DFF_BUILD_STATIC=ON \
+	    -DFF_BUILD_SHARED=ON
+
+override_dh_auto_build:
+	dh_auto_build
+	# Reference documentation: HTML tree + typeset PDF. Driven by
+	# the hand-written Makefile in doc/ rather than CMake; the doc/
+	# CMakeLists.txt only wires the resulting artefacts into the
+	# install step, so we have to run the Makefile first.
+	$(MAKE) -C $(CURDIR)/doc pdf
+
+# dh_compress gzips everything under /usr/share/doc by default. PDFs
+# are already deflate-compressed internally and re-compressing them
+# only forces users to gunzip before opening, so exclude the reference
+# PDF from the pass.
+override_dh_compress:
+	dh_compress -Xff-reference.pdf

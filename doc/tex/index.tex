@@ -1,0 +1,13 @@
+\usepackage[xindy]{imakeidx}
+
+%\newcommand*{\main}[1]{\textbf{\hyperpage{#1}}}
+
+\makeatletter
+\newcommand{\rindex}[2][\imki@jobname]{%
+  \index[#1]{\detokenize{#2}}%
+}
+\makeatother
+
+\makeindex[program=texindy,options=-C utf8 -M multilingual.xdy]
+
+\newcommand{\term}[1]{\emph{#1}\rindex{#1}}

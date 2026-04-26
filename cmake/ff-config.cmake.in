@@ -1,0 +1,24 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Transitive system deps the imported target needs (only meaningful on
+# non-WASM hosts; the WASM build is fully self-contained).
+if(NOT @FF_OS_WASM@)
+    find_dependency(Threads)
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/ff-targets.cmake")
+
+# Convenience alias so consumers can write `target_link_libraries(app
+# PRIVATE ff::ff)` regardless of whether the install ships the static
+# or the shared variant.
+if(NOT TARGET ff::ff)
+    if(TARGET ff::ff_shared)
+        add_library(ff::ff ALIAS ff::ff_shared)
+    elseif(TARGET ff::ff_static)
+        add_library(ff::ff ALIAS ff::ff_static)
+    endif()
+endif()
+
+check_required_components(ff)

@@ -1,0 +1,7 @@
+: fib dup 2 < if drop 1 else dup 1 - fib swap 2 - fib + then ;
+10 fib .
+15 fib .
+20 fib .
+: fact dup 1 > if dup 1 - fact * else drop 1 then ;
+5 fact .
+10 fact .

@@ -1,0 +1,13 @@
+% Even - on a left page.
+\renewcommand{\@evenfoot}
+{\raisebox{0pt}[\headheight][0pt]{% Block begin.
+\vbox{\hbox to\textwidth{{\small\textsl{\company}}\hfil \strut
+\hfil}}}% Block end.
+}
+
+% Odd - on a right page.
+\renewcommand{\@oddfoot}
+{\raisebox{0pt}[\headheight][0pt]{% Block begin.
+\vbox{\hbox to\textwidth{\hfil \strut
+\hfil{\small{\title{}}}}}}% Block end.
+}

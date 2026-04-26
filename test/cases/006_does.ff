@@ -1,0 +1,7 @@
+: const create , does> @ ;
+42 const forty-two
+forty-two .
+forty-two .
+100 const hundred
+hundred .
+hundred forty-two + .

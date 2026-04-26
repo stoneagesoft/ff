@@ -1,0 +1,58 @@
+build/*
+
+# Forth history file
+history.ff
+
+# clangd cache
+/.cache
+
+# Sublime Project Files
+*.sublime-*
+
+# Visual Studio Code
+.vscode
+*.code-workspace
+*.workspace
+
+# Ninja
+.ninja_deps
+.ninja_log
+
+# Log files
+*.log
+
+# Intermediate files
+obj_*
+
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app

@@ -1,0 +1,23 @@
+\ Memory-safety test. Only runs when the engine was compiled with
+\ FF_SAFE_MEM=ON; the default build segfaults on the bad fetch and
+\ takes the test driver down with it.
+\
+\ The driver feeds the entire file to one ff_eval call. The bad
+\ op below raises FF_ERR_BAD_PTR via vtracef -- which the driver
+\ ignores -- and ff_eval returns early. Anything after the bad op
+\ is silently skipped, so the expected stdout is just the sentinel
+\ printed before.
+
+42 .
+
+\ everything below would segfault under the default build:
+
+0 @ drop
+1 c@ drop
+0 0 !
+99 execute
+0 evaluate drop
+
+\ never reached:
+
+99 .

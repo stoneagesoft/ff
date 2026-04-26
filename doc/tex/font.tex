@@ -1,0 +1,52 @@
+\usepackage{xstring}
+% cmap must precede fontenc so it can wrap the CMap entries that fontenc
+% pulls in; otherwise the package issues a runtime warning and some
+% glyphs are left unprocessed in the resulting PDF.
+\usepackage{cmap}
+\usepackage[T1, T2A]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[english]{babel}
+\usepackage{textgreek}
+\usepackage{pmboxdraw}
+\usepackage{newunicodechar}
+
+% Box-drawing glyphs (pmboxdraw provides ASCII fallbacks for these).
+% See https://tex.org.uk/macros/latex/contrib/pmboxdraw/pmboxdraw.pdf
+\newunicodechar{╔}{\textSFxxxix}
+\newunicodechar{═}{\textSFxliii}
+\newunicodechar{╗}{\textSFxxv}
+\newunicodechar{║}{\textSFxxiv}
+\newunicodechar{╚}{\textSFxxxviii}
+\newunicodechar{╝}{\textSFxxvi}
+\newunicodechar{╭}{\textSFi}
+\newunicodechar{─}{\textSFx}
+\newunicodechar{╮}{\textSFiii}
+\newunicodechar{│}{\textSFxi}
+\newunicodechar{╰}{\textSFii}
+\newunicodechar{╯}{\textSFiv}
+
+% Other Unicode glyphs that appear verbatim in source comments and the
+% project's docs. pdftex with [utf8]{inputenc} only knows a small core
+% set; everything else has to be mapped explicitly. Math glyphs go
+% through ensuremath so they render the same in text and math mode.
+\newunicodechar{×}{\ensuremath{\times}}
+\newunicodechar{–}{\textendash}
+\newunicodechar{—}{\textemdash}
+\newunicodechar{…}{\textellipsis}
+\newunicodechar{←}{\ensuremath{\leftarrow}}
+\newunicodechar{→}{\ensuremath{\rightarrow}}
+\newunicodechar{≤}{\ensuremath{\leq}}
+\newunicodechar{≥}{\ensuremath{\geq}}
+\newunicodechar{█}{\rule{0.6em}{0.7em}}      % full block
+\newunicodechar{░}{\rule{0.6em}{0.7em}}      % light shade — best-effort
+\newunicodechar{▶}{\ensuremath{\blacktriangleright}}
+\newunicodechar{✓}{\checkmark}
+
+\renewcommand{\sfdefault}{cmss}
+\renewcommand{\ttdefault}{cmtt}
+\renewcommand{\rmdefault}{cmss}
+
+% Font for footnotes.
+\renewcommand{\footnotesize}{\fontsize{12}{13}\selectfont}
+
+\let\footnotesize\scriptsize

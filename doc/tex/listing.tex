@@ -1,0 +1,187 @@
+\usepackage{listings}
+\usepackage{chngcntr}
+\usepackage{color}
+\usepackage{fancyvrb}
+\usepackage{verbatim}
+\usepackage{tcolorbox}
+
+\lstloadlanguages{[GNU]C++,Java,sh,xml,HTML,Perl,bash}
+
+%\AtBeginDocument{\counterwithin{lstlisting}{subsection}}
+
+% Colors.
+\definecolor{colorBrown}{cmyk}{0,0.81,1,0.60}
+\definecolor{colorOliveGreen}{cmyk}{0.64,0,0.95,0.40}
+\definecolor{colorCadetBlue}{cmyk}{0.62,0.57,0.23,0}
+\definecolor{colorSourceCodeBg}{HTML}{FCE94F}
+
+% Source code highlighting.
+\lstset{
+    language=C++,
+    inputencoding=utf8,
+    aboveskip=2mm,
+    framexleftmargin=5mm,
+    frame=single,
+    frameround=tttt,
+    % rulesepcolor=\color{gray},
+    rulecolor=\color{colorSourceCodeBg},
+    framerule=1pt,
+    framesep=3pt,
+    basicstyle=\ttfamily\footnotesize,
+    keywordstyle=\ttfamily\color{colorOliveGreen},
+    identifierstyle=\ttfamily\color{colorCadetBlue}\bfseries,
+    commentstyle=\color{colorBrown},
+    stringstyle=\ttfamily,
+    showstringspaces=false,
+    backgroundcolor=\color{colorSourceCodeBg!15},
+    linewidth=\textwidth,
+    xleftmargin=10mm,
+    xrightmargin=10mm,
+    breaklines=true,
+    breakatwhitespace=true,
+    boxpos=c,
+    captionpos=t,
+    belowcaptionskip=1\baselineskip,
+    float=H,
+    columns=flexible,
+    extendedchars=true,
+    tabsize=4,
+    numbers=left,
+    numberstyle=\tiny,
+    escapeinside={$(}{)$}
+}
+
+\colorlet{punct}{red!60!black}
+\definecolor{delim}{RGB}{20,105,176}
+\colorlet{numb}{magenta!60!black}
+
+\lstdefinelanguage{json}{
+    inputencoding=utf8,
+    aboveskip=2mm,
+    framexleftmargin=5mm,
+    basicstyle=\footnotesize\ttfamily,
+    numbers=left,
+    numberstyle=\tiny,
+    stepnumber=1,
+    numbersep=8pt,
+    showstringspaces=false,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{colorSourceCodeBg!15},
+    literate=
+     *{0}{{{\color{numb}0}}}{1}
+      {1}{{{\color{numb}1}}}{1}
+      {2}{{{\color{numb}2}}}{1}
+      {3}{{{\color{numb}3}}}{1}
+      {4}{{{\color{numb}4}}}{1}
+      {5}{{{\color{numb}5}}}{1}
+      {6}{{{\color{numb}6}}}{1}
+      {7}{{{\color{numb}7}}}{1}
+      {8}{{{\color{numb}8}}}{1}
+      {9}{{{\color{numb}9}}}{1}
+      {:}{{{\color{punct}{:}}}}{1}
+      {,}{{{\color{punct}{,}}}}{1}
+      {\{}{{{\color{delim}{\{}}}}{1}
+      {\}}{{{\color{delim}{\}}}}}{1}
+      {[}{{{\color{delim}{[}}}}{1}
+      {]}{{{\color{delim}{]}}}}{1},
+}
+
+\newcommand{\includesource}[4][]
+{
+  \lstset{language=#2}
+  \lstinputlisting[label=#1,caption=#4 {\tiny (file \fspath{#3})}]{#3}
+}
+
+\lstnewenvironment{cpp}[1][]
+{
+    \rm
+    \hfill\lstset{language=c++,#1}\minipage{0.8\linewidth}
+}
+{
+    \endminipage\hfill\null
+}
+
+\lstnewenvironment{js}[1][]
+{
+    \rm
+    \hfill\lstset{language=Java,#1}\minipage{0.8\linewidth}
+}
+{
+    \endminipage\hfill\null
+}
+
+\lstnewenvironment{json}[1][]
+{
+    \rm
+    \hfill\lstset{language=Java,#1}\minipage{0.8\linewidth}
+}
+{
+    \endminipage\hfill\null
+}
+
+\lstnewenvironment{http}[1][]
+{
+    \rm
+    \hfill\lstset{language=HTML,#1}\minipage{0.8\linewidth}
+}
+{
+    \endminipage\hfill\null
+}
+
+\lstnewenvironment{shell}[1][]
+{
+    \rm
+    \hfill\lstset{language=sh,#1}\minipage{0.8\linewidth}
+}
+{
+    \endminipage\hfill\null
+}
+
+% List of Listing appearance in the Table of Contents.
+\renewcommand{\lstlistingname}{Listing}
+\let\l@lstlisting\l@subsection%
+\renewcommand{\lstlistlistingname}{Listings}
+\begingroup\let\newcounter\@gobble\let\setcounter\@gobbletwo
+  \globaldefs\@ne \let\c@loldepth\@ne
+  \newlistof{listings}{lol}{\Huge{\lstlistlistingname}}
+\endgroup
+\let\l@lstlisting\l@listings
+\AtBeginDocument{\addtocontents{lol}{\protect\addvspace{10\p@}}}
+\renewcommand{\lstlistoflistings}{\listoflistings}
+%\renewcommand{\cftlistingsfont}{\itshape}
+\cftsetindents{listings}{1.5em}{4em}
+
+
+\newenvironment{httpreq}
+{
+    \VerbatimEnvironment
+    \begin{tcolorbox}[colback=red!15!white]
+    \begin{Verbatim}
+}
+{
+    \end{Verbatim}
+    \end{tcolorbox}
+}
+
+\newenvironment{httpres}
+{
+    \VerbatimEnvironment
+    \begin{tcolorbox}[colback=cyan!15!white]
+    \begin{Verbatim}
+}
+{
+    \end{Verbatim}
+    \end{tcolorbox}
+}
+
+\newtcolorbox{codebox}{colback=colorSourceCodeBg!5,colframe=colorSourceCodeBg,boxrule=0.5pt,sharp corners}
+
+\newcommand{\cbox}[3]{%
+  \setbox0=\hbox{#1}%
+  \setlength{\@tempdima}{\dimexpr\wd0+9pt}%
+  \begin{tcolorbox}[colframe=#2!5!white,colback=#2!75!black,boxrule=0.5pt,arc=2pt,
+      left=4pt,right=4pt,top=4pt,bottom=2pt,boxsep=0pt,width=\@tempdima]
+    {\color{#3}#1}
+  \end{tcolorbox}
+}
