@@ -10,6 +10,14 @@ A vendored copy of the Forth shell `ffsh` lives under
 [`examples/ffsh/`](examples/ffsh/) and shows the embedding boilerplate
 end-to-end.
 
+The design is heavily inspired by John Walker's
+[Atlast](https://www.fourmilab.ch/atlast/) (1990) — Fourmilab's
+"Autodesk Threaded Language Application System Toolkit", a Forth
+derivative meant to be embedded into AutoCAD-era applications. *ff*
+adopts Atlast's "library not a language" stance, the platform-callback
+I/O model, and the convention of treating Forth as glue extended by
+host-supplied native words.
+
 
 ## Highlights
 

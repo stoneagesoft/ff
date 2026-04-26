@@ -8,6 +8,23 @@ designed as a library: the caller supplies I/O callbacks through
 implementation gives particular attention to interpreter throughput
 while keeping the source small and comprehensible.
 
+### Lineage
+
+*ff* is heavily inspired by John Walker's
+[Atlast](https://www.fourmilab.ch/atlast/) (Fourmilab, 1990) — an
+embeddable Forth derivative originally written to script Autodesk's
+applications. From Atlast *ff* takes the core philosophical stance:
+the interpreter is a *library* delivered to a host application, not a
+standalone language; all I/O flows through caller-supplied callbacks
+so the engine never has to know whether it's running in a terminal,
+a GUI widget, or a network socket; and the host extends the language
+by registering its own native C words rather than by patching the
+engine. Where this document calls out a design choice that goes
+beyond a straight Forth implementation — the per-word heap, the
+switch-based dispatch, the C-string convention, the embedded-friendly
+error reporting via `ff_tracef` — Atlast was the starting point that
+the choice was negotiated against.
+
 The design draws on three ideas from classical Forth implementation
 research:
 
