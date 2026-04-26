@@ -1,4 +1,4 @@
-# Fotissimo
+# Fortissimo
 
 A compact, embeddable Forth interpreter written in ISO C17.
 
