@@ -1180,3 +1180,67 @@ When you write your own native words against `<ff_p.h>`, both the
 `FF_CHECK_ADDR` and `FF_CHECK_XT` macros are visible. Use them at the
 top of any word body that consumes a pointer or xt from the data
 stack — see the *Extending* chapter for examples.
+
+
+## Watchdog
+
+Memory-safe mode stops a Forth program from corrupting memory; it
+does not stop one from spinning forever:
+
+~~~
+: spin   begin again ;
+~~~
+
+To bound execution time, *ff* exposes a two-pronged watchdog. Both
+mechanisms share the same `FF_ERR_ABORTED` error code and the same
+unwind path inside `ff_exec`.
+
+### Polling callback
+
+`ff_platform_t::watchdog` is called periodically by the inner
+interpreter — every back-branch (`AGAIN`/`UNTIL`/`REPEAT`/`LOOP`/`+LOOP`)
+and every word call (`NEST`/`TNEST`) bumps an opcode counter, and
+when the counter crosses `watchdog_interval` (default 65 536) the
+callback fires. The callback receives the running opcode count and
+returns `FF_WD_CONTINUE` or `FF_WD_ABORT`:
+
+~~~{.c}
+typedef ff_watchdog_action_t (*ff_watchdog_fn)(void *ctx,
+                                               uint64_t opcodes_run);
+~~~
+
+The polling design is deliberately deterministic — same input,
+same opcode count, same termination point — so the host can pick a
+time-based, fuel-based, or any-other-policy decision without the
+engine knowing. No signals, no threads, no platform-specific timers.
+
+### Async abort flag
+
+```
+void ff_request_abort(ff_t *ff);
+```
+
+Stores `1` into a `volatile sig_atomic_t` field that the dispatch
+loop polls at the same back-branch / call sites as the polling
+callback. Safe to call from a signal handler or another thread
+(per the C17 sig_atomic_t guarantees on the platforms ff targets);
+no I/O, no allocation, no engine state mutation beyond the flag.
+The flag is consumed at next `ff_eval` entry, so a stale request
+between evaluations is silently ignored.
+
+### Where the check lives
+
+A single macro `_FF_WATCHDOG_TICK()` is expanded inside the dispatch
+arms of `FF_OP_NEST`, `FF_OP_TNEST`, `FF_OP_BRANCH` (when the
+inline offset is negative), `FF_OP_QBRANCH` (same), `FF_OP_XLOOP`
+(on the loop-back path), and `FF_OP_PXLOOP` (same). Forward
+branches and straight-line opcodes don't need to check — a Forth
+program can't iterate without going through one of those points.
+The cost in the common case is one increment plus one branch-
+predicted-not-taken per back-branch / word call.
+
+When either signal fires, the engine raises
+`FF_SEV_ERROR | FF_ERR_ABORTED` via `ff_tracef`, clears
+`abort_requested`, sets `FF_STATE_BROKEN`, and joins the existing
+broken-state cleanup. The host's `ff_eval` returns
+`FF_ERR_BROKEN` and the engine is ready for the next call.

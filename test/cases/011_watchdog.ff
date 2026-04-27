@@ -1,0 +1,13 @@
+\ Watchdog regression. The test driver installs a polling watchdog
+\ with a 10 M opcode budget; this script prints a sentinel, enters
+\ an infinite BEGIN/AGAIN loop, and the watchdog must fire and
+\ unwind cleanly back to the host. The expected stdout is just the
+\ pre-loop sentinel.
+
+42 .
+
+: spin begin again ;
+spin
+
+\ Never reached:
+99 .

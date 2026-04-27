@@ -7,6 +7,7 @@
 
 /** ( -- )  R: ( -- ret )  Enter a colon-def: push current ip to R. */
 case FF_OP_NEST:
+    _FF_WATCHDOG_TICK();
     _FF_RSO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
@@ -26,6 +27,7 @@ case FF_OP_TNEST:
        the older return address (our caller's), giving the same observable
        result as `NEST + EXIT` but using one less return-stack slot per
        chained tail call. */
+    _FF_WATCHDOG_TICK();
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         ff->cur_word = nw;
@@ -46,6 +48,10 @@ case FF_OP_EXIT:
 
 /** ( -- )  Unconditional jump by the inline offset cell. */
 case FF_OP_BRANCH:
+    /* Watchdog only on the back-branch (loop AGAIN/REPEAT path). The
+       forward case is structural (ELSE) and can't loop. */
+    if (*ip < 0)
+        _FF_WATCHDOG_TICK();
     ip += *ip;
     _FF_NEXT();
 
@@ -53,7 +59,11 @@ case FF_OP_BRANCH:
 case FF_OP_QBRANCH:
     _FF_SL(1);
     if (tos == 0)
+    {
+        if (*ip < 0)
+            _FF_WATCHDOG_TICK();
         ip += *ip;
+    }
     else
         ip++;
     _DROP();
@@ -99,7 +109,10 @@ case FF_OP_XLOOP:
         ip++;
     }
     else
+    {
+        _FF_WATCHDOG_TICK();
         ip += *ip;
+    }
     _FF_NEXT();
 
 /** ( delta -- )  Runtime +LOOP back-edge with arbitrary index delta. */
@@ -117,6 +130,7 @@ case FF_OP_PXLOOP:
         }
         else
         {
+            _FF_WATCHDOG_TICK();
             ip += *ip;
             *ff_tos(R) = niter;
         }

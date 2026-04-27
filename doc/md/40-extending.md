@@ -303,6 +303,104 @@ cc -I/opt/ff/include/ff my_ext.c -L/opt/ff/lib -lff_static -lm
 ~~~
 
 
+## Bounding execution time (the watchdog)
+
+A Forth program can hang the host:
+
+~~~
+: spin   begin again ;
+spin
+~~~
+
+For embeddings that take untrusted scripts (REPLs over the network,
+plugin sources, sandboxed automation), *ff* exposes two complementary
+mechanisms — pick whichever fits your hosting model.
+
+### Polling watchdog (deterministic)
+
+Set `ff_platform_t::watchdog` and `watchdog_interval`. The inner
+interpreter polls the callback at every back-branch (`AGAIN`,
+`UNTIL`, `REPEAT`, `LOOP`, `+LOOP`) and at every word call (`NEST`,
+`TNEST`). The callback receives a running opcode count and decides
+whether to keep going:
+
+~~~{.c}
+#include <time.h>
+
+typedef struct {
+    clock_t deadline;
+} my_ctx;
+
+static ff_watchdog_action_t my_watchdog(void *ctx, uint64_t opcodes_run)
+{
+    (void)opcodes_run;
+    my_ctx *c = (my_ctx *)ctx;
+    return (clock() >= c->deadline) ? FF_WD_ABORT : FF_WD_CONTINUE;
+}
+
+int main(void)
+{
+    my_ctx c = { .deadline = clock() + CLOCKS_PER_SEC };  /* 1 s */
+    ff_platform_t p = {
+        .context           = &c,
+        .vprintf           = my_vprintf,
+        .watchdog          = my_watchdog,
+        .watchdog_interval = 65536,   /* poll every 64 K opcodes */
+    };
+    ff_t *ff = ff_new(&p);
+    ff_eval(ff, "...");                /* returns FF_ERR_ABORTED on timeout */
+    ff_free(ff);
+}
+~~~
+
+`watchdog_interval = 0` picks the engine default (65 536 opcodes,
+which on this hardware is roughly 100-200 µs of latency). The
+counter resets to zero on every fresh `ff_eval` call.
+
+The cost is one branch per back-branch / call site when the
+callback is registered, and one indirect call every N opcodes when
+N is reached — typically below 1 % overhead on real workloads.
+
+### Async abort flag (preemptive)
+
+Sometimes the "stop now" signal arrives outside the callback's
+sight: an alarm signal, a UI cancel button, a watchdog thread
+counting down a hard wall-clock budget. For those, call
+`ff_request_abort(ff)` from anywhere — including inside a signal
+handler, since the implementation is one `sig_atomic_t` store with
+no I/O and no other state mutation. The dispatch loop picks up the
+flag at the next back-branch / word call and unwinds the same way
+the polling watchdog does.
+
+~~~{.c}
+#include <signal.h>
+
+static ff_t *g_ff;   /* set by main, read by handler — single thread */
+
+static void on_alarm(int sig)
+{
+    (void)sig;
+    ff_request_abort(g_ff);
+}
+
+int main(void)
+{
+    g_ff = ff_new(&platform);
+    signal(SIGALRM, on_alarm);
+    alarm(5);                         /* 5 s budget */
+    ff_eval(g_ff, untrusted_source);  /* returns FF_ERR_ABORTED on timeout */
+    alarm(0);
+    ff_free(g_ff);
+}
+~~~
+
+The two paths share `FF_ERR_ABORTED` and the same unwind machinery,
+so a host can install both — the polling callback handles the
+common-case time budget, `ff_request_abort` handles the long-tail
+"something else fired" case. Both leave the engine in a clean state
+ready for the next `ff_eval` call.
+
+
 ## Tips
 
 - **Read the built-ins.** The 16 files under `src/words/*.c` cover every
