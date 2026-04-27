@@ -212,6 +212,15 @@ static bool ff_heap_try_peephole(ff_heap_t *h, ff_opcode_t op)
         }
     }
 
+    /* `i +` → FF_OP_I_ADD. Folds two dispatches plus a stack
+       push/pop into one in-place add. Common in counted-loop bodies
+       like `0 N 0 do  i +  loop`. */
+    if (h->last_op == FF_OP_LOOP_I && op == FF_OP_ADD)
+    {
+        h->data[h->size - 1] = FF_OP_I_ADD;
+        return true;
+    }
+
     /* Multi-cell LIT n: tail is [LIT, n]. Replace LIT with specialized op
        and drop the value cell, or rewrite to a LITADD/LITSUB
        superinstruction (same length, fewer dispatches). */
@@ -272,7 +281,8 @@ void ff_heap_compile_op(ff_heap_t *h, ff_opcode_t op)
     }
     ff_heap_align(h);
     ff_heap_push(h, op);
-    h->last_op = FF_OP_NONE;
+    /* Track ops that participate in non-LIT peepholes (LOOP_I → I_ADD). */
+    h->last_op = (op == FF_OP_LOOP_I) ? FF_OP_LOOP_I : FF_OP_NONE;
 }
 
 /** @copydoc ff_heap_compile_lit */

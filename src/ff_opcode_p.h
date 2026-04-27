@@ -129,6 +129,7 @@ typedef enum ff_opcode
     FF_OP_LOOP_I,               /**< Push current loop index (`i`). */
     FF_OP_LOOP_J,               /**< Push outer loop index (`j`). */
     FF_OP_LEAVE,                /**< Exit innermost counted loop early. */
+    FF_OP_I_ADD,                /**< Superinstruction: i + (add the loop index to TOS). */
 
     /* --- Compile-time / immediate --- */
 
@@ -155,6 +156,8 @@ typedef enum ff_opcode
     FF_OP_DO, FF_OP_QDO, FF_OP_LOOP, FF_OP_PLOOP,
     FF_OP_QUIT,                 /**< Drop everything and bail to the host loop. */
     FF_OP_ABORT,                /**< Reset the engine state. */
+    FF_OP_THROW,                /**< ANS Forth THROW: pop n; if non-zero, unwind to the most recent CATCH. */
+    FF_OP_CATCH,                /**< ANS Forth CATCH: execute xt, push 0 on clean return or n on THROW. */
     FF_OP_ABORTQ,               /**< `abort"` — abort with the inline message. */
 
     /* --- Definitions --- */

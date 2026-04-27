@@ -73,6 +73,8 @@ struct ff
     ff_base_t base;                     /**< Numeric input/output base. */
 
     ff_word_t *cur_word;                /**< Word currently being executed (for diagnostics). */
+
+    ff_int_t throw_code;                /**< Exception code stashed by THROW; read by the matching CATCH. */
 };
 
 

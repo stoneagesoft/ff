@@ -76,12 +76,12 @@ host-supplied native words.
 ## Quick start
 
 ```sh
-# Build the library and the example shell.
-cmake -B build -DFF_BUILD_SHARED=ON
+# Build the library and the example shell in one go.
+cmake -B build -DFF_BUILD_SHARED=ON -DFF_BUILD_EXAMPLES=ON
 cmake --build build -j
 
 # Run the shell.
-./build/examples/ffsh/ffsh
+./build/ffsh
 ▶ : square dup * ;
 ▶ 7 square .
 49
@@ -144,6 +144,7 @@ Configurable options:
 | `FF_BUILD_STATIC`      | ON      | Build `libff_static.a`                            |
 | `FF_BUILD_SHARED`      | OFF     | Build the shared library `libff.so.1.0.0`         |
 | `FF_BUILD_TESTS`       | OFF     | Build the regression-test driver and register it with `ctest` |
+| `FF_BUILD_EXAMPLES`    | OFF     | Build the bundled example programs (currently `ffsh`) as part of the main build |
 | `FF_SAFE_MEM`          | OFF     | Validate every fetch/store/execute pointer (see below) |
 | `BUILD_SHARED_LIBS`    | OFF     | Shorthand: equivalent to `FF_BUILD_SHARED=ON`     |
 

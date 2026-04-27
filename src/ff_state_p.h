@@ -29,5 +29,6 @@ typedef enum ff_state
     FF_STATE_BACKTRACE      = 1 <<  8,  /**< Push to the back-trace stack on every word entry. */
     FF_STATE_BROKEN         = 1 <<  9,  /**< Engine entered a non-recoverable state mid-execution. */
     FF_STATE_ABORTED        = 1 << 10,  /**< ff_abort() was invoked; transient flag for the host loop. */
-    FF_STATE_ERROR          = 1 << 11   /**< Most recent ff_eval / word raised an error (see ff_errno). */
+    FF_STATE_ERROR          = 1 << 11,  /**< Most recent ff_eval / word raised an error (see ff_errno). */
+    FF_STATE_THROWN         = 1 << 13   /**< THROW raised; the matching CATCH absorbs and clears this. */
 } ff_state_t;

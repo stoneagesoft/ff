@@ -130,6 +130,13 @@ case FF_OP_LOOP_I:
     _PUSH(*ff_tos(R));
     _FF_NEXT();
 
+/** ( n -- n+i )  Superinstruction emitted by the `i +` peephole. */
+case FF_OP_I_ADD:
+    _FF_RSL(3);
+    _FF_SL(1);
+    tos += *ff_tos(R);
+    _FF_NEXT();
+
 /** ( -- )  `leave` — exit innermost counted loop early. */
 case FF_OP_LEAVE:
     _FF_RSL(3);
@@ -166,6 +173,64 @@ case FF_OP_ABORT:
     ff_abort(ff);
     _FF_RESTORE();
     goto done;
+
+/** ( n -- | i*x n -- )  `throw` — non-zero raises an exception; the
+    most recent CATCH absorbs it. Zero is a no-op. */
+case FF_OP_THROW:
+    _FF_SL(1);
+    if (tos == 0)
+    {
+        _DROP();
+    }
+    else
+    {
+        ff->throw_code = tos;
+        _DROP();
+        ff->state |= FF_STATE_BROKEN | FF_STATE_THROWN;
+        _FF_SYNC();
+        goto broken;
+    }
+    _FF_NEXT();
+
+/** ( i*x xt -- j*x 0 | i*x n )  `catch` — execute xt; push 0 on clean
+    return, or restore stacks and push the THROW code on exception. */
+case FF_OP_CATCH:
+    _FF_SL(1);
+    {
+        ff_word_t *xt = (ff_word_t *)(intptr_t)tos;
+        _FF_CHECK_XT(xt);
+        _DROP();
+        /* Snapshot before the protected call. ff_exec leaves ff->ip
+           cleared on return, so we also save the *outer* ip so the
+           caller's bytecode position survives the nested run. */
+        size_t saved_s  = S->top;
+        size_t saved_r  = R->top;
+        int    saved_bt = BT->top;
+        ff_int_t   *saved_outer_ip = ip;
+        ff_word_t  *saved_cur      = ff->cur_word;
+        _FF_SYNC();
+        ff_exec(ff, xt);
+        ff->ip = saved_outer_ip;
+        _FF_RESTORE();
+        if (ff->state & FF_STATE_THROWN)
+        {
+            /* Unwind: roll the stacks back, clear the broken/thrown
+               flags, and push the throw code. */
+            S->top  = saved_s;
+            R->top  = saved_r;
+            BT->top = saved_bt;
+            ff->cur_word = saved_cur;
+            ff->state &= ~(FF_STATE_BROKEN | FF_STATE_THROWN);
+            if (S->top > 0)
+                tos = S->data[S->top - 1];
+            _PUSH(ff->throw_code);
+        }
+        else
+        {
+            _PUSH(0);
+        }
+    }
+    _FF_NEXT();
 
 /** ( -- bp )  `if` — emit forward QBRANCH placeholder (immediate). */
 case FF_OP_IF:
