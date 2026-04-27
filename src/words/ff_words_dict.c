@@ -5,6 +5,8 @@
 #include <ff_p.h>
 #include <ff_word_def_p.h>
 
+#include "ff_md.h"
+
 #include <fort/fort.h>
 
 #include <errno.h>
@@ -81,6 +83,27 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
 
     const char *synopsis = nl ? nl + 1 : "";
 
+    /* Render the synopsis through the Markdown renderer. The rest
+       of the entry (name + prototype + flags table) stays in fort
+       since it's tabular by nature. The flag picks ANSI vs plain at
+       compile time; both renderers ship and either is callable
+       directly via ff_md_snprintf / ff_md_vt_snprintf. */
+    char synbuf[4096];
+#if FF_VT_COLORS
+    int synlen = ff_md_vt_snprintf(synbuf, sizeof(synbuf), synopsis, 76);
+#else
+    int synlen = ff_md_snprintf(synbuf, sizeof(synbuf), synopsis, 76);
+#endif
+    /* The Markdown renderer terminates each paragraph with `\n\n` so
+       independent paragraphs separate visually; for a single fort
+       cell that creates spurious blank lines after the last
+       paragraph. Trim them. */
+    if ((size_t)synlen > sizeof(synbuf))
+        synlen = (int)sizeof(synbuf) - 1;
+    while (synlen > 0
+           && (synbuf[synlen - 1] == '\n' || synbuf[synlen - 1] == ' '))
+        synbuf[--synlen] = '\0';
+
     ft_table_t *table = ft_create_table();
     ft_set_border_style(table, FT_SOLID_ROUND_STYLE);
 
@@ -101,7 +124,7 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
     /* Synopsis: single cell spanning all columns, no header. */
     ft_set_cell_span(table, 2, 0, 3);
     ft_set_cell_prop(table, 2, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_LEFT);
-    ft_u8write_ln(table, synopsis);
+    ft_u8write_ln(table, synbuf);
 
     ff_printf(ff, "%s", (const char *)ft_to_u8string(table));
     ft_destroy_table(table);

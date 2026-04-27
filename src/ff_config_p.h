@@ -75,3 +75,20 @@
 #if !defined(FF_R_TRUSTED)
 #  define FF_R_TRUSTED 0
 #endif
+
+/**
+ * @def FF_VT_COLORS
+ * @brief Compile-time switch: render Markdown output (man pages,
+ *        diagnostics) with ANSI escape codes for colour and
+ *        emphasis instead of plain UTF-8 text.
+ *
+ * The two render functions in @ref ff_md.h are always available
+ * regardless; this flag picks which one engine-internal callers
+ * (`ff_print_manual` and similar) reach for by default. Define
+ * (set to 1) for desktop / interactive embeddings; leave undefined
+ * for log files, network output, or terminals that don't speak
+ * ANSI.
+ */
+#if !defined(FF_VT_COLORS)
+#  define FF_VT_COLORS 0
+#endif

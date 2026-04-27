@@ -9,6 +9,19 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Markdown renderer for terminal output. Two snprintf-shaped
+  entry points in `<ff_md.h>`:
+  - `ff_md_snprintf` — plain UTF-8 (no ANSI codes).
+  - `ff_md_vt_snprintf` — ANSI-styled (bold/italic/cyan/underline)
+    for headings, emphasis, code, links, strikethrough.
+  Both share the same vendored md4c parser and accept a `width`
+  parameter for word-wrap. Markdown tables are rendered through
+  the vendored fort library with rounded-corner box borders,
+  automatic column widths, and bold headers. The new
+  `FF_VT_COLORS` compile-time flag in `ff_config_p.h` picks which
+  one `ff_print_manual` calls by default; both are always
+  available regardless. `man <word>` output is now
+  markdown-rendered.
 - Performance pass that lifted *ff* above `gforth-itc` and the
   default `gforth` on the arithmetic and memory-traffic
   benchmarks (b2 sum: 290 → 120 ms; b4 var r/m/w: 680 → 250 ms).

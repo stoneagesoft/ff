@@ -1301,3 +1301,75 @@ When either signal fires, the engine raises
 `abort_requested`, sets `FF_STATE_BROKEN`, and joins the existing
 broken-state cleanup. The host's `ff_eval` returns
 `FF_ERR_BROKEN` and the engine is ready for the next call.
+
+
+## Markdown rendering for terminal output
+
+Word-manual entries (`man <word>`) and other diagnostic blocks are
+authored as Markdown so the same source text can render verbatim in
+the Doxygen reference, in the PDF reference manual, and in the
+terminal. The terminal renderer lives in [src/ff_md.h](src/ff_md.h)
+and [src/ff_md.c](src/ff_md.c), wrapping the vendored
+[md4c](src/3rdparty/md4c) parser with a SAX-style callback set that
+emits plain UTF-8 (or ANSI-styled UTF-8) into a snprintf-shaped
+buffer.
+
+### Two entry points, one parser
+
+```c
+int ff_md_snprintf   (char *buf, size_t size, const char *md, int width);
+int ff_md_vt_snprintf(char *buf, size_t size, const char *md, int width);
+```
+
+Both share the same md4c callback set; the only difference is whether
+the callbacks emit ANSI escape sequences. The `width` argument
+controls word wrap (`0` disables it). Return value follows the
+standard snprintf contract — number of bytes that *would have been
+written*, not counting the NUL — so callers can pre-size with
+`buf=NULL, size=0`, allocate `return + 1`, and call again.
+
+The mapping from Markdown elements to ANSI codes is small and
+deliberate (16-colour palette only, so the same codes work on
+Windows console hosts ≥ 2018):
+
+| Element       | Sequence                          |
+|---------------|-----------------------------------|
+| h1            | `\033[1;4m` … `\033[0m` (bold + underline) |
+| h2-h6         | `\033[1m`  … `\033[0m`            |
+| `**strong**`  | `\033[1m`  … `\033[22m`           |
+| `*emphasis*`  | `\033[3m`  … `\033[23m`           |
+| `` `code` ``  | `\033[36m` … `\033[39m` (cyan)    |
+| code blocks   | cyan + 4-space indent             |
+| `[txt](url)`  | `\033[4m` text `\033[24m` + ` (` + dim URL + `)` |
+| `~~strike~~`  | `\033[9m`  … `\033[29m`           |
+| `* item`      | `* ` prefix + 2-space hanging indent |
+| `1. item`     | `N. ` prefix (counter increments per item) |
+
+Tables go through the vendored
+[fort](src/3rdparty/fort) library: when `MD_BLOCK_TABLE` enters,
+`ff_md` allocates an `ft_table_t`; each cell's text accumulates
+into a per-cell scratch buffer (via a redirect inside `emit_raw`),
+gets handed to `ft_u8write` at cell-leave, and the rendered table
+is emitted to the main output at table-leave. The result has
+proper rounded-corner box borders, automatic column-width
+calculation, and a header row in bold for the GFM `|---|---|`
+separator line. ANSI escape codes inside cells are preserved
+through fort.
+
+### `FF_VT_COLORS` build flag
+
+Both functions are always available. The compile-time flag in
+`ff_config_p.h`:
+
+```c
+#if !defined(FF_VT_COLORS)
+#  define FF_VT_COLORS 0
+#endif
+```
+
+picks which one engine-internal callers (currently `ff_print_manual`)
+reach for. Default is plain text, suitable for log files, captured
+output, and non-ANSI terminals. Set to 1 when building for an
+interactive terminal embedding. Custom hosts that need both at
+runtime can simply call the relevant function directly — both ship in
+the library regardless of the flag.
