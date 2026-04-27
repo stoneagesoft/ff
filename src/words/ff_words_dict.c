@@ -373,6 +373,9 @@ static size_t see_opcode_len(const ff_int_t *cells, size_t pos, size_t end)
         case FF_OP_CONSTANT_RUNTIME:
         case FF_OP_ARRAY_RUNTIME:
         case FF_OP_DEFER_RUNTIME:
+        case FF_OP_VAR_FETCH:
+        case FF_OP_VAR_STORE:
+        case FF_OP_VAR_PLUS_STORE:
             return 2;
         case FF_OP_STRLIT:
             return 1 + (pos + 1 < end ? (size_t)cells[pos + 1] : 0);
@@ -498,6 +501,19 @@ static void see_decompile_body(ff_t *ff, const ff_int_t *cells, size_t size,
                 break;
             }
 
+            case FF_OP_VAR_FETCH:
+            case FF_OP_VAR_STORE:
+            case FF_OP_VAR_PLUS_STORE:
+            {
+                ff_word_t *nw = (ff_word_t *)(intptr_t)cells[pos + 1];
+                const char *suf = (op == FF_OP_VAR_FETCH) ? "@"
+                               : (op == FF_OP_VAR_STORE) ? "!"
+                                                          : "+!";
+                see_text(pr, "%s %s", nw->name, suf);
+                pos += 2;
+                break;
+            }
+
             case FF_OP_CALL:
                 see_text(pr, "<native>");
                 pos += 2;
@@ -617,6 +633,20 @@ static void see_decompile_body(ff_t *ff, const ff_int_t *cells, size_t size,
                 see_text(pr, "i +");
                 pos += 1;
                 break;
+
+            case FF_OP_I_ADD_LOOP:
+                see_text(pr, "i +");
+                /* The DO frame closes when pos reaches its end (the
+                   cell after the back-branch offset), so emit no
+                   loop closer here. The XDO offset already points
+                   past this and the offset cell. */
+                pos += 2;
+                break;
+
+            case FF_OP_NIP:        see_text(pr, "nip");      pos += 1; break;
+            case FF_OP_TUCK:       see_text(pr, "tuck");     pos += 1; break;
+            case FF_OP_OVER_PLUS:  see_text(pr, "over +");   pos += 1; break;
+            case FF_OP_R_PLUS:     see_text(pr, "r@ +");     pos += 1; break;
 
             default:
             {

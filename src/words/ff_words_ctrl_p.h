@@ -8,7 +8,7 @@
 /** ( -- )  R: ( -- ret )  Enter a colon-def: push current ip to R. */
 case FF_OP_NEST:
     _FF_WATCHDOG_TICK();
-    _FF_RSO(1);
+    _FF_RSO_T(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         if (ff->state & FF_STATE_BACKTRACE)
@@ -37,7 +37,7 @@ case FF_OP_TNEST:
 
 /** ( -- )  R: ( ret -- )  Return from a colon-def. */
 case FF_OP_EXIT:
-    _FF_RSL(1);
+    _FF_RSL_T(1);
     ip = (ff_int_t *)(intptr_t)*ff_tos(R);
     R->top--;
     if (!ip)
@@ -72,7 +72,7 @@ case FF_OP_QBRANCH:
 /** ( limit start -- )  R: ( -- leave-target limit index )  Runtime DO entry. */
 case FF_OP_XDO:
     _FF_SL(2);
-    _FF_RSO(3);
+    _FF_RSO_T(3);
     ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
     ip++;
     ff_stack_push(R, _NOS);
@@ -90,7 +90,7 @@ case FF_OP_XQDO:
     }
     else
     {
-        _FF_RSO(3);
+        _FF_RSO_T(3);
         ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
         ip++;
         ff_stack_push(R, _NOS);
@@ -101,7 +101,7 @@ case FF_OP_XQDO:
 
 /** ( -- )  Runtime LOOP back-edge: increment index, branch unless done. */
 case FF_OP_XLOOP:
-    _FF_RSL(3);
+    _FF_RSL_T(3);
     *ff_tos(R) += 1;
     if (*ff_tos(R) >= *ff_nos(R))
     {
@@ -118,7 +118,7 @@ case FF_OP_XLOOP:
 /** ( delta -- )  Runtime +LOOP back-edge with arbitrary index delta. */
 case FF_OP_PXLOOP:
     _FF_SL(1);
-    _FF_RSL(3);
+    _FF_RSL_T(3);
     {
         ff_int_t niter = *ff_tos(R) + tos;
         _DROP();
@@ -139,21 +139,41 @@ case FF_OP_PXLOOP:
 
 /** ( -- index )  `i` — push the innermost loop's current index. */
 case FF_OP_LOOP_I:
-    _FF_RSL(3);
+    _FF_RSL_T(3);
     _FF_SO(1);
     _PUSH(*ff_tos(R));
     _FF_NEXT();
 
 /** ( n -- n+i )  Superinstruction emitted by the `i +` peephole. */
 case FF_OP_I_ADD:
-    _FF_RSL(3);
+    _FF_RSL_T(3);
     _FF_SL(1);
     tos += *ff_tos(R);
     _FF_NEXT();
 
+/** ( n -- n+i )  Superinstruction: `i + loop` — fused index-add and
+    LOOP back-edge. Halves the dispatch count of the canonical
+    summing loop `0 N 0 do  i +  loop`. */
+case FF_OP_I_ADD_LOOP:
+    _FF_RSL_T(3);
+    _FF_SL(1);
+    tos += *ff_tos(R);          /* i + */
+    *ff_tos(R) += 1;            /* index++ */
+    if (*ff_tos(R) >= *ff_nos(R))
+    {
+        ff_stack_popn(R, 3);
+        ip++;                   /* skip back-branch offset */
+    }
+    else
+    {
+        _FF_WATCHDOG_TICK();
+        ip += *ip;              /* loop back */
+    }
+    _FF_NEXT();
+
 /** ( -- )  `leave` — exit innermost counted loop early. */
 case FF_OP_LEAVE:
-    _FF_RSL(3);
+    _FF_RSL_T(3);
     ip = (ff_int_t *)(intptr_t)*ff_sat(R, 2);
     ff_stack_popn(R, 3);
     _FF_NEXT();
@@ -170,7 +190,7 @@ case FF_OP_QDUP:
 
 /** ( -- index )  `j` — push the next-outer loop's current index. */
 case FF_OP_LOOP_J:
-    _FF_RSL(6);
+    _FF_RSL_T(6);
     _FF_SO(1);
     _PUSH(*ff_sat(R, 3));
     _FF_NEXT();
@@ -269,6 +289,9 @@ case FF_OP_ELSE:
         int bp = (int)tos;
         h->data[bp] = h->size - bp;
         tos = h->size - 1;
+        /* The patched IF target lands here; the else-clause's first
+           op must not fuse backward into the BRANCH or earlier. */
+        ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
@@ -281,6 +304,10 @@ case FF_OP_THEN:
         int bp = (int)tos;
         h->data[bp] = h->size - bp;
         _DROP();
+        /* Position after THEN is a forward-branch target; the next
+           op must not fold with whatever was the last op of the
+           IF/ELSE clause. */
+        ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
@@ -288,7 +315,13 @@ case FF_OP_THEN:
 case FF_OP_BEGIN:
     _FF_COMPILING;
     _FF_SO(1);
-    _PUSH((ff_int_t)ff_dict_top(&ff->dict)->heap.size);
+    {
+        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        _PUSH((ff_int_t)h->size);
+        /* Position is the back-branch target; the next op mustn't
+           fold with the previous one. */
+        ff_heap_inhibit_peephole(h);
+    }
     _FF_NEXT();
 
 /** ( target -- )  `until` — emit conditional back-branch. */
@@ -340,6 +373,8 @@ case FF_OP_REPEAT:
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
         h->data[bp1] = h->size - bp1;
         _DROP();
+        /* Position after REPEAT is the WHILE forward target. */
+        ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
@@ -378,6 +413,8 @@ case FF_OP_LOOP:
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
         h->data[bp - 1] = h->size - bp + 1;
         _DROP();
+        /* DO leave-target lands here. */
+        ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
@@ -392,6 +429,8 @@ case FF_OP_PLOOP:
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
         h->data[bp - 1] = h->size - bp + 1;
         _DROP();
+        /* DO leave-target lands here. */
+        ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 

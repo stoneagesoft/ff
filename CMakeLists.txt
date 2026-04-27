@@ -26,6 +26,76 @@ if(FF_SAFE_MEM)
     add_compile_definitions(FF_SAFE_MEM=1)
 endif()
 
+# Trusted-bytecode return-stack checks. When ON, the engine elides
+# the _FF_RSL/_FF_RSO checks inside opcodes that the compiler emits
+# in matched pairs (XLOOP, XDO, NEST, EXIT, …). The check guards an
+# engine-bug path, not a user-code path; embedder-facing FF_RSL
+# in custom native words is unaffected. ~5% on loop-heavy code.
+option(FF_R_TRUSTED "Drop redundant return-stack checks in matched-pair opcodes." OFF)
+if(FF_R_TRUSTED)
+    add_compile_definitions(FF_R_TRUSTED=1)
+endif()
+
+# Link-time optimisation. Lets the compiler optimise across
+# translation-unit boundaries — particularly useful here because
+# ff_exec calls into ff_dict_lookup, ff_word_native_fn, etc.
+# Typical gain: 2-5 % across the board, sometimes more for cross-
+# call inlining. Free of any source-code change.
+option(FF_LTO "Enable link-time optimisation (-flto / /GL)." OFF)
+if(FF_LTO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT _ff_ipo_ok OUTPUT _ff_ipo_msg)
+    if(_ff_ipo_ok)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    else()
+        message(WARNING "FF_LTO requested but IPO unsupported by toolchain: ${_ff_ipo_msg}")
+    endif()
+endif()
+
+# Profile-guided optimisation. Two-pass build:
+#   1. cmake -B build/pgo-gen -DFF_PGO=GENERATE
+#      cmake --build build/pgo-gen
+#      ./build/pgo-gen/ffsh < representative.ff   # populates *.profraw
+#      llvm-profdata merge -output=ff.profdata build/pgo-gen/*.profraw
+#   2. cmake -B build/pgo-use -DFF_PGO=USE -DFF_PGO_DATA=$(pwd)/ff.profdata
+#      cmake --build build/pgo-use
+# Gain on dispatch-bound code: typically 5-15 %.
+set(FF_PGO "" CACHE STRING "Profile-guided optimisation: GENERATE | USE | empty.")
+set_property(CACHE FF_PGO PROPERTY STRINGS "" "GENERATE" "USE")
+set(FF_PGO_DATA "" CACHE FILEPATH "Path to merged .profdata file (FF_PGO=USE only).")
+if(FF_PGO STREQUAL "GENERATE")
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-fprofile-instr-generate)
+        add_link_options(-fprofile-instr-generate)
+    elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_compile_options(-fprofile-generate)
+        add_link_options(-fprofile-generate)
+    elseif(MSVC)
+        add_compile_options(/GENPROFILE)
+        add_link_options(/GENPROFILE)
+    else()
+        message(FATAL_ERROR "FF_PGO=GENERATE: unsupported compiler ${CMAKE_C_COMPILER_ID}.")
+    endif()
+elseif(FF_PGO STREQUAL "USE")
+    if(NOT FF_PGO_DATA)
+        message(FATAL_ERROR "FF_PGO=USE requires -DFF_PGO_DATA=path/to/merged.profdata")
+    endif()
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        add_compile_options(-fprofile-instr-use=${FF_PGO_DATA})
+        add_link_options(-fprofile-instr-use=${FF_PGO_DATA})
+    elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        add_compile_options(-fprofile-use=${FF_PGO_DATA})
+        add_link_options(-fprofile-use=${FF_PGO_DATA})
+    elseif(MSVC)
+        add_compile_options(/USEPROFILE:PGD=${FF_PGO_DATA})
+        add_link_options(/USEPROFILE:PGD=${FF_PGO_DATA})
+    else()
+        message(FATAL_ERROR "FF_PGO=USE: unsupported compiler ${CMAKE_C_COMPILER_ID}.")
+    endif()
+elseif(NOT FF_PGO STREQUAL "")
+    message(FATAL_ERROR "FF_PGO must be GENERATE, USE, or empty (got: ${FF_PGO}).")
+endif()
+
 # Control where the static and shared libraries are built so that on
 # Windows we don't need to tinker with the path to run the executable.
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}")

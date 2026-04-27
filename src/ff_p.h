@@ -91,6 +91,21 @@ struct ff
 
 
 /* ===================================================================
+ * Branch-prediction hints. The validators below all guard the rare
+ * "something went wrong" path; tagging the comparison with
+ * ff_unlikely() lets GCC/Clang lay out the hot path straight-line and
+ * push the diagnostic-and-return code into a cold section.
+ * =================================================================== */
+#if defined(__GNUC__) || defined(__clang__)
+#  define ff_unlikely(x) __builtin_expect(!!(x), 0)
+#  define ff_likely(x)   __builtin_expect(!!(x), 1)
+#else
+#  define ff_unlikely(x) (x)
+#  define ff_likely(x)   (x)
+#endif
+
+
+/* ===================================================================
  * Validation macros (word-fn context).
  *
  * Each macro is a statement that may raise an error and `return;` from
@@ -112,7 +127,7 @@ struct ff
  */
 #define FF_SL(e, n) \
     do { \
-        if ((int)(e)->stack.top < (int)(n)) \
+        if (ff_unlikely((int)(e)->stack.top < (int)(n))) \
         { \
             ff_tracef(e, FF_SEV_ERROR | FF_ERR_STACK_UNDER, \
                       "Stack underflow: %d item(s) expected.", (int)(n)); \
@@ -127,7 +142,7 @@ struct ff
  */
 #define FF_SO(e, n) \
     do { \
-        if ((int)(e)->stack.top + (int)(n) > FF_STACK_SIZE) \
+        if (ff_unlikely((int)(e)->stack.top + (int)(n) > FF_STACK_SIZE)) \
         { \
             ff_tracef(e, FF_SEV_ERROR | FF_ERR_STACK_OVER, \
                       "Stack overflow: %d item(s) would not fit.", (int)(n)); \
@@ -142,7 +157,7 @@ struct ff
  */
 #define FF_RSL(e, n) \
     do { \
-        if ((int)(e)->r_stack.top < (int)(n)) \
+        if (ff_unlikely((int)(e)->r_stack.top < (int)(n))) \
         { \
             ff_tracef(e, FF_SEV_ERROR | FF_ERR_RSTACK_UNDER, \
                       "Return stack underflow: %d item(s) expected.", (int)(n)); \
@@ -157,7 +172,7 @@ struct ff
  */
 #define FF_RSO(e, n) \
     do { \
-        if ((int)(e)->r_stack.top + (int)(n) > FF_STACK_SIZE) \
+        if (ff_unlikely((int)(e)->r_stack.top + (int)(n) > FF_STACK_SIZE)) \
         { \
             ff_tracef(e, FF_SEV_ERROR | FF_ERR_RSTACK_OVER, \
                       "Return stack overflow: %d item(s) would not fit.", (int)(n)); \
@@ -171,7 +186,7 @@ struct ff
  */
 #define FF_COMPILING(e) \
     do { \
-        if (!((e)->state & FF_STATE_COMPILING)) \
+        if (ff_unlikely(!((e)->state & FF_STATE_COMPILING))) \
         { \
             ff_tracef(e, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF, \
                       "Compiler word outside definition."); \
@@ -217,7 +232,7 @@ bool ff_word_valid(const ff_t *ff, const ff_word_t *w);
 #if FF_SAFE_MEM
 #  define FF_CHECK_ADDR(e, addr, bytes) \
        do { \
-           if (!ff_addr_valid((e), (addr), (size_t)(bytes))) \
+           if (ff_unlikely(!ff_addr_valid((e), (addr), (size_t)(bytes)))) \
            { \
                ff_tracef(e, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
                          "Bad pointer: %p (size %zu).", \
@@ -227,7 +242,7 @@ bool ff_word_valid(const ff_t *ff, const ff_word_t *w);
        } while (0)
 #  define FF_CHECK_XT(e, w) \
        do { \
-           if (!ff_word_valid((e), (w))) \
+           if (ff_unlikely(!ff_word_valid((e), (w)))) \
            { \
                ff_tracef(e, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
                          "Bad execution token: %p.", (const void *)(w)); \

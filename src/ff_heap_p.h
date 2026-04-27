@@ -140,6 +140,18 @@ struct ff_heap
 };
 
 /**
+ * Clear the peephole tracker so the next @ref ff_heap_compile_op
+ * can't fuse with whatever was emitted before. Called by every
+ * control-flow immediate (IF/THEN/ELSE/BEGIN/…) so a fold doesn't
+ * cross a branch target / back-branch boundary.
+ * @param h Heap.
+ */
+static inline void ff_heap_inhibit_peephole(ff_heap_t *h)
+{
+    h->last_op = FF_OP_NONE;
+}
+
+/**
  * Ensure @p h has room for @p extra additional cells, doubling
  * capacity as needed.
  * @param h     Heap.

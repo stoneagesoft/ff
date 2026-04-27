@@ -9,6 +9,34 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Performance pass that lifted *ff* above `gforth-itc` and the
+  default `gforth` on the arithmetic and memory-traffic
+  benchmarks (b2 sum: 290 → 120 ms; b4 var r/m/w: 680 → 250 ms).
+  Concretely:
+  - Two-op peephole superinstructions: `i + loop` →
+    `FF_OP_I_ADD_LOOP`; `<var> @`/`!`/`+!` →
+    `FF_OP_VAR_FETCH`/`VAR_STORE`/`VAR_PLUS_STORE`; `swap drop`
+    → `FF_OP_NIP`; `swap over` → `FF_OP_TUCK`; `over +` →
+    `FF_OP_OVER_PLUS`; `r@ +` → `FF_OP_R_PLUS`.
+  - `nip` and `tuck` are also exposed as standalone Forth
+    primitives.
+  - `ff_heap_inhibit_peephole(h)` plumbed through every
+    control-flow immediate (`THEN`, `BEGIN`, `ELSE`, `REPEAT`,
+    `LOOP`, `+LOOP`) so a fold can never cross a branch
+    target.
+  - `__builtin_expect(..., 0)` hints on every validator
+    (`_FF_SL`/`_FF_SO`/`_FF_RSL`/`_FF_RSO`/`_FF_COMPILING`/
+    `_FF_CHECK_ADDR`/`_FF_CHECK_XT`/`abort_requested`) so the
+    rare error path moves to a cold section.
+  - `FF_R_TRUSTED` build flag (default OFF) elides the
+    bytecode-internal `_FF_RSL` / `_FF_RSO` checks inside
+    matched-pair opcodes (XLOOP, XDO, NEST, EXIT, …). Custom
+    native words still get full validation.
+  - `FF_LTO` build flag wires
+    `CMAKE_INTERPROCEDURAL_OPTIMIZATION` for cross-TU inlining.
+  - `FF_PGO=GENERATE`/`USE` build flags for profile-guided
+    optimisation. Two-pass build with explicit
+    `FF_PGO_DATA=path/to/merged.profdata` for the second pass.
 - Watchdog API to bound execution time of untrusted Forth code.
   Two complementary mechanisms sharing one `FF_ERR_ABORTED` unwind:
   - Polling callback (`ff_platform_t::watchdog` +

@@ -112,6 +112,32 @@ case FF_OP_OVER:
     _PUSH(_NOS);
     _FF_NEXT();
 
+/** ( a b -- b )  `nip` — drop NOS. Standalone primitive and the
+    target of the `swap drop` peephole. */
+case FF_OP_NIP:
+    _FF_SL(2);
+    _NOS = tos;
+    --S->top;
+    _FF_NEXT();
+
+/** ( a b -- b a b )  `tuck` — copy TOS under NOS. Standalone
+    primitive and the target of the `swap over` peephole.
+
+    Layout invariant: S->data[top-1] is scratch, real TOS is in
+    `tos`. Before: top=N, mem[N-2]=NOS. After: top=N+1, mem[N-2]=TOS,
+    mem[N-1]=NOS, scratch slot at mem[N], tos register unchanged. */
+case FF_OP_TUCK:
+    _FF_SL(2);
+    _FF_SO(1);
+    {
+        ff_int_t saved_nos = S->data[S->top - 2];
+        S->data[S->top - 2] = tos;
+        S->data[S->top - 1] = saved_nos;
+        ++S->top;
+        /* tos register intentionally unchanged. */
+    }
+    _FF_NEXT();
+
 /** ( a b c -- b c a )  `rot` — rotate three cells leftward. */
 case FF_OP_ROT:
     _FF_SL(3);

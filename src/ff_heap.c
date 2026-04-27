@@ -69,8 +69,11 @@ void ff_heap_compile_word(ff_heap_t *h, const ff_word_t *w)
     }
     else if (w->opcode >= 0)
     {
-        /* Regular opcoded built-in: single-cell opcode. */
-        ff_heap_push(h, w->opcode);
+        /* Regular opcoded built-in: single-cell opcode. Route through
+           compile_op so the peephole pass sees the new op against
+           h->last_op (e.g. CREATE_RUNTIME → FETCH → VAR_FETCH). */
+        ff_heap_compile_op(h, w->opcode);
+        return;
     }
     else if (!ff_word_is_native(w))
     {
@@ -85,7 +88,11 @@ void ff_heap_compile_word(ff_heap_t *h, const ff_word_t *w)
         ff_heap_push(h, FF_OP_CALL);
         ff_heap_push(h, (ff_int_t)(intptr_t)ff_word_native_fn(w));
     }
-    h->last_op = FF_OP_NONE;
+    /* Track CREATE_RUNTIME so the peephole can fold a following
+       FETCH / STORE / +! into VAR_FETCH / VAR_STORE / VAR_PLUS_STORE. */
+    h->last_op = (w->opcode == FF_OP_CREATE_RUNTIME)
+                     ? FF_OP_CREATE_RUNTIME
+                     : FF_OP_NONE;
 }
 
 /** @copydoc ff_heap_compile_int */
@@ -221,6 +228,67 @@ static bool ff_heap_try_peephole(ff_heap_t *h, ff_opcode_t op)
         return true;
     }
 
+    /* `i + loop` (or `i +` already folded to I_ADD, then LOOP) →
+       I_ADD_LOOP. Halves the inner-loop dispatch count of typical
+       summing loops. The XLOOP back-branch offset cell is emitted
+       by FF_OP_LOOP after this returns true; here we just rewrite
+       I_ADD in place and skip the XLOOP opcode. */
+    if (h->last_op == FF_OP_I_ADD && op == FF_OP_XLOOP)
+    {
+        h->data[h->size - 1] = FF_OP_I_ADD_LOOP;
+        return true;
+    }
+
+    /* `swap drop` → NIP. */
+    if (h->last_op == FF_OP_SWAP && op == FF_OP_DROP)
+    {
+        h->data[h->size - 1] = FF_OP_NIP;
+        return true;
+    }
+
+    /* `swap over` → TUCK. */
+    if (h->last_op == FF_OP_SWAP && op == FF_OP_OVER)
+    {
+        h->data[h->size - 1] = FF_OP_TUCK;
+        return true;
+    }
+
+    /* `over +` → OVER_PLUS. */
+    if (h->last_op == FF_OP_OVER && op == FF_OP_ADD)
+    {
+        h->data[h->size - 1] = FF_OP_OVER_PLUS;
+        return true;
+    }
+
+    /* `r@ +` → R_PLUS. */
+    if (h->last_op == FF_OP_FETCH_R && op == FF_OP_ADD)
+    {
+        h->data[h->size - 1] = FF_OP_R_PLUS;
+        return true;
+    }
+
+    /* `<var> @` → FF_OP_VAR_FETCH, `<var> !` → FF_OP_VAR_STORE,
+       `<var> +!` → FF_OP_VAR_PLUS_STORE. The CREATE_RUNTIME tail
+       is [opcode, word_ptr]; we rewrite the opcode cell in place
+       and skip emitting the FETCH/STORE/PLUS_STORE op. */
+    if (h->last_op == FF_OP_CREATE_RUNTIME)
+    {
+        switch (op)
+        {
+            case FF_OP_FETCH:
+                h->data[h->size - 2] = FF_OP_VAR_FETCH;
+                return true;
+            case FF_OP_STORE:
+                h->data[h->size - 2] = FF_OP_VAR_STORE;
+                return true;
+            case FF_OP_PLUS_STORE:
+                h->data[h->size - 2] = FF_OP_VAR_PLUS_STORE;
+                return true;
+            default:
+                break;
+        }
+    }
+
     /* Multi-cell LIT n: tail is [LIT, n]. Replace LIT with specialized op
        and drop the value cell, or rewrite to a LITADD/LITSUB
        superinstruction (same length, fewer dispatches). */
@@ -281,8 +349,25 @@ void ff_heap_compile_op(ff_heap_t *h, ff_opcode_t op)
     }
     ff_heap_align(h);
     ff_heap_push(h, op);
-    /* Track ops that participate in non-LIT peepholes (LOOP_I → I_ADD). */
-    h->last_op = (op == FF_OP_LOOP_I) ? FF_OP_LOOP_I : FF_OP_NONE;
+    /* Track ops that participate in non-LIT peepholes:
+       - LOOP_I  → I_ADD
+       - I_ADD   → I_ADD_LOOP
+       - SWAP    → NIP / TUCK
+       - OVER    → OVER_PLUS
+       - FETCH_R → R_PLUS */
+    switch (op)
+    {
+        case FF_OP_LOOP_I:
+        case FF_OP_I_ADD:
+        case FF_OP_SWAP:
+        case FF_OP_OVER:
+        case FF_OP_FETCH_R:
+            h->last_op = op;
+            break;
+        default:
+            h->last_op = FF_OP_NONE;
+            break;
+    }
 }
 
 /** @copydoc ff_heap_compile_lit */

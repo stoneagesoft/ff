@@ -17,6 +17,21 @@ case FF_OP_ADD:
     --S->top;
     _FF_NEXT();
 
+/** ( a b -- a a+b )  Superinstruction: `over +` — common base+offset
+    idiom. Saves one push/pop round-trip. */
+case FF_OP_OVER_PLUS:
+    _FF_SL(2);
+    tos += _NOS;
+    _FF_NEXT();
+
+/** ( n -- n+r )  Superinstruction: `r@ +` — index-relative offset
+    add inside DO loops without the intermediate push. */
+case FF_OP_R_PLUS:
+    _FF_RSL_T(1);
+    _FF_SL(1);
+    tos += *ff_tos(R);
+    _FF_NEXT();
+
 /** ( n1 n2 -- n3 )  `-` — n3 = n1 - n2. */
 case FF_OP_SUB:
     _FF_SL(2);
