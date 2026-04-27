@@ -141,7 +141,10 @@ case FF_OP_TICK:
     _FF_RESTORE();
     _FF_NEXT();
 
-/** ( xt -- )  `execute` — recursively run the word identified by xt. */
+/** ( xt -- )  `execute` — recursively run the word identified by xt.
+    ff_exec sets ff->ip to NULL on its way out (the sentinel that
+    terminates an interpreter run); we save the outer ip across the
+    nested call so the caller resumes at the next opcode. */
 case FF_OP_EXECUTE:
     _FF_SL(1);
     {
@@ -149,10 +152,10 @@ case FF_OP_EXECUTE:
         _FF_CHECK_XT(tw);
         _DROP();
         _FF_SYNC();
+        ff_int_t *saved_ip = ip;
         ff_exec(ff, tw);
+        ff->ip = saved_ip;
         _FF_RESTORE();
-        if (!ip)
-            goto done;
     }
     _FF_NEXT();
 

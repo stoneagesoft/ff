@@ -1,0 +1,17 @@
+\ ANS THROW / CATCH.
+
+: bad   42 throw ;
+: clean   7 . ;
+
+\ Catching a thrown exception: the inner word's pre-throw stack is
+\ rolled back; the throw code lands on the data stack.
+' bad catch .
+
+\ Clean (no-throw) execution: catch pushes 0.
+' clean catch .
+
+\ THROW with code 0 is a no-op (drops the 0 silently).
+0 throw
+
+\ Sentinel that should still print, proving the engine is alive.
+99 .

@@ -138,6 +138,17 @@ const ff_word_def_t FF_CTRL_WORDS[] =
       "s ( -- )  Abort with message\n"
       "Prints the string literal *s* that follows in line, then aborts,\n"
       "clearing all execution state to return to the interpreter."),
+    _FF_W("throw", FF_OP_THROW,
+      "( n -- )  Raise exception\n"
+      "If *n* is zero, **throw** is a no-op. Otherwise the data and\n"
+      "return stacks are snapshot-restored to the state captured by the\n"
+      "most recent **catch**, and *n* is pushed for **catch** to read."),
+    _FF_W("catch", FF_OP_CATCH,
+      "( xt -- 0 | n )  Catch exception\n"
+      "Executes *xt*. If it returns normally, **catch** pushes 0.\n"
+      "If a **throw** raises an exception during execution, the stacks\n"
+      "are restored to the snapshot taken at this **catch** call and the\n"
+      "throw code *n* is left on the data stack instead."),
     FF_WEND
 };
 

@@ -94,6 +94,19 @@ if(FF_BUILD_SHARED AND NOT FF_OS_WASM)
     list(APPEND FF_INSTALL_TARGETS ff_shared)
 endif()
 
+# Namespaced alias so examples / sibling subdirs can write
+# `target_link_libraries(app PRIVATE ff::ff)` exactly like a downstream
+# consumer that picked us up via find_package(). Prefers the shared
+# variant when both are built, matching the cmake config logic in
+# ff-config.cmake.in.
+if(NOT TARGET ff::ff)
+    if(TARGET ff_shared)
+        add_library(ff::ff ALIAS ff_shared)
+    elseif(TARGET ff_static)
+        add_library(ff::ff ALIAS ff_static)
+    endif()
+endif()
+
 set(FF_INCLUDES ${FF_INCLUDES} ${PROJECT_BINARY_DIR})
 
 _ff(ff_obj)
@@ -175,6 +188,16 @@ install(FILES
     DESTINATION ${FF_CMAKE_CONFIG_DIR}
     COMPONENT development)
 
+# pkg-config support for non-CMake consumers. Generated at configure
+# time; consumers reach it via `pkg-config --cflags --libs ff`.
+configure_file(
+    "${CMAKE_SOURCE_DIR}/cmake/ff.pc.in"
+    "${PROJECT_BINARY_DIR}/ff.pc"
+    @ONLY)
+install(FILES "${PROJECT_BINARY_DIR}/ff.pc"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+        COMPONENT development)
+
 # Documentation: install whatever the doc/ Makefile has produced
 # (Doxygen HTML tree and the timestamped PDF). Both are optional —
 # `make install` does not depend on `make pdf`.
@@ -186,4 +209,22 @@ option(FF_BUILD_TESTS "Build ff test suite." OFF)
 if(FF_BUILD_TESTS)
     enable_testing()
     add_subdirectory(test)
+endif()
+
+# Example programs (currently just the ffsh shell). Off by default
+# because the standalone example tree under examples/ffsh/ is the
+# canonical "embed ff via find_package" demonstration; the in-tree
+# subdir build is a convenience for developers running `cmake -B
+# build` and wanting an ffsh binary in one go.
+option(FF_BUILD_EXAMPLES "Build the example programs under examples/." OFF)
+if(FF_BUILD_EXAMPLES)
+    add_subdirectory(examples/ffsh)
+endif()
+
+# libFuzzer harness. Off by default; enabling requires Clang plus the
+# `-fsanitize=fuzzer,address,undefined` flags (see fuzz/CMakeLists.txt
+# for the full invocation example).
+option(FF_BUILD_FUZZ "Build the libFuzzer harness under fuzz/." OFF)
+if(FF_BUILD_FUZZ)
+    add_subdirectory(fuzz)
 endif()

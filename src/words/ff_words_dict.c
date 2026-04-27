@@ -383,24 +383,282 @@ static size_t see_opcode_len(const ff_int_t *cells, size_t pos, size_t end)
 
 /* Pre-pass: mark each cell index that is the target of a backward
    branch. Caller owns the buffer and frees it. */
-static void see_mark_begins(const ff_heap_t *h, char *is_begin)
+static void see_mark_begins(const ff_int_t *cells, size_t size, char *is_begin)
 {
-    for (size_t pos = 0; pos < h->size; )
+    for (size_t pos = 0; pos < size; )
     {
-        ff_opcode_t op = (ff_opcode_t)h->data[pos];
-        if ((op == FF_OP_BRANCH || op == FF_OP_QBRANCH) && pos + 1 < h->size)
+        ff_opcode_t op = (ff_opcode_t)cells[pos];
+        if ((op == FF_OP_BRANCH || op == FF_OP_QBRANCH) && pos + 1 < size)
         {
-            ff_int_t off = h->data[pos + 1];
+            ff_int_t off = cells[pos + 1];
             if (off < 0)
             {
                 ssize_t target = (ssize_t)(pos + 1) + off;
-                if (target >= 0 && (size_t)target < h->size)
+                if (target >= 0 && (size_t)target < size)
                     is_begin[target] = 1;
             }
         }
-        size_t step = see_opcode_len(h->data, pos, h->size);
+        size_t step = see_opcode_len(cells, pos, size);
         pos += step ? step : 1;
     }
+}
+
+/* Decompile a slice of bytecode into pretty Forth source. Used both
+   for colon-def bodies and DOES>-clause bodies. The frame stack and
+   indent management are local to this function so nested calls (e.g.
+   see-ing a DOES> word from within see itself) don't conflict. */
+static void see_decompile_body(ff_t *ff, const ff_int_t *cells, size_t size,
+                               see_printer_t *pr, int stop_on_exit)
+{
+    if (size == 0)
+        return;
+
+    char *is_begin = (char *)calloc(size, 1);
+    if (!is_begin)
+        return;
+    see_mark_begins(cells, size, is_begin);
+
+    ff_dict_t *d = &ff->dict;
+    see_frame_t stack[SEE_MAX_DEPTH];
+    int top = 0;
+
+    size_t pos = 0;
+    while (pos < size)
+    {
+        while (top > 0
+               && (stack[top - 1].kind == SEE_F_IF
+                       || stack[top - 1].kind == SEE_F_ELSE
+                       || stack[top - 1].kind == SEE_F_DO)
+               && stack[top - 1].end == pos)
+        {
+            see_close(pr,
+                      stack[top - 1].kind == SEE_F_DO ? "loop" : "then");
+            top--;
+        }
+
+        if (is_begin[pos]
+            && (top == 0 || stack[top - 1].kind != SEE_F_BEGIN
+                || stack[top - 1].begin_at != pos))
+        {
+            if (top >= SEE_MAX_DEPTH) goto out;
+            stack[top].kind      = SEE_F_BEGIN;
+            stack[top].begin_at  = pos;
+            stack[top].has_while = 0;
+            stack[top].end       = 0;
+            top++;
+            see_open(pr, "begin");
+        }
+
+        ff_opcode_t op = (ff_opcode_t)cells[pos];
+
+        switch (op)
+        {
+            case FF_OP_LIT:
+                see_text(pr, "%ld", (long)cells[pos + 1]);
+                pos += 2;
+                break;
+
+            case FF_OP_LIT0:    see_text(pr, "0");      pos += 1; break;
+            case FF_OP_LIT1:    see_text(pr, "1");      pos += 1; break;
+            case FF_OP_LITM1:   see_text(pr, "-1");     pos += 1; break;
+
+            case FF_OP_LITADD:
+                see_text(pr, "%ld +", (long)cells[pos + 1]);
+                pos += 2;
+                break;
+
+            case FF_OP_LITSUB:
+                see_text(pr, "%ld -", (long)cells[pos + 1]);
+                pos += 2;
+                break;
+
+            case FF_OP_FLIT:
+            {
+                ff_real_t r;
+                memcpy(&r, &cells[pos + 1], sizeof(r));
+                see_text(pr, "%g", r);
+                pos += 2;
+                break;
+            }
+
+            case FF_OP_STRLIT:
+            {
+                ff_int_t skip = cells[pos + 1];
+                see_text(pr, "\" %s\"", (const char *)&cells[pos + 2]);
+                pos += 1 + (size_t)skip;
+                break;
+            }
+
+            case FF_OP_NEST:
+            case FF_OP_TNEST:
+            {
+                ff_word_t *nw = (ff_word_t *)(intptr_t)cells[pos + 1];
+                see_text(pr, "%s", nw->name);
+                pos += 2;
+                break;
+            }
+
+            case FF_OP_CALL:
+                see_text(pr, "<native>");
+                pos += 2;
+                break;
+
+            case FF_OP_EXIT:
+                if (stop_on_exit)
+                    goto out;
+                if (pos + 1 < size)
+                    see_text(pr, "exit");
+                pos += 1;
+                break;
+
+            case FF_OP_QBRANCH:
+            {
+                ff_int_t off = cells[pos + 1];
+                ssize_t target = (ssize_t)(pos + 1) + off;
+                if (off > 0)
+                {
+                    int is_while = 0;
+                    for (int i = top - 1; i >= 0; --i)
+                    {
+                        if (stack[i].kind != SEE_F_BEGIN)
+                            continue;
+                        if (target >= 2
+                            && (size_t)(target - 2) < size
+                            && cells[target - 2] == FF_OP_BRANCH
+                            && cells[target - 1] < 0)
+                        {
+                            ssize_t bb_tgt = (ssize_t)(target - 1)
+                                                 + cells[target - 1];
+                            if ((size_t)bb_tgt == stack[i].begin_at)
+                            {
+                                is_while = 1;
+                                stack[i].has_while = 1;
+                            }
+                        }
+                        break;
+                    }
+                    if (is_while)
+                        see_continue(pr, "while");
+                    else
+                    {
+                        if (top >= SEE_MAX_DEPTH) goto out;
+                        stack[top].kind = SEE_F_IF;
+                        stack[top].end  = (size_t)target;
+                        top++;
+                        see_open(pr, "if");
+                    }
+                }
+                else
+                {
+                    if (top > 0 && stack[top - 1].kind == SEE_F_BEGIN)
+                    {
+                        see_close(pr, "until");
+                        top--;
+                    }
+                    else
+                        see_text(pr, "<until?>");
+                }
+                pos += 2;
+                break;
+            }
+
+            case FF_OP_BRANCH:
+            {
+                ff_int_t off = cells[pos + 1];
+                ssize_t target = (ssize_t)(pos + 1) + off;
+                if (off > 0)
+                {
+                    if (top > 0 && stack[top - 1].kind == SEE_F_IF
+                        && stack[top - 1].end == pos + 2)
+                    {
+                        stack[top - 1].kind = SEE_F_ELSE;
+                        stack[top - 1].end  = (size_t)target;
+                        see_continue(pr, "else");
+                    }
+                    else
+                        see_text(pr, "<else?>");
+                }
+                else
+                {
+                    if (top > 0 && stack[top - 1].kind == SEE_F_BEGIN)
+                    {
+                        see_close(pr,
+                                  stack[top - 1].has_while
+                                      ? "repeat" : "again");
+                        top--;
+                    }
+                    else
+                        see_text(pr, "<again?>");
+                }
+                pos += 2;
+                break;
+            }
+
+            case FF_OP_XDO:
+            case FF_OP_XQDO:
+            {
+                ff_int_t off = cells[pos + 1];
+                ssize_t end_pos = (ssize_t)(pos + 1) + off;
+                if (top >= SEE_MAX_DEPTH) goto out;
+                stack[top].kind = SEE_F_DO;
+                stack[top].end  = (size_t)end_pos;
+                top++;
+                see_open(pr, op == FF_OP_XDO ? "do" : "?do");
+                pos += 2;
+                break;
+            }
+
+            case FF_OP_XLOOP:
+            case FF_OP_PXLOOP:
+                pos += 2;
+                break;
+
+            case FF_OP_I_ADD:
+                see_text(pr, "i +");
+                pos += 1;
+                break;
+
+            default:
+            {
+                const ff_word_t *ow = ff_see_opcode_to_word(d, op);
+                if (ow)
+                    see_text(pr, "%s", ow->name);
+                else
+                    see_text(pr, "<%d>", op);
+                pos += 1;
+                break;
+            }
+        }
+    }
+
+    while (top > 0
+           && (stack[top - 1].kind == SEE_F_IF
+                   || stack[top - 1].kind == SEE_F_ELSE
+                   || stack[top - 1].kind == SEE_F_DO)
+           && stack[top - 1].end == size)
+    {
+        see_close(pr,
+                  stack[top - 1].kind == SEE_F_DO ? "loop" : "then");
+        top--;
+    }
+
+out:
+    free(is_begin);
+}
+
+/* Find the dictionary word whose heap contains the given pointer.
+   Used by `see` to recover the parent of a DOES>-built word. */
+static const ff_word_t *see_word_for_pointer(const ff_t *ff, const ff_int_t *p)
+{
+    for (size_t i = 0; i < ff->dict.count; ++i)
+    {
+        const ff_word_t *w = ff->dict.words[i];
+        if (!w || w->heap.data == NULL) continue;
+        const ff_int_t *lo = w->heap.data;
+        const ff_int_t *hi = lo + w->heap.capacity;
+        if (p >= lo && p < hi) return w;
+    }
+    return NULL;
 }
 
 void ff_w_see_impl(ff_t *ff)
@@ -462,6 +720,38 @@ void ff_w_see_impl(ff_t *ff)
         return;
     }
 
+    /* DOES>-built word: data lives in heap.data; the runtime body
+       lives at w->does inside the parent (defining) word's heap. */
+    if (w->opcode == FF_OP_DOES_RUNTIME)
+    {
+        const ff_word_t *parent =
+            w->does ? see_word_for_pointer(ff, w->does) : NULL;
+        ff_printf(ff, "\\ %s — built by `does>` clause%s%s%s\n",
+                  w->name,
+                  parent ? " in `" : "",
+                  parent ? parent->name : "",
+                  parent ? "`" : "");
+        ff_printf(ff, "%s  \\ parameter field:", w->name);
+        for (size_t i = 0; i < w->heap.size; ++i)
+            ff_printf(ff, " %ld", (long)w->heap.data[i]);
+        ff_printf(ff, "\n");
+        if (w->does && parent)
+        {
+            see_printer_t pr2 = { .ff = ff, .indent = 0, .at_line_start = 1 };
+            size_t off = (size_t)(w->does - parent->heap.data);
+            size_t remaining = parent->heap.size > off
+                                   ? parent->heap.size - off
+                                   : 0;
+            see_text(&pr2, "does>");
+            see_newline(&pr2, 1);
+            see_decompile_body(ff, w->does, remaining, &pr2,
+                               /*stop_on_exit=*/1);
+            see_newline(&pr2, 0);
+            ff_printf(ff, ";\n");
+        }
+        return;
+    }
+
     if (w->heap.size == 0)
     {
         ff_printf(ff, ": %s ;%s\n", w->name,
@@ -469,266 +759,15 @@ void ff_w_see_impl(ff_t *ff)
         return;
     }
 
-    char *is_begin = (char *)calloc(w->heap.size, 1);
-    if (!is_begin)
-    {
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_APPLICATION,
-                  "see: out of memory.");
-        return;
-    }
-    see_mark_begins(&w->heap, is_begin);
-
+    /* Colon-def: walk the bytecode body. */
     see_printer_t pr = { .ff = ff, .indent = 0, .at_line_start = 1 };
-    ff_dict_t *d = &ff->dict;
-    const ff_int_t *cells = w->heap.data;
-    size_t size = w->heap.size;
-
-    see_frame_t stack[SEE_MAX_DEPTH];
-    int top = 0;
-
     see_text(&pr, ": %s", w->name);
     see_newline(&pr, 1);
-
-    size_t pos = 0;
-    while (pos < size)
-    {
-        /* Close any frames whose end is exactly here. Multiple frames
-           can land on the same position (e.g. two nested THENs that
-           coincide because the inner block had no trailing code). */
-        while (top > 0
-               && (stack[top - 1].kind == SEE_F_IF
-                       || stack[top - 1].kind == SEE_F_ELSE
-                       || stack[top - 1].kind == SEE_F_DO)
-               && stack[top - 1].end == pos)
-        {
-            see_close(&pr,
-                      stack[top - 1].kind == SEE_F_DO ? "loop" : "then");
-            top--;
-        }
-
-        /* A position targeted by a backward branch is a BEGIN start. */
-        if (is_begin[pos]
-            && (top == 0 || stack[top - 1].kind != SEE_F_BEGIN
-                || stack[top - 1].begin_at != pos))
-        {
-            if (top >= SEE_MAX_DEPTH) goto bail;
-            stack[top].kind      = SEE_F_BEGIN;
-            stack[top].begin_at  = pos;
-            stack[top].has_while = 0;
-            stack[top].end       = 0;
-            top++;
-            see_open(&pr, "begin");
-        }
-
-        ff_opcode_t op = (ff_opcode_t)cells[pos];
-
-        switch (op)
-        {
-            case FF_OP_LIT:
-                see_text(&pr, "%ld", (long)cells[pos + 1]);
-                pos += 2;
-                break;
-
-            case FF_OP_LIT0:    see_text(&pr, "0");      pos += 1; break;
-            case FF_OP_LIT1:    see_text(&pr, "1");      pos += 1; break;
-            case FF_OP_LITM1:   see_text(&pr, "-1");     pos += 1; break;
-
-            case FF_OP_LITADD:
-                see_text(&pr, "%ld +", (long)cells[pos + 1]);
-                pos += 2;
-                break;
-
-            case FF_OP_LITSUB:
-                see_text(&pr, "%ld -", (long)cells[pos + 1]);
-                pos += 2;
-                break;
-
-            case FF_OP_FLIT:
-            {
-                ff_real_t r;
-                memcpy(&r, &cells[pos + 1], sizeof(r));
-                see_text(&pr, "%g", r);
-                pos += 2;
-                break;
-            }
-
-            case FF_OP_STRLIT:
-            {
-                ff_int_t skip = cells[pos + 1];
-                see_text(&pr, "\" %s\"", (const char *)&cells[pos + 2]);
-                pos += 1 + (size_t)skip;
-                break;
-            }
-
-            case FF_OP_NEST:
-            case FF_OP_TNEST:
-            {
-                ff_word_t *nw = (ff_word_t *)(intptr_t)cells[pos + 1];
-                see_text(&pr, "%s", nw->name);
-                pos += 2;
-                break;
-            }
-
-            case FF_OP_CALL:
-                see_text(&pr, "<native>");
-                pos += 2;
-                break;
-
-            case FF_OP_EXIT:
-                /* Trailing exit becomes the final `;`; mid-body exits
-                   stay as the explicit `exit` word. */
-                if (pos + 1 < size)
-                    see_text(&pr, "exit");
-                pos += 1;
-                break;
-
-            case FF_OP_QBRANCH:
-            {
-                ff_int_t off = cells[pos + 1];
-                ssize_t target = (ssize_t)(pos + 1) + off;
-                if (off > 0)
-                {
-                    /* Forward QBRANCH. WHILE if we're in a BEGIN whose
-                       closing branch is at target-2; otherwise IF. */
-                    int is_while = 0;
-                    for (int i = top - 1; i >= 0; --i)
-                    {
-                        if (stack[i].kind != SEE_F_BEGIN)
-                            continue;
-                        if (target >= 2
-                            && (size_t)(target - 2) < size
-                            && cells[target - 2] == FF_OP_BRANCH
-                            && cells[target - 1] < 0)
-                        {
-                            ssize_t bb_tgt = (ssize_t)(target - 1)
-                                                 + cells[target - 1];
-                            if ((size_t)bb_tgt == stack[i].begin_at)
-                            {
-                                is_while = 1;
-                                stack[i].has_while = 1;
-                            }
-                        }
-                        break;
-                    }
-                    if (is_while)
-                        see_continue(&pr, "while");
-                    else
-                    {
-                        if (top >= SEE_MAX_DEPTH) goto bail;
-                        stack[top].kind = SEE_F_IF;
-                        stack[top].end  = (size_t)target;
-                        top++;
-                        see_open(&pr, "if");
-                    }
-                }
-                else
-                {
-                    /* Backward QBRANCH = UNTIL. */
-                    if (top > 0 && stack[top - 1].kind == SEE_F_BEGIN)
-                    {
-                        see_close(&pr, "until");
-                        top--;
-                    }
-                    else
-                    {
-                        see_text(&pr, "<until?>");
-                    }
-                }
-                pos += 2;
-                break;
-            }
-
-            case FF_OP_BRANCH:
-            {
-                ff_int_t off = cells[pos + 1];
-                ssize_t target = (ssize_t)(pos + 1) + off;
-                if (off > 0)
-                {
-                    /* Forward BRANCH = ELSE (closes IF, opens ELSE). */
-                    if (top > 0 && stack[top - 1].kind == SEE_F_IF
-                        && stack[top - 1].end == pos + 2)
-                    {
-                        stack[top - 1].kind = SEE_F_ELSE;
-                        stack[top - 1].end  = (size_t)target;
-                        see_continue(&pr, "else");
-                    }
-                    else
-                    {
-                        see_text(&pr, "<else?>");
-                    }
-                }
-                else
-                {
-                    /* Backward BRANCH = AGAIN or REPEAT. */
-                    if (top > 0 && stack[top - 1].kind == SEE_F_BEGIN)
-                    {
-                        see_close(&pr,
-                                  stack[top - 1].has_while
-                                      ? "repeat" : "again");
-                        top--;
-                    }
-                    else
-                    {
-                        see_text(&pr, "<again?>");
-                    }
-                }
-                pos += 2;
-                break;
-            }
-
-            case FF_OP_XDO:
-            case FF_OP_XQDO:
-            {
-                ff_int_t off = cells[pos + 1];
-                ssize_t end_pos = (ssize_t)(pos + 1) + off;
-                if (top >= SEE_MAX_DEPTH) goto bail;
-                stack[top].kind = SEE_F_DO;
-                stack[top].end  = (size_t)end_pos;
-                top++;
-                see_open(&pr, op == FF_OP_XDO ? "do" : "?do");
-                pos += 2;
-                break;
-            }
-
-            case FF_OP_XLOOP:
-            case FF_OP_PXLOOP:
-                /* No emit: the surrounding DO frame closes when pos
-                   reaches the end the XDO offset pointed at, which is
-                   exactly past the back-branch offset cell. */
-                pos += 2;
-                break;
-
-            default:
-            {
-                const ff_word_t *ow = ff_see_opcode_to_word(d, op);
-                if (ow)
-                    see_text(&pr, "%s", ow->name);
-                else
-                    see_text(&pr, "<%d>", op);
-                pos += 1;
-                break;
-            }
-        }
-    }
-
-    /* Close any frames that end at exactly heap.size. */
-    while (top > 0
-           && (stack[top - 1].kind == SEE_F_IF
-                   || stack[top - 1].kind == SEE_F_ELSE
-                   || stack[top - 1].kind == SEE_F_DO)
-           && stack[top - 1].end == size)
-    {
-        see_close(&pr,
-                  stack[top - 1].kind == SEE_F_DO ? "loop" : "then");
-        top--;
-    }
-
-bail:
+    see_decompile_body(ff, w->heap.data, w->heap.size, &pr,
+                       /*stop_on_exit=*/0);
     see_newline(&pr, 0);
-    see_text(&pr, ";%s",
-             (w->flags & FF_WORD_IMMEDIATE) ? " immediate" : "");
-    ff_printf(ff, "\n");
-    free(is_begin);
+    ff_printf(ff, ";%s\n",
+              (w->flags & FF_WORD_IMMEDIATE) ? " immediate" : "");
 }
 
 

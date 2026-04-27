@@ -211,6 +211,23 @@ else()
         -Wno-unused-result \
         -Wno-misleading-indentation")
 
+    # GCC-only false positives we have to tolerate:
+    # - -Wmaybe-uninitialized fires inside vendored md4c.c (the
+    #   warning is a known GCC limitation, not a real bug).
+    # - -Warray-bounds trips through the macro stack inside ff_exec
+    #   (e.g. _FF_SL expanding through stack-cell access at high
+    #   compile-time depth) on GCC 13+. Clang gets it right.
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+        set(FF_C_FLAGS "${FF_C_FLAGS} \
+            -Wno-error=maybe-uninitialized \
+            -Wno-error=array-bounds")
+    endif()
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        set(FF_CXX_FLAGS "${FF_CXX_FLAGS} \
+            -Wno-error=maybe-uninitialized \
+            -Wno-error=array-bounds")
+    endif()
+
     if(NOT FF_OS_WASM)
         add_compile_options(-fno-exceptions)
     endif()

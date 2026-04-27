@@ -8,6 +8,50 @@ designed as a library: the caller supplies I/O callbacks through
 implementation gives particular attention to interpreter throughput
 while keeping the source small and comprehensible.
 
+### Big picture
+
+```
+                +----------------------------------------------+
+                |                ff_platform_t                 |
+                |   .vprintf  .vtracef   .context              |
+                +----------------------+-----------------------+
+                                       |
+                          (caller-supplied callbacks)
+                                       v
+  +--------------------------------------------------------------+
+  |                          struct ff                           |
+  |                                                              |
+  |  +-------------+   +----------------+   +---------------+    |
+  |  |  tokenizer  |-->|    ff_eval     |-->|    ff_exec    |    |
+  |  | (state mch) |   | (outer interp) |   | (inner interp |    |
+  |  +-------------+   +-------+--------+   |  switch loop) |    |
+  |                            |            +-------+-------+    |
+  |                            v                    |            |
+  |                     +------------+              |            |
+  |                     |  ff_dict   |<-------------+            |
+  |                     | words[]  --|--> ff_word --+            |
+  |                     | buckets[]  |   .opcode                 |
+  |                     | static_pool|   .heap.data --> [...]    |
+  |                     +------------+   .does                   |
+  |                                                              |
+  |  +------------+   +--------------+   +------------------+    |
+  |  | stack[512] |   | r_stack[512] |   | bt_stack[256]    |    |
+  |  |  data top  |   |   data top   |   |  word-ptr ring   |    |
+  |  +------------+   +--------------+   +------------------+    |
+  |                                                              |
+  |  +-----------------------------------------------------+     |
+  |  |       pad ring  [128 x 256 bytes]   for S" etc.     |     |
+  |  +-----------------------------------------------------+     |
+  +--------------------------------------------------------------+
+```
+
+Arrows are direct pointer references; control flows top-to-bottom
+through the boxed pipeline. Every box that carries a backing array
+(`stack`, `r_stack`, `bt_stack`, `pad`, each `ff_word`'s `heap.data`)
+is a separate allocation — there is no single "memory" region in
+*ff*. Sections below take each box in turn.
+
+
 ### Lineage
 
 *ff* is heavily inspired by John Walker's
@@ -463,9 +507,9 @@ entries (the canonical list is `FF_OP_*` in
 | Integer math / bitwise / compare | `FF_OP_ADD`/`SUB`/`MUL`/`DIV`/`MOD`/`DIVMOD`, `FF_OP_MIN`/`MAX`/`NEGATE`/`ABS`, `FF_OP_AND`/`OR`/`XOR`/`NOT`/`SHIFT`, `FF_OP_EQ`/`NEQ`/`LT`/`GT`/`LE`/`GE`, `FF_OP_ZERO_EQ`/`ZERO_NEQ`/`ZERO_LT`/`ZERO_GT`, `FF_OP_INC`/`DEC`/`INC2`/`DEC2`/`MUL2`/`DIV2`, `FF_OP_SET_BASE` |
 | Floating-point | `FF_OP_FADD`/`FSUB`/`FMUL`/`FDIV`, `FF_OP_FNEGATE`/`FABS`/`FSQRT`, `FF_OP_FSIN`/`FCOS`/`FTAN`/`FASIN`/`FACOS`/`FATAN`/`FATAN2`, `FF_OP_FEXP`/`FLOG`/`FPOW`, `FF_OP_F_DOT`/`FLOAT`/`FIX`/`PI`/`E_CONST`, `FF_OP_FEQ`/`FNEQ`/`FLT`/`FGT`/`FLE`/`FGE` |
 | Console I/O | `FF_OP_DOT`, `FF_OP_QUESTION`, `FF_OP_CR`, `FF_OP_EMIT`, `FF_OP_TYPE`, `FF_OP_DOT_S`, `FF_OP_DOT_PAREN`, `FF_OP_DOTQUOTE` |
-| Counted loops | `FF_OP_XDO`, `FF_OP_XQDO`, `FF_OP_XLOOP`, `FF_OP_PXLOOP`, `FF_OP_LOOP_I`, `FF_OP_LOOP_J`, `FF_OP_LEAVE` |
+| Counted loops | `FF_OP_XDO`, `FF_OP_XQDO`, `FF_OP_XLOOP`, `FF_OP_PXLOOP`, `FF_OP_LOOP_I`, `FF_OP_LOOP_J`, `FF_OP_LEAVE`, `FF_OP_I_ADD` (peephole `i +`) |
 | Compiler / immediate | `FF_OP_COLON`, `FF_OP_SEMICOLON`, `FF_OP_IMMEDIATE`, `FF_OP_LBRACKET`, `FF_OP_RBRACKET`, `FF_OP_TICK`, `FF_OP_BRACKET_TICK`, `FF_OP_EXECUTE`, `FF_OP_STATE`, `FF_OP_BRACKET_COMPILE`, `FF_OP_LITERAL`, `FF_OP_COMPILE`, `FF_OP_DOES` |
-| Control flow | `FF_OP_QDUP`, `FF_OP_IF`/`ELSE`/`THEN`, `FF_OP_BEGIN`/`UNTIL`/`AGAIN`, `FF_OP_WHILE`/`REPEAT`, `FF_OP_DO`/`QDO`/`LOOP`/`PLOOP`, `FF_OP_QUIT`, `FF_OP_ABORT`, `FF_OP_ABORTQ` |
+| Control flow | `FF_OP_QDUP`, `FF_OP_IF`/`ELSE`/`THEN`, `FF_OP_BEGIN`/`UNTIL`/`AGAIN`, `FF_OP_WHILE`/`REPEAT`, `FF_OP_DO`/`QDO`/`LOOP`/`PLOOP`, `FF_OP_QUIT`, `FF_OP_ABORT`, `FF_OP_ABORTQ`, `FF_OP_THROW`, `FF_OP_CATCH` |
 | Definitions | `FF_OP_CREATE`, `FF_OP_FORGET`, `FF_OP_VARIABLE`, `FF_OP_CONSTANT`, `FF_OP_ARRAY`, `FF_OP_DEFER`, `FF_OP_IS` |
 | Heap | `FF_OP_HERE`, `FF_OP_STORE`/`FETCH`/`PLUS_STORE`, `FF_OP_ALLOT`/`COMMA`, `FF_OP_C_STORE`/`C_FETCH`/`C_COMMA`/`C_ALIGN` |
 | Strings | `FF_OP_STRING`, `FF_OP_S_STORE`, `FF_OP_S_CAT`, `FF_OP_STRLEN`, `FF_OP_STRCMP` |
