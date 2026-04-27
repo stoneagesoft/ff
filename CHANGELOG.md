@@ -9,6 +9,14 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Watchdog API to bound execution time of untrusted Forth code.
+  Two complementary mechanisms sharing one `FF_ERR_ABORTED` unwind:
+  - Polling callback (`ff_platform_t::watchdog` +
+    `watchdog_interval`) — invoked at every back-branch and word
+    call; deterministic, no signals or threads required.
+  - Async kill flag (`ff_request_abort(ff)`) — safe from a signal
+    handler or another thread; picked up at the same dispatch
+    sites as the polling callback.
 - `defer` / `is` (ANS Forth deferred-word facility).
 - `FF_SAFE_MEM` compile-time flag turning every address-consuming
   primitive (`@`, `!`, `+!`, `c@`, `c!`, `s!`, `s+`, `strlen`,
@@ -75,8 +83,3 @@ the project follows [Semantic Versioning](https://semver.org/).
     `FF_CHECK_ADDR` / `FF_CHECK_XT` validators.
   - `50-benchmarks.md` — comparison against the three gforth
     engines.
-
-
-## [1.0.0] — 2024-05-28
-
-Initial public release.

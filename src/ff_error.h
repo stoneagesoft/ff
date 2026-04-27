@@ -60,6 +60,7 @@ typedef enum ff_error_code
     FF_ERR_STACK_UNDER,     /**< Data stack underflow. */
     FF_ERR_UNDEFINED,       /**< Word name not present in dictionary. */
     FF_ERR_UNSUPPORTED,     /**< Operation not supported on this build/platform. */
+    FF_ERR_ABORTED,         /**< Watchdog or host requested termination via ff_request_abort(). */
 
     FF_ERR_APPLICATION,     /**< Application-defined error category. */
 } ff_error_code_t;

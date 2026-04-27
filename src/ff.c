@@ -95,6 +95,16 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
 
     ff->state &= ~(FF_STATE_BROKEN | FF_STATE_ERROR);
 
+    /* Watchdog state is per-evaluation: a stale abort-request from a
+       previous run is dropped, the opcode counter starts at zero,
+       and the polling watchdog will fire after `watchdog_interval`
+       opcodes (default 65536). */
+    ff->abort_requested  = 0;
+    ff->opcodes_run      = 0;
+    ff->next_watchdog_at = ff->platform.watchdog_interval
+                               ? ff->platform.watchdog_interval
+                               : 65536;
+
     int pos = 0;
     ff_dict_t *d = &ff->dict;
     ff_tokenizer_t *t = &ff->tokenizer;
@@ -486,6 +496,33 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     #define _FF_CHECK_XT(w)             ((void)0)
 #endif
 
+    /* Watchdog: bump the opcode counter, check for an async abort
+       request, and (every N opcodes) call the host's polling
+       watchdog. Wired into the back-branch and word-call sites so
+       the cost is paid at most once per loop iteration / nested
+       call, not per opcode. */
+    #define _FF_WATCHDOG_TICK() \
+        do { \
+            ff->opcodes_run++; \
+            if (ff->abort_requested) \
+                goto _watchdog_abort; \
+            if (ff->platform.watchdog \
+                    && ff->opcodes_run >= ff->next_watchdog_at) \
+            { \
+                _FF_SYNC(); \
+                ff_watchdog_action_t _wd = \
+                    ff->platform.watchdog(ff->platform.context, \
+                                          ff->opcodes_run); \
+                _FF_RESTORE(); \
+                uint32_t _step = ff->platform.watchdog_interval \
+                                     ? ff->platform.watchdog_interval \
+                                     : 65536; \
+                ff->next_watchdog_at = ff->opcodes_run + _step; \
+                if (_wd != FF_WD_CONTINUE) \
+                    goto _watchdog_abort; \
+            } \
+        } while (0)
+
     #define _FF_NEXT()    break
 
     for (;;)
@@ -536,6 +573,19 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
 
 
     /* --- Exit points --- */
+
+_watchdog_abort:
+    /* Watchdog or async ff_request_abort fired. Surface it as a
+       FF_SEV_ERROR | FF_ERR_ABORTED, clear the flag (so the next
+       ff_eval call starts fresh), and join the broken-state cleanup
+       path. */
+    _FF_SYNC();
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_ABORTED,
+              "Aborted after %llu opcodes.",
+              (unsigned long long)ff->opcodes_run);
+    ff->abort_requested = 0;
+    ff->state |= FF_STATE_BROKEN;
+    goto broken;
 
 broken:
     ff->ip = ip;
@@ -685,6 +735,18 @@ void ff_abort(ff_t *ff)
     ff->state = 0;
     ff->tokenizer.state = 0;
     ff->cur_word = NULL;
+}
+
+/** @copydoc ff_request_abort */
+void ff_request_abort(ff_t *ff)
+{
+    /* Atomic store of a sig_atomic_t — safe from a signal handler
+       and (with sig_atomic_t's "lock-free for at least 1 byte"
+       guarantee on every C17 platform) safe from another thread on
+       the lock-free architectures we ship on. The dispatch loop
+       picks it up at the next back-branch / word call. */
+    if (ff)
+        ff->abort_requested = 1;
 }
 
 /** @copydoc ff_banner */

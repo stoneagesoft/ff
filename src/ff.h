@@ -116,6 +116,29 @@ ff_error_t ff_load(ff_t *ff, const char *path);
 void ff_abort(ff_t *ff);
 
 /**
+ * Asynchronously request the engine to stop running.
+ *
+ * Sets a `sig_atomic_t` flag that the inner interpreter polls at
+ * every back-branch and word call. Once detected, the running
+ * `ff_eval` / `ff_exec` unwinds and returns FF_ERR_ABORTED. Safe to
+ * call from a signal handler or another thread — it does no I/O,
+ * no allocation, and no engine state mutation beyond the flag store.
+ *
+ * Pairs with the polling watchdog callback in @ref ff_platform_t,
+ * which is what most embeddings should reach for first; this
+ * function is the escape hatch when the host's "stop now" signal
+ * arrives via a path the polling callback can't observe (alarm
+ * signal, GUI thread, …).
+ *
+ * The flag is consumed (cleared) on the next ff_eval entry, so a
+ * call between evaluations is silently ignored — abort requests
+ * only apply to in-flight execution.
+ *
+ * @param ff Engine instance.
+ */
+void ff_request_abort(ff_t *ff);
+
+/**
  * @return The startup banner string (ASCII art logo). The pointer is
  *         owned by the engine and remains valid for the engine's
  *         lifetime.

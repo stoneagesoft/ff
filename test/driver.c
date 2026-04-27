@@ -28,6 +28,16 @@ typedef struct test_ctx
 } test_ctx_t;
 
 
+/* 10 M opcodes — well above any normal test, low enough to catch an
+   infinite-loop bug in well under a second of wall-clock time. */
+#define FF_TEST_OPCODE_BUDGET  (10ULL * 1000ULL * 1000ULL)
+
+static ff_watchdog_action_t test_watchdog(void *ctx, uint64_t opcodes_run)
+{
+    (void)ctx;
+    return opcodes_run >= FF_TEST_OPCODE_BUDGET ? FF_WD_ABORT : FF_WD_CONTINUE;
+}
+
 static int capture_vprintf(void *ctx, const char *fmt, va_list args)
 {
     test_ctx_t *c = (test_ctx_t *)ctx;
@@ -110,11 +120,16 @@ int main(int argc, char **argv)
         .capacity = BUF_SIZE
     };
 
+    /* Generous watchdog so a runaway test (or a 011_watchdog-style
+       infinite loop test) can't hang ctest. 10 million opcodes is
+       comfortably above any well-behaved test's footprint. */
     ff_platform_t p =
     {
-        .context = &ctx,
-        .vprintf = capture_vprintf,
-        .vtracef = NULL
+        .context           = &ctx,
+        .vprintf           = capture_vprintf,
+        .vtracef           = NULL,
+        .watchdog          = test_watchdog,
+        .watchdog_interval = 65536,
     };
 
     ff_t *ff = ff_new(&p);

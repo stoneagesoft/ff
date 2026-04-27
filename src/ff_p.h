@@ -35,6 +35,8 @@
 #include <ff_word_flags_p.h>
 #include <ff_word_p.h>
 
+#include <signal.h>
+#include <stdint.h>
 #include <string.h>
 
 
@@ -75,6 +77,16 @@ struct ff
     ff_word_t *cur_word;                /**< Word currently being executed (for diagnostics). */
 
     ff_int_t throw_code;                /**< Exception code stashed by THROW; read by the matching CATCH. */
+
+    /* Watchdog state. `abort_requested` is set asynchronously (by
+       ff_request_abort, possibly from a signal handler or another
+       thread) and polled by the inner interpreter at every
+       back-branch and word call. `opcodes_run` is the running
+       opcode count consulted by the polling watchdog callback;
+       reset on each ff_exec entry. */
+    volatile sig_atomic_t abort_requested;
+    uint64_t              opcodes_run;
+    uint64_t              next_watchdog_at;
 };
 
 
