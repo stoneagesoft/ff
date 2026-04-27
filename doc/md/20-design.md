@@ -501,13 +501,13 @@ entries (the canonical list is `FF_OP_*` in
 |---|---|
 | Structural | `FF_OP_CALL`, `FF_OP_NEST`, `FF_OP_TNEST`, `FF_OP_EXIT`, `FF_OP_BRANCH`, `FF_OP_QBRANCH` |
 | Literals | `FF_OP_LIT`, `FF_OP_LIT0`, `FF_OP_LIT1`, `FF_OP_LITM1`, `FF_OP_LITADD`, `FF_OP_LITSUB`, `FF_OP_FLIT`, `FF_OP_STRLIT` |
-| Defining-word runtimes | `FF_OP_CREATE_RUNTIME`, `FF_OP_DOES_RUNTIME`, `FF_OP_CONSTANT_RUNTIME`, `FF_OP_ARRAY_RUNTIME`, `FF_OP_DEFER_RUNTIME` |
-| Stack manipulation | `FF_OP_DUP`, `FF_OP_DROP`, `FF_OP_SWAP`, `FF_OP_OVER`, `FF_OP_ROT`, `FF_OP_NROT`, `FF_OP_PICK`, `FF_OP_ROLL`, `FF_OP_DEPTH`, `FF_OP_CLEAR`, `FF_OP_TO_R`, `FF_OP_FROM_R`, `FF_OP_FETCH_R` |
+| Defining-word runtimes | `FF_OP_CREATE_RUNTIME`, `FF_OP_DOES_RUNTIME`, `FF_OP_CONSTANT_RUNTIME`, `FF_OP_ARRAY_RUNTIME`, `FF_OP_DEFER_RUNTIME`, `FF_OP_VAR_FETCH`/`VAR_STORE`/`VAR_PLUS_STORE` (peephole) |
+| Stack manipulation | `FF_OP_DUP`, `FF_OP_DROP`, `FF_OP_SWAP`, `FF_OP_OVER`, `FF_OP_NIP`, `FF_OP_TUCK`, `FF_OP_ROT`, `FF_OP_NROT`, `FF_OP_PICK`, `FF_OP_ROLL`, `FF_OP_DEPTH`, `FF_OP_CLEAR`, `FF_OP_TO_R`, `FF_OP_FROM_R`, `FF_OP_FETCH_R` |
 | Two-cell stack ops | `FF_OP_2DUP`, `FF_OP_2DROP`, `FF_OP_2SWAP`, `FF_OP_2OVER` |
 | Integer math / bitwise / compare | `FF_OP_ADD`/`SUB`/`MUL`/`DIV`/`MOD`/`DIVMOD`, `FF_OP_MIN`/`MAX`/`NEGATE`/`ABS`, `FF_OP_AND`/`OR`/`XOR`/`NOT`/`SHIFT`, `FF_OP_EQ`/`NEQ`/`LT`/`GT`/`LE`/`GE`, `FF_OP_ZERO_EQ`/`ZERO_NEQ`/`ZERO_LT`/`ZERO_GT`, `FF_OP_INC`/`DEC`/`INC2`/`DEC2`/`MUL2`/`DIV2`, `FF_OP_SET_BASE` |
 | Floating-point | `FF_OP_FADD`/`FSUB`/`FMUL`/`FDIV`, `FF_OP_FNEGATE`/`FABS`/`FSQRT`, `FF_OP_FSIN`/`FCOS`/`FTAN`/`FASIN`/`FACOS`/`FATAN`/`FATAN2`, `FF_OP_FEXP`/`FLOG`/`FPOW`, `FF_OP_F_DOT`/`FLOAT`/`FIX`/`PI`/`E_CONST`, `FF_OP_FEQ`/`FNEQ`/`FLT`/`FGT`/`FLE`/`FGE` |
 | Console I/O | `FF_OP_DOT`, `FF_OP_QUESTION`, `FF_OP_CR`, `FF_OP_EMIT`, `FF_OP_TYPE`, `FF_OP_DOT_S`, `FF_OP_DOT_PAREN`, `FF_OP_DOTQUOTE` |
-| Counted loops | `FF_OP_XDO`, `FF_OP_XQDO`, `FF_OP_XLOOP`, `FF_OP_PXLOOP`, `FF_OP_LOOP_I`, `FF_OP_LOOP_J`, `FF_OP_LEAVE`, `FF_OP_I_ADD` (peephole `i +`) |
+| Counted loops | `FF_OP_XDO`, `FF_OP_XQDO`, `FF_OP_XLOOP`, `FF_OP_PXLOOP`, `FF_OP_LOOP_I`, `FF_OP_LOOP_J`, `FF_OP_LEAVE`, `FF_OP_I_ADD` (peephole `i +`), `FF_OP_I_ADD_LOOP` (peephole `i + loop`) |
 | Compiler / immediate | `FF_OP_COLON`, `FF_OP_SEMICOLON`, `FF_OP_IMMEDIATE`, `FF_OP_LBRACKET`, `FF_OP_RBRACKET`, `FF_OP_TICK`, `FF_OP_BRACKET_TICK`, `FF_OP_EXECUTE`, `FF_OP_STATE`, `FF_OP_BRACKET_COMPILE`, `FF_OP_LITERAL`, `FF_OP_COMPILE`, `FF_OP_DOES` |
 | Control flow | `FF_OP_QDUP`, `FF_OP_IF`/`ELSE`/`THEN`, `FF_OP_BEGIN`/`UNTIL`/`AGAIN`, `FF_OP_WHILE`/`REPEAT`, `FF_OP_DO`/`QDO`/`LOOP`/`PLOOP`, `FF_OP_QUIT`, `FF_OP_ABORT`, `FF_OP_ABORTQ`, `FF_OP_THROW`, `FF_OP_CATCH` |
 | Definitions | `FF_OP_CREATE`, `FF_OP_FORGET`, `FF_OP_VARIABLE`, `FF_OP_CONSTANT`, `FF_OP_ARRAY`, `FF_OP_DEFER`, `FF_OP_IS` |
@@ -794,6 +794,48 @@ case FF_OP_LITSUB: tos -= -*ip++;      break;   /* LIT n  SUB */
 ~~~
 
 The `;` compiler emits these forms whenever the source matches.
+
+
+### Two-op peephole superinstructions
+
+The compiler tracks the last opcode it emitted in `heap.last_op` and
+folds the following common two-op patterns into single dispatches:
+
+| Source pair | Folded opcode | Notes |
+|---|---|---|
+| `0 +` / `0 -` | (eliminated) | identity, drops the `LIT0` |
+| `0 =` | `FF_OP_ZERO_EQ` | branchless flag |
+| `0 <>` | `FF_OP_ZERO_NEQ` | |
+| `0 <` / `0 >` | `FF_OP_ZERO_LT` / `ZERO_GT` | |
+| `1 +` / `1 -` | `FF_OP_INC` / `DEC` | |
+| `2 +` / `2 -` / `2 *` / `2 /` | `FF_OP_INC2` / `DEC2` / `MUL2` / `DIV2` | |
+| `LIT n  +` / `LIT n  -` | `FF_OP_LITADD` / `LITSUB` | one-cell save |
+| `i +` | `FF_OP_I_ADD` | adds loop index in place |
+| `i + loop` | `FF_OP_I_ADD_LOOP` | fused index-add and back-branch |
+| `swap drop` | `FF_OP_NIP` | also a standalone primitive |
+| `swap over` | `FF_OP_TUCK` | also a standalone primitive |
+| `over +` | `FF_OP_OVER_PLUS` | base+offset idiom |
+| `r@ +` | `FF_OP_R_PLUS` | index-relative offset |
+| `<var> @` | `FF_OP_VAR_FETCH` | one-cell read direct from heap.data[0] |
+| `<var> !` | `FF_OP_VAR_STORE` | one-cell store direct to heap.data[0] |
+| `<var> +!` | `FF_OP_VAR_PLUS_STORE` | one-cell add-store |
+
+The `<var> @`/`!`/`+!` group is particularly load-bearing: a naive
+`v @` was three dispatches (`CREATE_RUNTIME` → push address → `FETCH`
+→ dereference); the fused `VAR_FETCH` is one dispatch and one read.
+The `[var-rmw](doc/md/50-benchmarks.md)` benchmark dropped from 680 ms
+to 250 ms (2.7× speed-up, beating gforth-itc) on this fix alone.
+
+#### Inhibiting peephole across branches
+
+Forth's compile-time control words (`THEN`, `BEGIN`, `ELSE`, `REPEAT`,
+`LOOP`, `+LOOP`) all create or patch branch targets. Folding across
+those targets would silently mis-execute conditional code, because
+the merged opcode would be reachable from a branch that previously
+landed mid-pair. After every such word the engine calls
+`ff_heap_inhibit_peephole(h)`, which clears `last_op` and breaks
+the chain. Custom immediate words that emit branch targets must do
+the same.
 
 
 ### BROKEN check placement
@@ -1093,6 +1135,21 @@ Define `FF_32BIT` at compile time to select 32-bit cell and single-
 precision float modes for constrained targets. Define
 `FF_SAFE_MEM=1` to enable the address-validation pass — see the next
 section.
+
+### Build-time tuning options
+
+Beyond the buffer sizes above, three CMake options affect how the
+engine is compiled:
+
+| Option | Effect |
+|---|---|
+| `FF_R_TRUSTED` | Drops the `_FF_RSL` checks inside opcodes the compiler emits in matched pairs (`XLOOP`, `XDO`, `NEST`, `EXIT`, `LOOP_I`, `LEAVE`). The check guards an engine-bug-only failure; the embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. |
+| `FF_LTO` | Enables link-time optimisation (`-flto` / `/GL` via CMake's `INTERPROCEDURAL_OPTIMIZATION`). Lets the compiler inline across translation-unit boundaries — particularly `ff_exec` ↔ `ff_dict_lookup` ↔ `ff_word_native_fn`. Typically 2-5 %. |
+| `FF_PGO=GENERATE` / `USE` | Profile-guided optimisation. Two-pass build: first an instrumented build that writes `*.profraw` when run against a representative workload, then `llvm-profdata merge`, then a second build with `FF_PGO=USE -DFF_PGO_DATA=path/to/merged.profdata`. Typical gain on dispatch-bound code: 5-15 %. |
+
+Stacking `FF_R_TRUSTED=ON FF_LTO=ON` plus a PGO pass usually buys
+another 10-20 % on top of the algorithmic peepholes documented in
+the Performance section.
 
 
 ## Memory safety

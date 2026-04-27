@@ -39,6 +39,12 @@ const ff_word_def_t FF_STACK_WORDS[] =
     _FF_W("over", FF_OP_OVER,
       "( n1 n2 -- n1 n2 n1 )  Duplicate second item\n"
       "The second item on the stack is copied to the top."),
+    _FF_W("nip", FF_OP_NIP,
+      "( n1 n2 -- n2 )  Drop second item\n"
+      "Discards the second item from the top of the stack."),
+    _FF_W("tuck", FF_OP_TUCK,
+      "( n1 n2 -- n2 n1 n2 )  Tuck top under second\n"
+      "Copies the top item below the second item."),
     _FF_W("pick", FF_OP_PICK,
       "( ... n2 n1 n0 index -- ... n0 nindex )  Pick item from stack\n"
       "The *index*-th stack item is copied to the top of the stack.\n"

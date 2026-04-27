@@ -61,6 +61,9 @@ typedef enum ff_opcode
     FF_OP_CONSTANT_RUNTIME,     /**< + word_ptr — push word's heap.data[0]. */
     FF_OP_ARRAY_RUNTIME,        /**< + word_ptr — index into word's heap (TOS = base + idx). */
     FF_OP_DEFER_RUNTIME,        /**< + word_ptr — call through xt stored at heap.data[0] (ANS DEFER). */
+    FF_OP_VAR_FETCH,            /**< + word_ptr — push word's heap.data[0] (peephole `v @`). */
+    FF_OP_VAR_STORE,            /**< + word_ptr — pop, store at word's heap.data[0] (peephole `v !`). */
+    FF_OP_VAR_PLUS_STORE,       /**< + word_ptr — pop, add to word's heap.data[0] (peephole `v +!`). */
 
     /* --- Stack manipulation --- */
 
@@ -130,6 +133,11 @@ typedef enum ff_opcode
     FF_OP_LOOP_J,               /**< Push outer loop index (`j`). */
     FF_OP_LEAVE,                /**< Exit innermost counted loop early. */
     FF_OP_I_ADD,                /**< Superinstruction: i + (add the loop index to TOS). */
+    FF_OP_I_ADD_LOOP,           /**< Superinstruction: i + loop (fused index+ and loop back-edge). */
+    FF_OP_NIP,                  /**< ( a b -- b ) — drop the second-from-top item. */
+    FF_OP_TUCK,                 /**< ( a b -- b a b ) — copy TOS under NOS. */
+    FF_OP_OVER_PLUS,            /**< Superinstruction: over + (TOS += NOS). */
+    FF_OP_R_PLUS,               /**< Superinstruction: r@ + (add return-stack TOS to data TOS). */
 
     /* --- Compile-time / immediate --- */
 

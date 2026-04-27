@@ -53,3 +53,25 @@
 #if !defined(FF_SAFE_MEM)
 #  define FF_SAFE_MEM 0
 #endif
+
+/**
+ * @def FF_R_TRUSTED
+ * @brief Compile-time switch: drop redundant return-stack underflow
+ *        checks inside opcodes that the compiler emits in matched
+ *        pairs.
+ *
+ * `XLOOP`/`PXLOOP`/`LOOP_I`/`LOOP_J`/`R_FETCH`/`FROM_R`/`EXIT` and
+ * friends all run *only* in bytecode the engine itself emitted, in
+ * positions where a preceding `XDO`/`>R` provably leaves the right
+ * number of items on the return stack. Their @c _FF_RSL(n) check
+ * therefore guards an impossible failure — engine bug, not a
+ * user-code bug. When this flag is on, those bytecode-internal
+ * checks compile away, saving ~5 % on loop-heavy code without
+ * weakening any embedder-facing macro.
+ *
+ * Off by default. The `FF_RSL` / `FF_RSO` macros that custom native
+ * words call (via `<ff_p.h>`) are not affected — they still run.
+ */
+#if !defined(FF_R_TRUSTED)
+#  define FF_R_TRUSTED 0
+#endif

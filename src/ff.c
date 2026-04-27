@@ -417,7 +417,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
        returns bool and must restore state before returning. */
     #define _FF_SL(n) \
         do { \
-            if ((int)S->top < (int)(n)) \
+            if (ff_unlikely((int)S->top < (int)(n))) \
             { \
                 _FF_SYNC(); \
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER, \
@@ -427,7 +427,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
         } while (0)
     #define _FF_SO(n) \
         do { \
-            if ((int)S->top + (int)(n) > FF_STACK_SIZE) \
+            if (ff_unlikely((int)S->top + (int)(n) > FF_STACK_SIZE)) \
             { \
                 _FF_SYNC(); \
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_OVER, \
@@ -437,7 +437,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
         } while (0)
     #define _FF_RSL(n) \
         do { \
-            if ((int)R->top < (int)(n)) \
+            if (ff_unlikely((int)R->top < (int)(n))) \
             { \
                 _FF_SYNC(); \
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_UNDER, \
@@ -447,7 +447,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
         } while (0)
     #define _FF_RSO(n) \
         do { \
-            if ((int)R->top + (int)(n) > FF_STACK_SIZE) \
+            if (ff_unlikely((int)R->top + (int)(n) > FF_STACK_SIZE)) \
             { \
                 _FF_SYNC(); \
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER, \
@@ -457,7 +457,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
         } while (0)
     #define _FF_COMPILING \
         do { \
-            if (!(ff->state & FF_STATE_COMPILING)) \
+            if (ff_unlikely(!(ff->state & FF_STATE_COMPILING))) \
             { \
                 _FF_SYNC(); \
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF, \
@@ -472,7 +472,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
 #if FF_SAFE_MEM
     #define _FF_CHECK_ADDR(addr, bytes) \
         do { \
-            if (!ff_addr_valid(ff, (addr), (size_t)(bytes))) \
+            if (ff_unlikely(!ff_addr_valid(ff, (addr), (size_t)(bytes)))) \
             { \
                 _FF_SYNC(); \
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
@@ -483,7 +483,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
         } while (0)
     #define _FF_CHECK_XT(w) \
         do { \
-            if (!ff_word_valid(ff, (w))) \
+            if (ff_unlikely(!ff_word_valid(ff, (w)))) \
             { \
                 _FF_SYNC(); \
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
@@ -504,7 +504,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     #define _FF_WATCHDOG_TICK() \
         do { \
             ff->opcodes_run++; \
-            if (ff->abort_requested) \
+            if (ff_unlikely(ff->abort_requested)) \
                 goto _watchdog_abort; \
             if (ff->platform.watchdog \
                     && ff->opcodes_run >= ff->next_watchdog_at) \
@@ -522,6 +522,20 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                     goto _watchdog_abort; \
             } \
         } while (0)
+
+    /* Trusted-bytecode return-stack checks. Inside opcodes that the
+       compiler emits in matched pairs (XDO ... XLOOP, etc.), the
+       _FF_RSL_T / _FF_RSO_T checks guard an engine-bug-only failure
+       and can be elided when FF_R_TRUSTED is on. The unsuffixed
+       _FF_RSL / _FF_RSO above stay live because they protect words
+       (>R, R>, R@) that user code can stand-alone-misuse. */
+#if FF_R_TRUSTED
+    #define _FF_RSL_T(n)  ((void)0)
+    #define _FF_RSO_T(n)  ((void)0)
+#else
+    #define _FF_RSL_T(n)  _FF_RSL(n)
+    #define _FF_RSO_T(n)  _FF_RSO(n)
+#endif
 
     #define _FF_NEXT()    break
 
@@ -618,6 +632,8 @@ done:
     #undef _FF_SO
     #undef _FF_RSL
     #undef _FF_RSO
+    #undef _FF_RSL_T
+    #undef _FF_RSO_T
     #undef _FF_COMPILING
 }
 
