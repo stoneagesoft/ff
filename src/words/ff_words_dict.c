@@ -652,6 +652,7 @@ static void see_decompile_body(ff_t *ff, const ff_int_t *cells, size_t size,
             case FF_OP_TUCK:       see_text(pr, "tuck");     pos += 1; break;
             case FF_OP_OVER_PLUS:  see_text(pr, "over +");   pos += 1; break;
             case FF_OP_R_PLUS:     see_text(pr, "r@ +");     pos += 1; break;
+            case FF_OP_DUP_ADD:    see_text(pr, "dup +");    pos += 1; break;
 
             default:
             {
