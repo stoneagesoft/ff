@@ -6,7 +6,7 @@
  */
 
 /** ( n -- )  `.` — print TOS as integer in current base. */
-case FF_OP_DOT:
+_FF_CASE(FF_OP_DOT)
     _FF_SL(1);
     _FF_SYNC();
     ff_printf(ff, ff->base == FF_BASE_HEX ? "0x%lX" : "%ld", (long)tos);
@@ -14,7 +14,7 @@ case FF_OP_DOT:
     _FF_NEXT();
 
 /** ( a -- )  `?` — print value at address TOS. */
-case FF_OP_QUESTION:
+_FF_CASE(FF_OP_QUESTION)
     _FF_SL(1);
     _FF_SYNC();
     ff_printf(ff, ff->base == FF_BASE_HEX ? "0x%lX" : "%ld",
@@ -23,13 +23,13 @@ case FF_OP_QUESTION:
     _FF_NEXT();
 
 /** ( -- )  `cr` — emit a newline. */
-case FF_OP_CR:
+_FF_CASE(FF_OP_CR)
     _FF_SYNC();
     ff_printf(ff, "\n");
     _FF_NEXT();
 
 /** ( ch -- )  `emit` — print TOS as a single byte. */
-case FF_OP_EMIT:
+_FF_CASE(FF_OP_EMIT)
     _FF_SL(1);
     _FF_SYNC();
     ff_printf(ff, "%c", (char)tos);
@@ -37,7 +37,7 @@ case FF_OP_EMIT:
     _FF_NEXT();
 
 /** ( s -- )  `type` — print NUL-terminated string at TOS. */
-case FF_OP_TYPE:
+_FF_CASE(FF_OP_TYPE)
     _FF_SL(1);
     _FF_SYNC();
     ff_printf(ff, "%s", (const char *)(intptr_t)tos);
@@ -45,7 +45,7 @@ case FF_OP_TYPE:
     _FF_NEXT();
 
 /** ( -- )  `.s` — print the entire data stack as a table. */
-case FF_OP_DOT_S:
+_FF_CASE(FF_OP_DOT_S)
     if (S->top != 0)
     {
         /* Sync TOS to memory so the loop below reads a coherent stack. */
@@ -78,7 +78,7 @@ case FF_OP_DOT_S:
  * from ff_eval (immediate mode: anticipate a string token) vs runtime
  * from compiled heap (string follows inline).
  */
-case FF_OP_DOT_PAREN:
+_FF_CASE(FF_OP_DOT_PAREN)
     if (ip >= &exec_scratch[0] && ip <= &exec_scratch[2])
     {
         ff->state |= FF_STATE_STRLIT_ANTIC;
@@ -92,7 +92,7 @@ case FF_OP_DOT_PAREN:
     _FF_NEXT();
 
 /** ( -- )  `."` — compile a print of the next string literal. */
-case FF_OP_DOTQUOTE:
+_FF_CASE(FF_OP_DOTQUOTE)
     _FF_COMPILING;
     ff->state |= FF_STATE_STRLIT_ANTIC;
     ff_heap_compile_op(&ff_dict_top(&ff->dict)->heap, FF_OP_DOT_PAREN);
