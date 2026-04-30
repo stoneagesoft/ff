@@ -43,6 +43,19 @@
 #define FF_UNREACHABLE() ((void)0)
 #endif
 
+/**
+ * @def FF_WD_BATCH
+ * @brief How many watchdog ticks (back-branches / word calls) elapse
+ *        between syncs of the local counter to ff->opcodes_run and
+ *        the atomic abort-flag check.
+ *
+ * Higher values shave dispatch overhead at the cost of async-abort
+ * latency: an ff_request_abort takes up to FF_WD_BATCH back-branches
+ * to be observed. At 3-4 ns per back-branch on a Ryzen-class core,
+ * 256 ticks = ~1 µs latency.
+ */
+#define FF_WD_BATCH 256
+
 
 // Public
 
@@ -336,6 +349,11 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     ff_stack_t *R = &ff->r_stack;
     ff_bt_stack_t *BT = &ff->bt_stack;
 
+    /* Local watchdog batch counter. Initialised before the
+       early-goto-done path so the done block's flush is well-defined
+       even when no dispatch ran. */
+    int wd_tick = FF_WD_BATCH;
+
     /* Snapshot cur_word so an error-path `goto done` (which bypasses
        any pending EXITs) restores the caller's value. The clean-EXIT
        path also unwinds correctly because every NEST / DOES_RUNTIME
@@ -530,30 +548,44 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     #define _FF_CHECK_XT(w)             ((void)0)
 #endif
 
-    /* Watchdog: bump the opcode counter, check for an async abort
-       request, and (every N opcodes) call the host's polling
-       watchdog. Wired into the back-branch and word-call sites so
-       the cost is paid at most once per loop iteration / nested
-       call, not per opcode. */
+    /* Watchdog: count back-branches and word calls, check for an
+       async abort, and (every N opcodes) call the host's polling
+       watchdog.
+
+       The hot path is a local-counter decrement-and-test — no
+       memory write, no atomic load, no flag check on the typical
+       tick. Every FF_WD_BATCH ticks (256) we sync the local count
+       to ff->opcodes_run, do the atomic abort load, and compare
+       against the watchdog threshold.
+
+       Async-abort latency goes from "next opcode" to "next 256
+       opcodes" — sub-microsecond on this hardware, and well below
+       the documented 65536-default watchdog interval. The
+       FF_WD_BATCH constant is defined at file scope below so the
+       local `wd_tick` declaration can reference it. */
     #define _FF_WATCHDOG_TICK() \
         do { \
-            ff->opcodes_run++; \
-            if (ff_unlikely(FF_ABORT_LOAD(&ff->abort_requested))) \
-                goto _watchdog_abort; \
-            if (ff->platform.watchdog \
-                    && ff->opcodes_run >= ff->next_watchdog_at) \
+            if (ff_unlikely(--wd_tick <= 0)) \
             { \
-                _FF_SYNC(); \
-                ff_watchdog_action_t _wd = \
-                    ff->platform.watchdog(ff->platform.context, \
-                                          ff->opcodes_run); \
-                _FF_RESTORE(); \
-                uint32_t _step = ff->platform.watchdog_interval \
-                                     ? ff->platform.watchdog_interval \
-                                     : 65536; \
-                ff->next_watchdog_at = ff->opcodes_run + _step; \
-                if (_wd != FF_WD_CONTINUE) \
+                wd_tick = FF_WD_BATCH; \
+                ff->opcodes_run += FF_WD_BATCH; \
+                if (ff_unlikely(FF_ABORT_LOAD(&ff->abort_requested))) \
                     goto _watchdog_abort; \
+                if (ff->platform.watchdog \
+                        && ff->opcodes_run >= ff->next_watchdog_at) \
+                { \
+                    _FF_SYNC(); \
+                    ff_watchdog_action_t _wd = \
+                        ff->platform.watchdog(ff->platform.context, \
+                                              ff->opcodes_run); \
+                    _FF_RESTORE(); \
+                    uint32_t _step = ff->platform.watchdog_interval \
+                                         ? ff->platform.watchdog_interval \
+                                         : 65536; \
+                    ff->next_watchdog_at = ff->opcodes_run + _step; \
+                    if (_wd != FF_WD_CONTINUE) \
+                        goto _watchdog_abort; \
+                } \
             } \
         } while (0)
 
@@ -649,6 +681,10 @@ _watchdog_abort:
     goto broken;
 
 broken:
+    /* Flush the local watchdog batch counter back into the engine's
+       running total before returning, so a host that reads
+       ff->opcodes_run after a failed run sees an accurate count. */
+    ff->opcodes_run += (uint64_t)(FF_WD_BATCH - wd_tick);
     ff->ip = ip;
     if (S->top) S->data[S->top - 1] = tos;
     ff->cur_word = prev_cur_word;
@@ -656,6 +692,7 @@ broken:
     return false;
 
 done:
+    ff->opcodes_run += (uint64_t)(FF_WD_BATCH - wd_tick);
     ff->ip = ip;
     if (S->top) S->data[S->top - 1] = tos;
     ff->cur_word = prev_cur_word;
@@ -727,44 +764,26 @@ ff_error_t ff_load(ff_t *ff, const char *path)
  * words that take user-supplied addresses, regardless of build mode.
  * ------------------------------------------------------------------- */
 
-/** @copydoc ff_addr_valid */
-bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
+/** @copydoc ff_addr_valid_dict */
+bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes)
 {
+    /* Stacks and pad are handled inline by ff_addr_valid; this
+       function only covers the dictionary-heaps binary search. The
+       NULL/zero/wrap guards are duplicated here so embedders that
+       reach this symbol directly still get a safe answer. */
     if (addr == NULL || bytes == 0)
         return false;
 
     const char *a   = (const char *)addr;
     const char *end = a + bytes;
-    /* Pointer wrap (a + bytes overflowed) — always invalid. */
     if (end < a)
         return false;
 
-    /* Data stack. */
-    const char *s_lo = (const char *)ff->stack.data;
-    const char *s_hi = s_lo + sizeof(ff->stack.data);
-    if (a >= s_lo && end <= s_hi)
-        return true;
-
-    /* Return stack. */
-    const char *r_lo = (const char *)ff->r_stack.data;
-    const char *r_hi = r_lo + sizeof(ff->r_stack.data);
-    if (a >= r_lo && end <= r_hi)
-        return true;
-
-    /* Pad bump arena (only the live, written prefix). */
-    if (ff->pad_buf && ff->pad_used > 0)
-    {
-        const char *p_lo = ff->pad_buf;
-        const char *p_hi = p_lo + ff->pad_used;
-        if (a >= p_lo && end <= p_hi)
-            return true;
-    }
-
-    /* Dictionary heaps: binary-searched against the sorted index.
-       Two indexes — the per-instance one for user-word heaps (rebuilt
-       lazily on the first call after a mutation), and the shared
-       one for built-in native fn-pointer heaps (built once during
-       ff_builtins_init and immutable). Membership in either is enough. */
+    /* Two indexes — the per-instance one for user-word heaps
+       (rebuilt lazily on the first call after a mutation), and the
+       shared one for built-in native fn-pointer heaps (built once
+       during ff_builtins_init and immutable). Membership in either
+       is enough. */
     size_t n = 0;
     const ff_interval_t *ivs = ff_dict_intervals((ff_dict_t *)&ff->dict, &n);
     for (int pass = 0; pass < 2; ++pass)

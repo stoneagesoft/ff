@@ -325,6 +325,54 @@ static bool ff_heap_try_peephole(ff_heap_t *h, ff_opcode_t op)
         return true;
     }
 
+    /* `dup +` → DUP_ADD (TOS *= 2). One dispatch instead of three. */
+    if (h->last_op == FF_OP_DUP && op == FF_OP_ADD)
+    {
+        h->data[h->size - 1] = FF_OP_DUP_ADD;
+        return true;
+    }
+
+    /* `over over` → 2DUP. The classic Forth idiom for duplicating
+       the top pair, currently emitted as two OVER ops. */
+    if (h->last_op == FF_OP_OVER && op == FF_OP_OVER)
+    {
+        h->data[h->size - 1] = FF_OP_2DUP;
+        return true;
+    }
+
+    /* `drop drop` → 2DROP. */
+    if (h->last_op == FF_OP_DROP && op == FF_OP_DROP)
+    {
+        h->data[h->size - 1] = FF_OP_2DROP;
+        return true;
+    }
+
+    /* `negate negate` → no-op (two negations cancel). Drop both. */
+    if (h->last_op == FF_OP_NEGATE && op == FF_OP_NEGATE)
+    {
+        --h->size;
+        return true;
+    }
+
+    /* `<lit> drop` → no-op for any LIT class. The literal is dead
+       data and no other side effect is observable. Big win on the
+       b1 empty-loop benchmark where the body is `1 drop`. */
+    if (op == FF_OP_DROP)
+    {
+        if (h->last_op == FF_OP_LIT0
+                || h->last_op == FF_OP_LIT1
+                || h->last_op == FF_OP_LITM1)
+        {
+            --h->size;        /* drop the LIT0/1/M1 cell */
+            return true;
+        }
+        if (h->last_op == FF_OP_LIT)
+        {
+            h->size -= 2;     /* drop the LIT op + value cell */
+            return true;
+        }
+    }
+
     /* `<var> @` → FF_OP_VAR_FETCH, `<var> !` → FF_OP_VAR_STORE,
        `<var> +!` → FF_OP_VAR_PLUS_STORE. The CREATE_RUNTIME tail
        is [opcode, word_ptr]; we rewrite the opcode cell in place
@@ -389,6 +437,12 @@ static bool ff_heap_try_peephole(ff_heap_t *h, ff_opcode_t op)
                     return true;
                 }
                 break;
+            case FF_OP_NEGATE:
+                /* `LIT n NEGATE` → `LIT -n` — fold the unary minus
+                   into the literal at compile time. Saves one
+                   dispatch per occurrence. */
+                h->data[h->size - 1] = -n;
+                return true;
             default:
                 break;
         }
@@ -411,8 +465,11 @@ void ff_heap_compile_op(ff_heap_t *h, ff_opcode_t op)
        - LOOP_I  → I_ADD
        - I_ADD   → I_ADD_LOOP
        - SWAP    → NIP / TUCK
-       - OVER    → OVER_PLUS
-       - FETCH_R → R_PLUS */
+       - OVER    → OVER_PLUS / 2DUP
+       - FETCH_R → R_PLUS
+       - DUP     → DUP_ADD
+       - DROP    → 2DROP
+       - NEGATE  → NEGATE NEGATE cancels to no-op */
     switch (op)
     {
         case FF_OP_LOOP_I:
@@ -420,6 +477,9 @@ void ff_heap_compile_op(ff_heap_t *h, ff_opcode_t op)
         case FF_OP_SWAP:
         case FF_OP_OVER:
         case FF_OP_FETCH_R:
+        case FF_OP_DUP:
+        case FF_OP_DROP:
+        case FF_OP_NEGATE:
             h->last_op = op;
             break;
         default:

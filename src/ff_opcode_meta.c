@@ -147,6 +147,7 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_TUCK]              = { "tuck",      FF_OP_LAYOUT_NONE },
     [FF_OP_OVER_PLUS]         = { NULL,        FF_OP_LAYOUT_NONE },
     [FF_OP_R_PLUS]            = { NULL,        FF_OP_LAYOUT_NONE },
+    [FF_OP_DUP_ADD]           = { NULL,        FF_OP_LAYOUT_NONE },
 
     [FF_OP_COLON]             = { ":",         FF_OP_LAYOUT_NONE },
     [FF_OP_SEMICOLON]         = { ";",         FF_OP_LAYOUT_NONE },

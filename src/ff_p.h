@@ -248,8 +248,66 @@ struct ff
  * the embedded use cases that flip it on.
  * =================================================================== */
 
-bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes);
+/**
+ * @brief Out-of-line dictionary-interval validator (slow path).
+ *
+ * Called by @ref ff_addr_valid below when the inline fast paths
+ * (stacks + pad) miss. Embedders should normally call ff_addr_valid;
+ * this is exposed mainly so its signature matches the inline.
+ */
+bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes);
+
 bool ff_word_valid(const ff_t *ff, const ff_word_t *w);
+
+/**
+ * @brief Range-validate @p addr / @p bytes against this engine's
+ *        tracked regions: stacks, pad, dictionary heaps.
+ *
+ * Inline because the stack and pad cases dominate hot-path checks
+ * under FF_SAFE_MEM — folding the range comparisons into the
+ * caller lets the compiler hoist them out of inner loops. The
+ * dict-intervals binary search stays out-of-line so call sites
+ * don't bloat.
+ */
+static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
+{
+    if (addr == NULL || bytes == 0)
+        return false;
+
+    const char *a   = (const char *)addr;
+    const char *end = a + bytes;
+    /* Pointer wrap — always invalid. */
+    if (ff_unlikely(end < a))
+        return false;
+
+    /* Data stack: inline range check. */
+    {
+        const char *lo = (const char *)ff->stack.data;
+        const char *hi = lo + sizeof(ff->stack.data);
+        if (a >= lo && end <= hi)
+            return true;
+    }
+
+    /* Return stack: inline range check. */
+    {
+        const char *lo = (const char *)ff->r_stack.data;
+        const char *hi = lo + sizeof(ff->r_stack.data);
+        if (a >= lo && end <= hi)
+            return true;
+    }
+
+    /* Pad bump arena (live prefix only). */
+    if (ff->pad_buf && ff->pad_used > 0)
+    {
+        const char *lo = ff->pad_buf;
+        const char *hi = lo + ff->pad_used;
+        if (a >= lo && end <= hi)
+            return true;
+    }
+
+    /* Dictionary heaps fall through to the out-of-line binary search. */
+    return ff_addr_valid_dict(ff, addr, bytes);
+}
 
 /**
  * @def FF_CHECK_ADDR

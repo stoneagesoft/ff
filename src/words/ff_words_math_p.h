@@ -32,6 +32,13 @@ case FF_OP_R_PLUS:
     tos += *ff_tos(R);
     _FF_NEXT();
 
+/** ( a -- 2a )  Superinstruction: `dup +` — double TOS in place,
+    saving the dup push then add-and-drop round-trip. */
+case FF_OP_DUP_ADD:
+    _FF_SL(1);
+    tos += tos;
+    _FF_NEXT();
+
 /** ( n1 n2 -- n3 )  `-` — n3 = n1 - n2. */
 case FF_OP_SUB:
     _FF_SL(2);

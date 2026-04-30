@@ -138,6 +138,7 @@ typedef enum ff_opcode
     FF_OP_TUCK,                 /**< ( a b -- b a b ) — copy TOS under NOS. */
     FF_OP_OVER_PLUS,            /**< Superinstruction: over + (TOS += NOS). */
     FF_OP_R_PLUS,               /**< Superinstruction: r@ + (add return-stack TOS to data TOS). */
+    FF_OP_DUP_ADD,              /**< Superinstruction: dup + (TOS *= 2). */
 
     /* --- Compile-time / immediate --- */
 
