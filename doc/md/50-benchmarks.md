@@ -6,16 +6,16 @@ This chapter compares *ff* against the three engines shipped by the
 gforth distribution (currently version 0.7.3 on Debian / Ubuntu):
 
 - **gforth-itc** — indirect-threaded engine. The simplest dispatch
-  scheme; closest in spirit to *ff*'s switch-based inner interpreter.
+  scheme.
 - **gforth** — the default install. Uses direct threaded code via
   GCC's labels-as-values extension.
 - **gforth-fast** — dynamic native-code translator. Roughly a JIT;
   the upper bound on what an interpreter-shaped Forth can deliver
   on this hardware without writing a real compiler.
 
-*ff* aims at parity with the threaded interpreters while remaining
-portable, embeddable, and buildable under MSVC. It is not designed to
-compete with gforth-fast's native-code path.
+*ff* targets parity with (or better than) the threaded interpreters
+while remaining portable, embeddable, and buildable under MSVC. It
+is not designed to compete with gforth-fast's native-code path.
 
 
 ## Methodology
@@ -35,10 +35,12 @@ within its own body, so b3 calls `fib` directly.
 
 **Hardware**: AMD Ryzen 7 2700X, single thread, no frequency pinning
 (default scaling governor). **Build flags**: *ff* compiled with Clang
-18.1.3 at `-O3 -g0 -fno-exceptions`. **gforth**: 0.7.3 as packaged
-by Ubuntu (the same binary serves all three of gforth, gforth-itc,
-gforth-fast — they're separate executables built from the same
-release with different threading strategies).
+18.1.3 at `-O3 -g0 -fno-exceptions`; GCC/Clang builds use
+computed-goto threaded dispatch, MSVC uses a `switch`-loop fallback.
+**gforth**: 0.7.3 as packaged by Ubuntu (the same binary serves all
+three of gforth, gforth-itc, gforth-fast — they're separate
+executables built from the same release with different threading
+strategies).
 
 
 ## Workloads
@@ -58,62 +60,63 @@ Source files are reproduced verbatim in the appendix below.
 
 Wall-clock time, milliseconds, lower is better:
 
-| Workload         |    ffsh | gforth-itc | gforth | gforth-fast |
-|------------------|--------:|-----------:|-------:|------------:|
-| b1 empty loop    |     310 |        300 |    260 |         200 |
-| b2 sum           |     120 |        170 |    150 |         110 |
-| b3 fib(36)       |     760 |        890 |    870 |         510 |
-| b4 variable r/m/w|     220 |        350 |    350 |         130 |
-| b5 nested loops  |     310 |        310 |    260 |         200 |
+| Workload          |    ffsh | gforth-itc | gforth | gforth-fast |
+|-------------------|--------:|-----------:|-------:|------------:|
+| b1 empty loop     |     210 |        300 |    250 |         200 |
+| b2 sum            |     130 |        170 |    140 |         110 |
+| b3 fib(36)        |     740 |        880 |    860 |         500 |
+| b4 variable r/m/w |     230 |        340 |    340 |         130 |
+| b5 nested loops   |     210 |        300 |    260 |         200 |
 
 Same numbers as ratios against ffsh (1.00 = ffsh time; smaller =
 faster):
 
 | Workload          | ffsh | gforth-itc | gforth | gforth-fast |
 |-------------------|-----:|-----------:|-------:|------------:|
-| b1 empty loop     | 1.00 |       0.97 |   0.84 |        0.65 |
-| b2 sum            | 1.00 |       1.42 |   1.25 |        0.92 |
-| b3 fib(36)        | 1.00 |       1.17 |   1.14 |        0.67 |
-| b4 variable r/m/w | 1.00 |       1.59 |   1.59 |        0.59 |
-| b5 nested loops   | 1.00 |       1.00 |   0.84 |        0.65 |
+| b1 empty loop     | 1.00 |       1.43 |   1.19 |        0.95 |
+| b2 sum            | 1.00 |       1.31 |   1.08 |        0.85 |
+| b3 fib(36)        | 1.00 |       1.19 |   1.16 |        0.68 |
+| b4 variable r/m/w | 1.00 |       1.48 |   1.48 |        0.57 |
+| b5 nested loops   | 1.00 |       1.43 |   1.24 |        0.95 |
 
 
 ## Discussion
 
 After the peephole pass (fused `i + loop`, `<var> @`/`!`/`+!`,
 `swap drop` → `nip`, `over +`, `r@ +`), the cur_word-on-frame work
-that simplified diagnostics, the dictionary arena, and the trusted-
-R-stack + LTO + PGO build flags, *ff* now **beats both `gforth-itc`
-and the default `gforth`** on three workloads (b2, b3, b4) and ties
-on the remaining two (b1 dispatch-bound, b5 nested-loops). b4 is
-the largest margin: 1.59× faster than either gforth-itc or default
-gforth, the result of variable-access peepholes collapsing the
+that simplified diagnostics, the dictionary arena, the trusted-
+R-stack + LTO + PGO build flags, and the computed-goto threaded
+dispatch (GCC/Clang), *ff* now **beats both `gforth-itc` and the
+default `gforth` on every benchmark** and is within noise of
+`gforth-fast` on the two pure-dispatch workloads (b1, b5). b4 is
+the largest margin over the threaded engines: 1.48× faster than
+either, the result of variable-access peepholes collapsing the
 `CREATE_RUNTIME → @` round-trip into one dispatch.
-
-In the threaded-interpreter band — i.e. excluding `gforth-fast`'s
-dynamic native-code translator — *ff* now leads or ties on every
-benchmark. The remaining 0.84–0.97× gap on b1 / b5 / b1-vs-default-
-gforth is the cost of `switch (*ip++)` versus computed-goto: a
-single-jump-site can't get per-opcode branch prediction.
 
 ### Where the gains came from
 
-- **b2 sum** (290 → 120 ms): the `FF_OP_I_ADD` peephole already
+- **b1 / b5 dispatch** (310 → 210 ms): computed-goto dispatch
+  replaces the `switch (*ip++)` loop on GCC/Clang. Each handler
+  ends with `goto *dt[*ip++]` — one indirect branch per opcode
+  versus the shared switch-statement entry. The CPU's indirect
+  branch predictor can specialize per call-site; b1 and b5 are
+  pure dispatch-overhead benchmarks so they benefit most.
+- **b2 sum** (290 → 130 ms): the `FF_OP_I_ADD` peephole already
   fused `i +` into one dispatch; the `FF_OP_I_ADD_LOOP` extension
   fuses `i + loop` into a single back-edge instruction. Inner-loop
   dispatch count went from 2 to 1.
-- **b4 variable r/m/w** (680 → 220 ms, ~3× speedup): the
+- **b4 variable r/m/w** (680 → 230 ms, ~3× speedup): the
   `<var> @`/`!`/`+!` peepholes (`FF_OP_VAR_FETCH` and friends)
   bypass the `CREATE_RUNTIME` → push-address → `FETCH` round-trip.
   Each variable access is one dispatch instead of two.
-- **b3 fib** (960 → 760 ms): `FF_R_TRUSTED` elides the redundant
+- **b3 fib** (960 → 740 ms): `FF_R_TRUSTED` elides the redundant
   `_FF_RSL` checks at every NEST / EXIT, and the
   `__builtin_expect(..., 0)` hints on the validators keep the hot
   path straight-line. The 2-cell return frame (saved IP + saved
   cur_word for restoration on EXIT) costs a few percent here, paid
   for by tighter diagnostics on error.
 
-The remaining gap to `gforth-fast` (b1: 0.65, b3: 0.67, b4: 0.59)
+The remaining gap to `gforth-fast` (b2: 0.85×, b3: 0.68×, b4: 0.57×)
 is the cost of not having a native-code back end. That trade is
 deliberate: the entire interpreter is one C source file plus
 per-category dispatch includes, builds clean under MSVC, runs on
@@ -156,17 +159,18 @@ Wall-clock results, milliseconds, best of five:
 
 | Benchmark            | C `-O0` | C `-O3` | ff (release) | ff vs C `-O3` |
 |----------------------|--------:|--------:|-------------:|--------------:|
-| empty loop (100M)    |     210 |      20 |          310 |        ~16×   |
-| sum 0..49,999,999    |     110 |     100 |          120 |        ~1.2×  |
-| fib(36)              |     100 |      50 |          760 |        ~15×   |
+| empty loop (100M)    |     210 |      20 |          210 |        ~11×   |
+| sum 0..49,999,999    |     110 |     100 |          130 |        ~1.3×  |
+| fib(36)              |     100 |      50 |          740 |        ~15×   |
 
 **For honest interpreter-vs-native code comparison**, look at the
-first and third rows: roughly **15-20× slower** than `-O3` C. That's
-the irreducible cost of switch-dispatched bytecode versus native
-machine code, and no threaded-code Forth (gforth, gforth-itc, *ff*)
-closes that gap. Only `gforth-fast`-style dynamic native-code
-synthesis does, at the cost of MSVC compatibility, embeddability,
-and source-tree size.
+first and third rows: roughly **11-15× slower** than `-O3` C. That's
+the irreducible cost of interpreted bytecode versus native machine
+code, and no threaded-code Forth (gforth, gforth-itc, *ff*) closes
+that gap. Only `gforth-fast`-style dynamic native-code synthesis
+does, at the cost of MSVC compatibility, embeddability, and
+source-tree size. The computed-goto dispatch brought the empty-loop
+ratio from ~16× down to ~11× — real but not fundamental progress.
 
 The `sum` row is misleadingly close: I had to write `volatile long
 sum` to stop Clang `-O3` from eliminating the entire loop as
@@ -231,21 +235,21 @@ table:
 
 | Workload          | ffsh | lua 5.4 | ratio (lua / ffsh) |
 |-------------------|-----:|--------:|-------------------:|
-| b1 empty loop     |  310 |     370 |              1.19× |
-| b2 sum            |  120 |     210 |              1.75× |
-| b3 fib(36)        |  760 |    1250 |              1.64× |
-| b4 variable r/m/w |  220 |     460 |              2.09× |
-| b5 nested loops   |  310 |     370 |              1.19× |
+| b1 empty loop     |  210 |     370 |              1.76× |
+| b2 sum            |  130 |     210 |              1.62× |
+| b3 fib(36)        |  740 |    1230 |              1.66× |
+| b4 variable r/m/w |  230 |     440 |              1.91× |
+| b5 nested loops   |  210 |     370 |              1.76× |
 
-*ff* leads on every workload. The pure-dispatch benchmarks (b1,
-b5) are within 19 % — both VMs are dispatch-bound and there's not
-much daylight between switch-threaded Forth and Lua's register VM
-when the body is a no-op. The arithmetic and memory workloads (b2,
-b3, b4) show 1.6–2.1× gaps, which is consistent with Lua's
-per-operand type-tag dispatch (every `+` has to check whether
-operands are integer, float, table-with-`__add`, or string-coerced)
-and its per-call register-frame allocation. Forth has neither cost:
-a cell is a cell, and call/return is push/pop on the return stack.
+*ff* leads on every workload. The pure-dispatch benchmarks (b1, b5)
+now show a 1.76× advantage — computed-goto dispatch closed the old
+near-parity against Lua and turned it into a clear lead. The
+arithmetic and memory workloads (b2, b3, b4) show 1.6–1.9× gaps,
+consistent with Lua's per-operand type-tag dispatch (every `+` has
+to check whether operands are integer, float, table-with-`__add`, or
+string-coerced) and its per-call register-frame allocation. Forth has
+neither cost: a cell is a cell, and call/return is push/pop on the
+return stack.
 
 The honest caveat: this is **stock Lua**, the reference interpreter.
 **LuaJIT** is a different engine entirely — a tracing JIT that

@@ -6,7 +6,7 @@
  */
 
 /** ( s -- ec )  `evaluate` — ff_eval() the string at TOS, push the error code. */
-case FF_OP_EVALUATE:
+_FF_CASE(FF_OP_EVALUATE)
     _FF_SL(1);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
     {
@@ -24,7 +24,7 @@ case FF_OP_EVALUATE:
     _FF_NEXT();
 
 /** ( s -- ec )  `load` — ff_load() the file at TOS, push the error code. */
-case FF_OP_LOAD:
+_FF_CASE(FF_OP_LOAD)
     _FF_SL(1);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
     {
