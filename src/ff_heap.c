@@ -27,8 +27,50 @@ void ff_heap_init(ff_heap_t *h)
 /** @copydoc ff_heap_destroy */
 void ff_heap_destroy(ff_heap_t *h)
 {
-    free(h->data);
+    /* Arena-owned heaps don't free their data here — the arena
+       lifetime is bound to ff_dict_destroy. */
+    if (h->arena == NULL)
+        free(h->data);
     memset(h, 0, sizeof(*h));
+}
+
+/* Forward decl — implementation lives in ff_dict.c next to the
+   arena struct definition. */
+extern void *ff_arena_alloc(ff_arena_t *a, size_t bytes);
+
+/** @copydoc ff_heap_grow */
+void ff_heap_grow(ff_heap_t *h, size_t extra)
+{
+    size_t nc = h->capacity
+                    ? h->capacity * 2
+                    : FF_INIT_HEAP_SIZE;
+    while (nc < h->size + extra)
+        nc *= 2;
+
+    ff_int_t *old_data = h->data;
+    if (h->arena)
+    {
+        /* Allocate a fresh region from the arena and copy the live
+           prefix over. The old region stays in its slab as wasted
+           space — acceptable internal fragmentation in exchange for
+           the malloc-count win when many small words are defined. */
+        ff_int_t *nd = (ff_int_t *)ff_arena_alloc(h->arena,
+                                                  nc * sizeof(ff_int_t));
+        if (h->size && old_data)
+            memcpy(nd, old_data, h->size * sizeof(ff_int_t));
+        h->data = nd;
+    }
+    else
+    {
+        h->data = (ff_int_t *)realloc(old_data, nc * sizeof(ff_int_t));
+    }
+    h->capacity = nc;
+
+    /* Realloc / arena-relocation moves the buffer; the dict's sorted
+       interval index is keyed on (lo, hi) pairs, so bump the mutation
+       counter to force a rebuild on the next ff_addr_valid call. */
+    if (h->mutation_seq_p && (h->data != old_data || extra))
+        ++*h->mutation_seq_p;
 }
 
 /** @copydoc ff_heap_align */

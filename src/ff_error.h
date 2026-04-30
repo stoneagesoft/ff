@@ -52,6 +52,7 @@ typedef enum ff_error_code
     FF_ERR_NO_MAN,          /**< Word has no manual entry to display. */
     FF_ERR_NON_UNIQUE,      /**< Newly defined word shadows an existing name (warning). */
     FF_ERR_NOT_IN_DEF,      /**< Compiler-only word invoked outside a `:` definition. */
+    FF_ERR_OOM,             /**< Memory allocator returned NULL. */
     FF_ERR_RSTACK_OVER,     /**< Return stack overflow. */
     FF_ERR_RSTACK_UNDER,    /**< Return stack underflow. */
     FF_ERR_RUN_COMMENT,     /**< Source ended inside an open `(` comment. */

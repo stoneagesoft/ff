@@ -26,27 +26,31 @@ void ff_print_words(ff_t *ff, int filter)
     /* filter: 0 = all, 1 = used only, 2 = unused only */
     ff_dict_t *d = &ff->dict;
 
+    /* Walk the merged scope (user words then shared built-ins) via
+       the helper accessors so the listing covers both. The USED bit
+       lives in the per-instance bitmap for shared words, so we go
+       through ff_dict_word_was_used rather than reading w->flags
+       directly. */
+    size_t total = ff_dict_total_count(d);
     int lmax = 0;
-    for (size_t i = 0; i < d->count; ++i)
+    for (size_t i = 0; i < total; ++i)
     {
-        ff_word_t *w = d->words[i];
-        if (filter == 1 && !(w->flags & FF_WORD_USED))
-            continue;
-        if (filter == 2 && (w->flags & FF_WORD_USED))
-            continue;
+        const ff_word_t *w = ff_dict_word_at(d, i);
+        bool used = ff_dict_word_was_used(d, w);
+        if (filter == 1 && !used) continue;
+        if (filter == 2 &&  used) continue;
         int l = (int)strlen(w->name);
         if (lmax < l)
             lmax = l;
     }
 
     int col = 0;
-    for (size_t i = 0; i < d->count; ++i)
+    for (size_t i = 0; i < total; ++i)
     {
-        ff_word_t *w = d->words[i];
-        if (filter == 1 && !(w->flags & FF_WORD_USED))
-            continue;
-        if (filter == 2 && (w->flags & FF_WORD_USED))
-            continue;
+        const ff_word_t *w = ff_dict_word_at(d, i);
+        bool used = ff_dict_word_was_used(d, w);
+        if (filter == 1 && !used) continue;
+        if (filter == 2 &&  used) continue;
         ff_printf(ff, "%-*s ", lmax, w->name);
         if (++col >= 5)
         {
@@ -255,9 +259,13 @@ void ff_dump_heap_cells(ff_t *ff, const ff_heap_t *h)
 
 static const ff_word_t *ff_see_opcode_to_word(ff_dict_t *d, ff_opcode_t opcode)
 {
-    for (size_t i = 0; i < d->count; ++i)
-        if (d->words[i]->opcode == opcode)
-            return d->words[i];
+    size_t total = ff_dict_total_count(d);
+    for (size_t i = 0; i < total; ++i)
+    {
+        const ff_word_t *w = ff_dict_word_at(d, i);
+        if (w && w->opcode == opcode)
+            return w;
+    }
     return NULL;
 }
 
@@ -703,9 +711,10 @@ out:
    Used by `see` to recover the parent of a DOES>-built word. */
 static const ff_word_t *see_word_for_pointer(const ff_t *ff, const ff_int_t *p)
 {
-    for (size_t i = 0; i < ff->dict.count; ++i)
+    size_t total = ff_dict_total_count(&ff->dict);
+    for (size_t i = 0; i < total; ++i)
     {
-        const ff_word_t *w = ff->dict.words[i];
+        const ff_word_t *w = ff_dict_word_at(&ff->dict, i);
         if (!w || w->heap.data == NULL) continue;
         const ff_int_t *lo = w->heap.data;
         const ff_int_t *hi = lo + w->heap.capacity;

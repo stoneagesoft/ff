@@ -57,7 +57,11 @@ ff_t *ff_new(const ff_platform_t *p)
 
     ff->base = FF_BASE_DEC;
 
-    ff_dict_init(&ff->dict);
+    /* Per-engine dict delegates built-in lookups to the process-wide
+       singleton — initialised lazily here on the first ff_new call.
+       Embedders that fan out engines across threads should warm the
+       singleton from the main thread first; see ff_builtins_default(). */
+    ff_dict_init(&ff->dict, ff_builtins_default());
     ff_stack_init(&ff->stack);
     ff_stack_init(&ff->r_stack);
     ff_bt_stack_init(&ff->bt_stack);
@@ -77,6 +81,7 @@ void ff_free(ff_t *ff)
     ff_stack_destroy(&ff->r_stack);
     ff_stack_destroy(&ff->stack);
     ff_dict_destroy(&ff->dict);
+    free(ff->pad_buf);
 
     free(ff);
 }
@@ -99,7 +104,7 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
        previous run is dropped, the opcode counter starts at zero,
        and the polling watchdog will fire after `watchdog_interval`
        opcodes (default 65536). */
-    ff->abort_requested  = 0;
+    FF_ABORT_CLEAR(&ff->abort_requested);
     ff->opcodes_run      = 0;
     ff->next_watchdog_at = ff->platform.watchdog_interval
                                ? ff->platform.watchdog_interval
@@ -108,6 +113,7 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     int pos = 0;
     ff_dict_t *d = &ff->dict;
     ff_tokenizer_t *t = &ff->tokenizer;
+    ff_error_t ec = FF_OK;
 
     for (;;)
     {
@@ -116,9 +122,7 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
         switch (tok)
         {
             case FF_TOKEN_NULL:
-                ff->input = prev_input;
-                ff->input_pos = prev_pos;
-                return FF_OK;
+                goto out;
 
             case FF_TOKEN_WORD:
                 if (ff->state & FF_STATE_FORGET_PENDING)
@@ -126,10 +130,9 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     ff->state &= ~FF_STATE_FORGET_PENDING;
                     if (!ff_dict_forget(d, t->token))
                     {
-                        ff->input = prev_input;
-                        ff->input_pos = prev_pos;
-                        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                                         "'%s' undefined.", t->token);
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+                                       "'%s' undefined.", t->token);
+                        goto out;
                     }
                 }
                 else if (ff->state & FF_STATE_TICK_PENDING)
@@ -140,10 +143,9 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                         ff_stack_push_ptr(&ff->stack, w);
                     else
                     {
-                        ff->input = prev_input;
-                        ff->input_pos = prev_pos;
-                        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                                         "'%s' undefined.", t->token);
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+                                       "'%s' undefined.", t->token);
+                        goto out;
                     }
                 }
                 else if (ff->state & FF_STATE_IS_PENDING)
@@ -156,24 +158,21 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     ff_word_t *w = ff_dict_lookup(d, t->token);
                     if (!w)
                     {
-                        ff->input = prev_input;
-                        ff->input_pos = prev_pos;
-                        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                                         "'%s' undefined.", t->token);
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+                                       "'%s' undefined.", t->token);
+                        goto out;
                     }
                     if (w->opcode != FF_OP_DEFER_RUNTIME)
                     {
-                        ff->input = prev_input;
-                        ff->input_pos = prev_pos;
-                        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED,
-                                         "'%s' is not a deferred word.", t->token);
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED,
+                                       "'%s' is not a deferred word.", t->token);
+                        goto out;
                     }
                     if (ff->stack.top < 1)
                     {
-                        ff->input = prev_input;
-                        ff->input_pos = prev_pos;
-                        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                                         "Stack underflow: 'is' expected an xt.");
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                                       "Stack underflow: 'is' expected an xt.");
+                        goto out;
                     }
                     w->heap.data[0] = ff_stack_pop(&ff->stack);
                 }
@@ -225,15 +224,13 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                             ff->input_pos = pos;
                             if (!ff_exec(ff, w))
                             {
-                                ff->input = prev_input;
-                                ff->input_pos = prev_pos;
-                                return FF_ERR_BROKEN;
+                                ec = FF_ERR_BROKEN;
+                                goto out;
                             }
                             if ((ff->state & FF_STATE_ERROR))
                             {
-                                ff->input = prev_input;
-                                ff->input_pos = prev_pos;
-                                return ff->error;
+                                ec = ff->error;
+                                goto out;
                             }
                             /* Restore --- word may have consumed more input. */
                             pos = ff->input_pos;
@@ -242,10 +239,9 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     else
                     {
                         ff->state &= ~FF_STATE_COMPILING;
-                        ff->input = prev_input;
-                        ff->input_pos = prev_pos;
-                        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                                         "'%s' undefined.", t->token);
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+                                       "'%s' undefined.", t->token);
+                        goto out;
                     }
                 }
                 break;
@@ -287,20 +283,48 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     }
                     else
                     {
-                        /* Temporary string in pad. */
-                        int pi = ff->pad_i;
-                        int len = t->token_len < FF_PAD_SIZE - 1
-                                        ? t->token_len
-                                        : FF_PAD_SIZE - 1;
-                        memcpy(ff->pad[pi], t->token, len);
-                        ff->pad[pi][len] = '\0';
-                        ff_stack_push_ptr(&ff->stack, ff->pad[pi]);
-                        ff->pad_i = (pi + 1) % FF_PAD_COUNT;
+                        /* Append the string to the bump arena. The arena
+                           grows on demand and is reset only by ff_abort,
+                           so the pushed pointer is stable for the engine's
+                           lifetime — no silent recycling like the previous
+                           ring did. */
+                        size_t need = (size_t)t->token_len + 1;
+                        if (ff->pad_used + need > ff->pad_size)
+                        {
+                            size_t nc = ff->pad_size
+                                            ? ff->pad_size
+                                            : (size_t)FF_PAD_INIT_SIZE;
+                            while (nc < ff->pad_used + need)
+                                nc *= 2;
+                            char *nb = (char *)realloc(ff->pad_buf, nc);
+                            if (!nb)
+                            {
+                                ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
+                                               "Out of memory growing pad arena to %zu bytes.",
+                                               nc);
+                                goto out;
+                            }
+                            ff->pad_buf  = nb;
+                            ff->pad_size = nc;
+                        }
+                        char *dst = ff->pad_buf + ff->pad_used;
+                        memcpy(dst, t->token, t->token_len);
+                        dst[t->token_len] = '\0';
+                        ff->pad_used += need;
+                        ff_stack_push_ptr(&ff->stack, dst);
                     }
                 }
                 break;
         }
     }
+
+out:
+    /* Single restore-and-return point: every clean exit (FF_TOKEN_NULL)
+       and every error path lands here so the input/input_pos snapshot
+       is rolled back exactly once. */
+    ff->input = prev_input;
+    ff->input_pos = prev_pos;
+    return ec;
 }
 
 /** @copydoc ff_exec */
@@ -312,6 +336,11 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     ff_stack_t *R = &ff->r_stack;
     ff_bt_stack_t *BT = &ff->bt_stack;
 
+    /* Snapshot cur_word so an error-path `goto done` (which bypasses
+       any pending EXITs) restores the caller's value. The clean-EXIT
+       path also unwinds correctly because every NEST / DOES_RUNTIME
+       saves cur_word into the return frame and EXIT pops it back. */
+    ff_word_t *prev_cur_word = ff->cur_word;
     ff->cur_word = w;
     int bt_size = BT->top;
 
@@ -346,7 +375,12 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 || w->opcode == FF_OP_DEFER_RUNTIME)
             exec_scratch[n++] = (ff_int_t)(intptr_t)w;
         exec_scratch[n] = FF_OP_EXIT;
-        ff_stack_push(R, 0);   /* NULL return sentinel */
+        /* Two-cell return frame: [saved_ip, saved_cur_word]. The
+           outermost ip is NULL — the EXIT case detects that and goes
+           to `done`. The cur_word slot carries the caller's value so
+           a nested ff_exec (e.g. via EXECUTE) restores it cleanly. */
+        ff_stack_push(R, 0);
+        ff_stack_push(R, (ff_int_t)(intptr_t)prev_cur_word);
         ip = exec_scratch;
     }
     else if (w->flags & FF_WORD_NATIVE)
@@ -504,7 +538,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     #define _FF_WATCHDOG_TICK() \
         do { \
             ff->opcodes_run++; \
-            if (ff_unlikely(ff->abort_requested)) \
+            if (ff_unlikely(FF_ABORT_LOAD(&ff->abort_requested))) \
                 goto _watchdog_abort; \
             if (ff->platform.watchdog \
                     && ff->opcodes_run >= ff->next_watchdog_at) \
@@ -597,21 +631,21 @@ _watchdog_abort:
     ff_tracef(ff, FF_SEV_ERROR | FF_ERR_ABORTED,
               "Aborted after %llu opcodes.",
               (unsigned long long)ff->opcodes_run);
-    ff->abort_requested = 0;
+    FF_ABORT_CLEAR(&ff->abort_requested);
     ff->state |= FF_STATE_BROKEN;
     goto broken;
 
 broken:
     ff->ip = ip;
     if (S->top) S->data[S->top - 1] = tos;
-    ff->cur_word = NULL;
+    ff->cur_word = prev_cur_word;
     BT->top = bt_size;
     return false;
 
 done:
     ff->ip = ip;
     if (S->top) S->data[S->top - 1] = tos;
-    ff->cur_word = NULL;
+    ff->cur_word = prev_cur_word;
     BT->top = bt_size;
     return true;
 
@@ -704,28 +738,52 @@ bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
     if (a >= r_lo && end <= r_hi)
         return true;
 
-    /* Pad ring. */
-    const char *p_lo = (const char *)ff->pad;
-    const char *p_hi = p_lo + sizeof(ff->pad);
-    if (a >= p_lo && end <= p_hi)
-        return true;
-
-    /* Any dictionary word's heap. Walked linearly — see the comment
-       on FF_SAFE_MEM in ff_config_p.h about the cost trade-off. */
-    for (size_t i = 0; i < ff->dict.count; ++i)
+    /* Pad bump arena (only the live, written prefix). */
+    if (ff->pad_buf && ff->pad_used > 0)
     {
-        const ff_word_t *w = ff->dict.words[i];
-        if (w == NULL)
-            continue;
-        const ff_heap_t *h = &w->heap;
-        if (h->data == NULL || h->capacity == 0)
-            continue;
-        const char *h_lo = (const char *)h->data;
-        const char *h_hi = h_lo + h->capacity * sizeof(ff_int_t);
-        if (a >= h_lo && end <= h_hi)
+        const char *p_lo = ff->pad_buf;
+        const char *p_hi = p_lo + ff->pad_used;
+        if (a >= p_lo && end <= p_hi)
             return true;
     }
 
+    /* Dictionary heaps: binary-searched against the sorted index.
+       Two indexes — the per-instance one for user-word heaps (rebuilt
+       lazily on the first call after a mutation), and the shared
+       one for built-in native fn-pointer heaps (built once during
+       ff_builtins_init and immutable). Membership in either is enough. */
+    size_t n = 0;
+    const ff_interval_t *ivs = ff_dict_intervals((ff_dict_t *)&ff->dict, &n);
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        if (n > 0)
+        {
+            size_t lo_i = 0, hi_i = n;
+            while (lo_i < hi_i)
+            {
+                size_t mid = lo_i + (hi_i - lo_i) / 2;
+                if (ivs[mid].lo <= a)
+                    lo_i = mid + 1;
+                else
+                    hi_i = mid;
+            }
+            if (lo_i > 0)
+            {
+                const ff_interval_t *iv = &ivs[lo_i - 1];
+                if (a >= iv->lo && end <= iv->hi)
+                    return true;
+            }
+        }
+        if (pass == 0 && ff->dict.builtins)
+        {
+            ivs = ff->dict.builtins->intervals;
+            n   = ff->dict.builtins->intervals_count;
+        }
+        else
+        {
+            break;
+        }
+    }
     return false;
 }
 
@@ -734,6 +792,12 @@ bool ff_word_valid(const ff_t *ff, const ff_word_t *w)
 {
     if (w == NULL)
         return false;
+    /* Shared built-ins live in a contiguous static_pool — fast range
+       check first. */
+    const ff_builtins_t *b = ff->dict.builtins;
+    if (b && w >= b->static_pool && w < b->static_pool + b->static_pool_size)
+        return true;
+    /* User words: linear scan over the per-instance words array. */
     for (size_t i = 0; i < ff->dict.count; ++i)
         if (ff->dict.words[i] == w)
             return true;
@@ -751,18 +815,23 @@ void ff_abort(ff_t *ff)
     ff->state = 0;
     ff->tokenizer.state = 0;
     ff->cur_word = NULL;
+    /* Reset the transient-string arena. Anything still on the data
+       stack pointing into the pad becomes garbage — but we just
+       cleared the data stack, so there's nothing to dangle. */
+    ff->pad_used = 0;
 }
 
 /** @copydoc ff_request_abort */
 void ff_request_abort(ff_t *ff)
 {
-    /* Atomic store of a sig_atomic_t — safe from a signal handler
-       and (with sig_atomic_t's "lock-free for at least 1 byte"
-       guarantee on every C17 platform) safe from another thread on
-       the lock-free architectures we ship on. The dispatch loop
-       picks it up at the next back-branch / word call. */
+    /* Release-store of the abort flag. Signal-handler safe (atomic
+       store of an int / sig_atomic_t) and, on a C11-atomics build,
+       cross-thread safe — the dispatch loop's matching acquire-load
+       picks it up at the next back-branch / word call. On a non-C11
+       fallback build the flag is `volatile sig_atomic_t`, which
+       still works for the same-thread signal-handler case. */
     if (ff)
-        ff->abort_requested = 1;
+        FF_ABORT_STORE(&ff->abort_requested, 1);
 }
 
 /** @copydoc ff_banner */
