@@ -8,25 +8,25 @@
 /** ( -- n )  `(lit)` — push the inline-literal cell that follows. */
 case FF_OP_LIT:
     _FF_SO(1);
-    _PUSH(*ip++);
+    _FF_PUSH(*ip++);
     _FF_NEXT();
 
 /** ( -- 0 )  Specialized push of the constant 0. */
 case FF_OP_LIT0:
     _FF_SO(1);
-    _PUSH(0);
+    _FF_PUSH(0);
     _FF_NEXT();
 
 /** ( -- 1 )  Specialized push of the constant 1. */
 case FF_OP_LIT1:
     _FF_SO(1);
-    _PUSH(1);
+    _FF_PUSH(1);
     _FF_NEXT();
 
 /** ( -- -1 )  Specialized push of the constant -1. */
 case FF_OP_LITM1:
     _FF_SO(1);
-    _PUSH(-1);
+    _FF_PUSH(-1);
     _FF_NEXT();
 
 /** ( a -- a+n )  Superinstruction emitted by the LIT+ADD peephole. */
@@ -46,7 +46,7 @@ case FF_OP_LITSUB:
 /** ( -- n )  `depth` — push current stack depth (before pushing). */
 case FF_OP_DEPTH:
     _FF_SO(1);
-    _PUSH((ff_int_t)S->top);
+    _FF_PUSH((ff_int_t)S->top);
     _FF_NEXT();
 
 /** ( ... -- )  `clear` — discard every data-stack item. */
@@ -59,9 +59,9 @@ case FF_OP_NROT:
     _FF_SL(3);
     {
         ff_int_t t = tos;
-        tos = _NOS;
-        _NOS = _SAT(2);
-        _SAT(2) = t;
+        tos = _FF_NOS;
+        _FF_NOS = _FF_SAT(2);
+        _FF_SAT(2) = t;
     }
     _FF_NEXT();
 
@@ -86,13 +86,13 @@ case FF_OP_ROLL:
 case FF_OP_DUP:
     _FF_SL(1);
     _FF_SO(1);
-    _PUSH(tos);
+    _FF_PUSH(tos);
     _FF_NEXT();
 
 /** ( a -- )  `drop` — discard TOS. */
 case FF_OP_DROP:
     _FF_SL(1);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( a b -- b a )  `swap` — exchange top two cells. */
@@ -100,8 +100,8 @@ case FF_OP_SWAP:
     _FF_SL(2);
     {
         ff_int_t t = tos;
-        tos = _NOS;
-        _NOS = t;
+        tos = _FF_NOS;
+        _FF_NOS = t;
     }
     _FF_NEXT();
 
@@ -109,14 +109,14 @@ case FF_OP_SWAP:
 case FF_OP_OVER:
     _FF_SL(2);
     _FF_SO(1);
-    _PUSH(_NOS);
+    _FF_PUSH(_FF_NOS);
     _FF_NEXT();
 
 /** ( a b -- b )  `nip` — drop NOS. Standalone primitive and the
     target of the `swap drop` peephole. */
 case FF_OP_NIP:
     _FF_SL(2);
-    _NOS = tos;
+    _FF_NOS = tos;
     --S->top;
     _FF_NEXT();
 
@@ -143,9 +143,9 @@ case FF_OP_ROT:
     _FF_SL(3);
     {
         ff_int_t t = tos;
-        tos = _SAT(2);
-        _SAT(2) = _NOS;
-        _NOS = t;
+        tos = _FF_SAT(2);
+        _FF_SAT(2) = _FF_NOS;
+        _FF_NOS = t;
     }
     _FF_NEXT();
 
@@ -155,7 +155,7 @@ case FF_OP_PICK:
     {
         int idx = (int)tos;
         _FF_SL(idx + 2);
-        tos = _SAT(idx + 1);
+        tos = _FF_SAT(idx + 1);
     }
     _FF_NEXT();
 
@@ -164,14 +164,14 @@ case FF_OP_TO_R:
     _FF_SL(1);
     _FF_RSO(1);
     ff_stack_push(R, tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( -- a )  R: ( a -- )  `r>` — pop return stack, push data stack. */
 case FF_OP_FROM_R:
     _FF_RSL(1);
     _FF_SO(1);
-    _PUSH(*ff_tos(R));
+    _FF_PUSH(*ff_tos(R));
     R->top--;
     _FF_NEXT();
 
@@ -179,5 +179,5 @@ case FF_OP_FROM_R:
 case FF_OP_FETCH_R:
     _FF_RSL(1);
     _FF_SO(1);
-    _PUSH(*ff_tos(R));
+    _FF_PUSH(*ff_tos(R));
     _FF_NEXT();

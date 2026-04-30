@@ -10,27 +10,27 @@ case FF_OP_2DUP:
     _FF_SL(2);
     _FF_SO(2);
     {
-        ff_int_t a = _NOS, b = tos;
-        _PUSH(a);
-        _PUSH(b);
+        ff_int_t a = _FF_NOS, b = tos;
+        _FF_PUSH(a);
+        _FF_PUSH(b);
     }
     _FF_NEXT();
 
 /** ( a b -- )  `2drop` — discard two cells. */
 case FF_OP_2DROP:
     _FF_SL(2);
-    _DROPN(2);
+    _FF_DROPN(2);
     _FF_NEXT();
 
 /** ( a b c d -- c d a b )  `2swap` — exchange the two pairs. */
 case FF_OP_2SWAP:
     _FF_SL(4);
     {
-        ff_int_t a = tos, b = _NOS;
-        tos     = _SAT(2);
-        _NOS    = _SAT(3);
-        _SAT(2) = a;
-        _SAT(3) = b;
+        ff_int_t a = tos, b = _FF_NOS;
+        tos     = _FF_SAT(2);
+        _FF_NOS    = _FF_SAT(3);
+        _FF_SAT(2) = a;
+        _FF_SAT(3) = b;
     }
     _FF_NEXT();
 
@@ -39,8 +39,8 @@ case FF_OP_2OVER:
     _FF_SL(4);
     _FF_SO(2);
     {
-        ff_int_t a = _SAT(3), b = _SAT(2);
-        _PUSH(a);
-        _PUSH(b);
+        ff_int_t a = _FF_SAT(3), b = _FF_SAT(2);
+        _FF_PUSH(a);
+        _FF_PUSH(b);
     }
     _FF_NEXT();

@@ -11,7 +11,7 @@ case FF_OP_EVALUATE:
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
     {
         const char *src = (const char *)(intptr_t)tos;
-        _DROP();
+        _FF_DROP();
         ff_int_t *prev_ip = ff->ip;
         _FF_SYNC();
         ff->ip = NULL;
@@ -19,7 +19,7 @@ case FF_OP_EVALUATE:
         ff->ip = prev_ip;
         _FF_RESTORE();
         _FF_SO(1);
-        _PUSH((ff_int_t)ec);
+        _FF_PUSH((ff_int_t)ec);
     }
     _FF_NEXT();
 
@@ -29,11 +29,11 @@ case FF_OP_LOAD:
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
     {
         const char *path = (const char *)(intptr_t)tos;
-        _DROP();
+        _FF_DROP();
         _FF_SYNC();
         ff_error_t ec = ff_load(ff, path);
         _FF_RESTORE();
         _FF_SO(1);
-        _PUSH((ff_int_t)ec);
+        _FF_PUSH((ff_int_t)ec);
     }
     _FF_NEXT();

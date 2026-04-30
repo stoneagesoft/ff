@@ -15,7 +15,7 @@ case FF_OP_CREATE_RUNTIME:
     _FF_SO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        _PUSH_PTR(nw->heap.data);
+        _FF_PUSH_PTR(nw->heap.data);
     }
     _FF_NEXT();
 
@@ -27,7 +27,7 @@ case FF_OP_VAR_FETCH:
     _FF_SO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        _PUSH(nw->heap.data[0]);
+        _FF_PUSH(nw->heap.data[0]);
     }
     _FF_NEXT();
 
@@ -38,7 +38,7 @@ case FF_OP_VAR_STORE:
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         nw->heap.data[0] = tos;
-        _DROP();
+        _FF_DROP();
     }
     _FF_NEXT();
 
@@ -48,7 +48,7 @@ case FF_OP_VAR_PLUS_STORE:
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         nw->heap.data[0] += tos;
-        _DROP();
+        _FF_DROP();
     }
     _FF_NEXT();
 
@@ -57,7 +57,7 @@ case FF_OP_CONSTANT_RUNTIME:
     _FF_SO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        _PUSH(nw->heap.data[0]);
+        _FF_PUSH(nw->heap.data[0]);
     }
     _FF_NEXT();
 
@@ -92,7 +92,7 @@ case FF_OP_CONSTANT:
                    ff_word_new(" ", NULL, FF_OP_CONSTANT_RUNTIME, NULL));
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, tos);
     ff_heap_trim(&ff_dict_top(&ff->dict)->heap);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( -- )  Runtime entry for a DEFER-built word: call through stored xt.

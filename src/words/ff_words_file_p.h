@@ -22,7 +22,7 @@ case FF_OP_FOPEN:
     _FF_SYNC();
     {
         FILE *f = fopen((const char *)(intptr_t)tos,
-                        (const char *)(intptr_t)_NOS);
+                        (const char *)(intptr_t)_FF_NOS);
         if (!f)
         {
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
@@ -47,8 +47,8 @@ case FF_OP_FGETS:
     _FF_SL(3);
     _FF_SYNC();
     {
-        char *r = fgets((char *)(intptr_t)tos, (int)_NOS,
-                        (FILE *)(intptr_t)_SAT(2));
+        char *r = fgets((char *)(intptr_t)tos, (int)_FF_NOS,
+                        (FILE *)(intptr_t)_FF_SAT(2));
         S->top -= 2;
         tos = (ff_int_t)(intptr_t)r;
     }
@@ -60,7 +60,7 @@ case FF_OP_FPUTS:
     _FF_SYNC();
     {
         int r = fputs((const char *)(intptr_t)tos,
-                      (FILE *)(intptr_t)_NOS);
+                      (FILE *)(intptr_t)_FF_NOS);
         --S->top;
         tos = r;
     }
@@ -78,7 +78,7 @@ case FF_OP_FPUTC:
     _FF_SL(2);
     _FF_SYNC();
     {
-        int r = fputc((int)tos, (FILE *)(intptr_t)_NOS);
+        int r = fputc((int)tos, (FILE *)(intptr_t)_FF_NOS);
         --S->top;
         tos = r;
     }
@@ -96,8 +96,8 @@ case FF_OP_FSEEK:
     _FF_SL(3);
     _FF_SYNC();
     {
-        int r = fseek((FILE *)(intptr_t)_SAT(2),
-                      (long)_NOS, (int)tos);
+        int r = fseek((FILE *)(intptr_t)_FF_SAT(2),
+                      (long)_FF_NOS, (int)tos);
         S->top -= 2;
         tos = r;
     }
@@ -106,37 +106,37 @@ case FF_OP_FSEEK:
 /** ( -- fp )  `stdin` — push the standard input file pointer. */
 case FF_OP_STDIN:
     _FF_SO(1);
-    _PUSH_PTR(stdin);
+    _FF_PUSH_PTR(stdin);
     _FF_NEXT();
 
 /** ( -- fp )  `stdout` — push the standard output file pointer. */
 case FF_OP_STDOUT:
     _FF_SO(1);
-    _PUSH_PTR(stdout);
+    _FF_PUSH_PTR(stdout);
     _FF_NEXT();
 
 /** ( -- fp )  `stderr` — push the standard error file pointer. */
 case FF_OP_STDERR:
     _FF_SO(1);
-    _PUSH_PTR(stderr);
+    _FF_PUSH_PTR(stderr);
     _FF_NEXT();
 
 /** ( -- whence )  `seek_set` — push SEEK_SET. */
 case FF_OP_SEEK_SET:
     _FF_SO(1);
-    _PUSH(SEEK_SET);
+    _FF_PUSH(SEEK_SET);
     _FF_NEXT();
 
 /** ( -- whence )  `seek_cur` — push SEEK_CUR. */
 case FF_OP_SEEK_CUR:
     _FF_SO(1);
-    _PUSH(SEEK_CUR);
+    _FF_PUSH(SEEK_CUR);
     _FF_NEXT();
 
 /** ( -- whence )  `seek_end` — push SEEK_END. */
 case FF_OP_SEEK_END:
     _FF_SO(1);
-    _PUSH(SEEK_END);
+    _FF_PUSH(SEEK_END);
     _FF_NEXT();
 
 /** ( errno -- s )  `strerror` — translate errno into a message pointer. */

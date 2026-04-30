@@ -13,7 +13,7 @@ case FF_OP_HERE:
         ff_int_t *p = h->byte_off
                     ? (ff_int_t *)((char *)&h->data[h->size - 1] + h->byte_off)
                     : &h->data[h->size];
-        _PUSH_PTR(p);
+        _FF_PUSH_PTR(p);
     }
     _FF_NEXT();
 
@@ -21,8 +21,8 @@ case FF_OP_HERE:
 case FF_OP_STORE:
     _FF_SL(2);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(ff_int_t));
-    *(ff_int_t *)(intptr_t)tos = _NOS;
-    _DROPN(2);
+    *(ff_int_t *)(intptr_t)tos = _FF_NOS;
+    _FF_DROPN(2);
     _FF_NEXT();
 
 /** ( a -- v )  `@` — fetch from address a. */
@@ -36,30 +36,30 @@ case FF_OP_FETCH:
 case FF_OP_PLUS_STORE:
     _FF_SL(2);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(ff_int_t));
-    *(ff_int_t *)(intptr_t)tos += _NOS;
-    _DROPN(2);
+    *(ff_int_t *)(intptr_t)tos += _FF_NOS;
+    _FF_DROPN(2);
     _FF_NEXT();
 
 /** ( n -- )  `allot` — reserve n cells in the current heap. */
 case FF_OP_ALLOT:
     _FF_SL(1);
     ff_heap_alloc(&ff_dict_top(&ff->dict)->heap, (int)tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( v -- )  `,` — append a single cell to the current heap. */
 case FF_OP_COMMA:
     _FF_SL(1);
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( v a -- )  `c!` — store v as a single byte at address a. */
 case FF_OP_C_STORE:
     _FF_SL(2);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(char));
-    *(char *)(intptr_t)tos = (char)_NOS;
-    _DROPN(2);
+    *(char *)(intptr_t)tos = (char)_FF_NOS;
+    _FF_DROPN(2);
     _FF_NEXT();
 
 /** ( a -- v )  `c@` — fetch a single byte from address a. */
@@ -73,7 +73,7 @@ case FF_OP_C_FETCH:
 case FF_OP_C_COMMA:
     _FF_SL(1);
     ff_heap_compile_char(&ff_dict_top(&ff->dict)->heap, (char)tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( -- )  `align` — align current heap to a cell boundary. */
