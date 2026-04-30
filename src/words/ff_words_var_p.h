@@ -11,7 +11,7 @@
  */
 
 /** ( -- a )  Runtime entry for a CREATE-built word: push its heap pointer. */
-_FF_CASE(FF_OP_CREATE_RUNTIME)
+case FF_OP_CREATE_RUNTIME:
     _FF_SO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
@@ -23,7 +23,7 @@ _FF_CASE(FF_OP_CREATE_RUNTIME)
     the variable's parameter field directly, no intermediate
     address-on-stack round-trip. Emitted when CREATE_RUNTIME is
     immediately followed by FETCH. */
-_FF_CASE(FF_OP_VAR_FETCH)
+case FF_OP_VAR_FETCH:
     _FF_SO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
@@ -33,7 +33,7 @@ _FF_CASE(FF_OP_VAR_FETCH)
 
 /** ( v -- )  Peephole superinstruction: `v !` → store TOS at the
     variable's parameter field. */
-_FF_CASE(FF_OP_VAR_STORE)
+case FF_OP_VAR_STORE:
     _FF_SL(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
@@ -43,7 +43,7 @@ _FF_CASE(FF_OP_VAR_STORE)
     _FF_NEXT();
 
 /** ( delta -- )  Peephole superinstruction: `v +!`. */
-_FF_CASE(FF_OP_VAR_PLUS_STORE)
+case FF_OP_VAR_PLUS_STORE:
     _FF_SL(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
@@ -53,7 +53,7 @@ _FF_CASE(FF_OP_VAR_PLUS_STORE)
     _FF_NEXT();
 
 /** ( -- v )  Runtime entry for a CONSTANT-built word: push the stored value. */
-_FF_CASE(FF_OP_CONSTANT_RUNTIME)
+case FF_OP_CONSTANT_RUNTIME:
     _FF_SO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
@@ -62,19 +62,19 @@ _FF_CASE(FF_OP_CONSTANT_RUNTIME)
     _FF_NEXT();
 
 /** ( -- )  `forget` — mark next token to be removed via ff_dict_forget(). */
-_FF_CASE(FF_OP_FORGET)
+case FF_OP_FORGET:
     ff->state |= FF_STATE_FORGET_PENDING;
     _FF_NEXT();
 
 /** ( -- )  `create` — start a new no-data definition; next token names it. */
-_FF_CASE(FF_OP_CREATE)
+case FF_OP_CREATE:
     ff->state |= FF_STATE_DEF_PENDING;
     ff_dict_append(&ff->dict,
                    ff_word_new(" ", NULL, FF_OP_CREATE_RUNTIME, NULL));
     _FF_NEXT();
 
 /** ( -- )  `variable` — like CREATE but reserves one cell. */
-_FF_CASE(FF_OP_VARIABLE)
+case FF_OP_VARIABLE:
     ff->state |= FF_STATE_DEF_PENDING;
     ff_dict_append(&ff->dict,
                    ff_word_new(" ", NULL, FF_OP_CREATE_RUNTIME, NULL));
@@ -85,7 +85,7 @@ _FF_CASE(FF_OP_VARIABLE)
     _FF_NEXT();
 
 /** ( v -- )  `constant` — define a word whose runtime pushes v. */
-_FF_CASE(FF_OP_CONSTANT)
+case FF_OP_CONSTANT:
     _FF_SL(1);
     ff->state |= FF_STATE_DEF_PENDING;
     ff_dict_append(&ff->dict,
@@ -98,7 +98,7 @@ _FF_CASE(FF_OP_CONSTANT)
 /** ( -- )  Runtime entry for a DEFER-built word: call through stored xt.
     cur_word is left untouched — the recursive ff_exec saves and
     restores it via prev_cur_word, so the caller's value survives. */
-_FF_CASE(FF_OP_DEFER_RUNTIME)
+case FF_OP_DEFER_RUNTIME:
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         ff_word_t *target = (ff_word_t *)(intptr_t)nw->heap.data[0];
@@ -118,7 +118,7 @@ _FF_CASE(FF_OP_DEFER_RUNTIME)
     _FF_NEXT();
 
 /** ( -- )  `defer` — create a deferred word with no action; next token names it. */
-_FF_CASE(FF_OP_DEFER)
+case FF_OP_DEFER:
     ff->state |= FF_STATE_DEF_PENDING;
     ff_dict_append(&ff->dict,
                    ff_word_new(" ", NULL, FF_OP_DEFER_RUNTIME, NULL));
@@ -130,7 +130,7 @@ _FF_CASE(FF_OP_DEFER)
     _FF_NEXT();
 
 /** ( xt -- )  `is` — store xt into the next-token-named deferred word. */
-_FF_CASE(FF_OP_IS)
+case FF_OP_IS:
     _FF_SL(1);
     ff->state |= FF_STATE_IS_PENDING;
     _FF_NEXT();

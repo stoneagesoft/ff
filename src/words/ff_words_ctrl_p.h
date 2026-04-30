@@ -7,7 +7,7 @@
 
 /** ( -- )  R: ( -- ret cur )  Enter a colon-def: push the caller's ip
     and cur_word, then jump to the callee's heap. EXIT pops both. */
-_FF_CASE(FF_OP_NEST)
+case FF_OP_NEST:
     _FF_WATCHDOG_TICK();
     _FF_RSO_T(2);
     {
@@ -22,7 +22,7 @@ _FF_CASE(FF_OP_NEST)
     _FF_NEXT();
 
 /** ( -- )  Tail-call NEST: enter a colon-def without saving a return frame. */
-_FF_CASE(FF_OP_TNEST)
+case FF_OP_TNEST:
     /* Tail-call NEST: emitted by the SEMICOLON peephole when a colon-def
        ends with `... NEST x EXIT`. The current frame is being abandoned,
        so we don't push to R or BT — when the called word EXITs it pops
@@ -38,7 +38,7 @@ _FF_CASE(FF_OP_TNEST)
     _FF_NEXT();
 
 /** ( -- )  R: ( ret cur -- )  Return from a colon-def. */
-_FF_CASE(FF_OP_EXIT)
+case FF_OP_EXIT:
     _FF_RSL_T(2);
     ff->cur_word = (ff_word_t *)(intptr_t)*ff_tos(R);
     R->top--;
@@ -51,7 +51,7 @@ _FF_CASE(FF_OP_EXIT)
     _FF_NEXT();
 
 /** ( -- )  Unconditional jump by the inline offset cell. */
-_FF_CASE(FF_OP_BRANCH)
+case FF_OP_BRANCH:
     /* Watchdog only on the back-branch (loop AGAIN/REPEAT path). The
        forward case is structural (ELSE) and can't loop. */
     if (*ip < 0)
@@ -60,7 +60,7 @@ _FF_CASE(FF_OP_BRANCH)
     _FF_NEXT();
 
 /** ( flag -- )  Pop and jump if zero. */
-_FF_CASE(FF_OP_QBRANCH)
+case FF_OP_QBRANCH:
     _FF_SL(1);
     if (tos == 0)
     {
@@ -74,7 +74,7 @@ _FF_CASE(FF_OP_QBRANCH)
     _FF_NEXT();
 
 /** ( limit start -- )  R: ( -- leave-target limit index )  Runtime DO entry. */
-_FF_CASE(FF_OP_XDO)
+case FF_OP_XDO:
     _FF_SL(2);
     _FF_RSO_T(3);
     ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
@@ -85,7 +85,7 @@ _FF_CASE(FF_OP_XDO)
     _FF_NEXT();
 
 /** ( limit start -- )  Runtime ?DO entry: skip body when start == limit. */
-_FF_CASE(FF_OP_XQDO)
+case FF_OP_XQDO:
     _FF_SL(2);
     if (tos == _NOS)
     {
@@ -104,7 +104,7 @@ _FF_CASE(FF_OP_XQDO)
     _FF_NEXT();
 
 /** ( -- )  Runtime LOOP back-edge: increment index, branch unless done. */
-_FF_CASE(FF_OP_XLOOP)
+case FF_OP_XLOOP:
     _FF_RSL_T(3);
     *ff_tos(R) += 1;
     if (*ff_tos(R) >= *ff_nos(R))
@@ -120,7 +120,7 @@ _FF_CASE(FF_OP_XLOOP)
     _FF_NEXT();
 
 /** ( delta -- )  Runtime +LOOP back-edge with arbitrary index delta. */
-_FF_CASE(FF_OP_PXLOOP)
+case FF_OP_PXLOOP:
     _FF_SL(1);
     _FF_RSL_T(3);
     {
@@ -142,14 +142,14 @@ _FF_CASE(FF_OP_PXLOOP)
     _FF_NEXT();
 
 /** ( -- index )  `i` — push the innermost loop's current index. */
-_FF_CASE(FF_OP_LOOP_I)
+case FF_OP_LOOP_I:
     _FF_RSL_T(3);
     _FF_SO(1);
     _PUSH(*ff_tos(R));
     _FF_NEXT();
 
 /** ( n -- n+i )  Superinstruction emitted by the `i +` peephole. */
-_FF_CASE(FF_OP_I_ADD)
+case FF_OP_I_ADD:
     _FF_RSL_T(3);
     _FF_SL(1);
     tos += *ff_tos(R);
@@ -158,7 +158,7 @@ _FF_CASE(FF_OP_I_ADD)
 /** ( n -- n+i )  Superinstruction: `i + loop` — fused index-add and
     LOOP back-edge. Halves the dispatch count of the canonical
     summing loop `0 N 0 do  i +  loop`. */
-_FF_CASE(FF_OP_I_ADD_LOOP)
+case FF_OP_I_ADD_LOOP:
     _FF_RSL_T(3);
     _FF_SL(1);
     tos += *ff_tos(R);          /* i + */
@@ -176,14 +176,14 @@ _FF_CASE(FF_OP_I_ADD_LOOP)
     _FF_NEXT();
 
 /** ( -- )  `leave` — exit innermost counted loop early. */
-_FF_CASE(FF_OP_LEAVE)
+case FF_OP_LEAVE:
     _FF_RSL_T(3);
     ip = (ff_int_t *)(intptr_t)*ff_sat(R, 2);
     ff_stack_popn(R, 3);
     _FF_NEXT();
 
 /** ( n -- n n | 0 -- 0 )  `?dup` — duplicate iff non-zero. */
-_FF_CASE(FF_OP_QDUP)
+case FF_OP_QDUP:
     _FF_SL(1);
     if (tos != 0)
     {
@@ -193,20 +193,20 @@ _FF_CASE(FF_OP_QDUP)
     _FF_NEXT();
 
 /** ( -- index )  `j` — push the next-outer loop's current index. */
-_FF_CASE(FF_OP_LOOP_J)
+case FF_OP_LOOP_J:
     _FF_RSL_T(6);
     _FF_SO(1);
     _PUSH(*ff_sat(R, 3));
     _FF_NEXT();
 
 /** ( -- )  `quit` — clear return stack and exit ff_exec. */
-_FF_CASE(FF_OP_QUIT)
+case FF_OP_QUIT:
     R->top = 0;
     ip = NULL;
     goto done;
 
 /** ( -- )  `abort` — reset engine state and exit ff_exec. */
-_FF_CASE(FF_OP_ABORT)
+case FF_OP_ABORT:
     _FF_SYNC();
     ff_abort(ff);
     _FF_RESTORE();
@@ -214,7 +214,7 @@ _FF_CASE(FF_OP_ABORT)
 
 /** ( n -- | i*x n -- )  `throw` — non-zero raises an exception; the
     most recent CATCH absorbs it. Zero is a no-op. */
-_FF_CASE(FF_OP_THROW)
+case FF_OP_THROW:
     _FF_SL(1);
     if (tos == 0)
     {
@@ -232,7 +232,7 @@ _FF_CASE(FF_OP_THROW)
 
 /** ( i*x xt -- j*x 0 | i*x n )  `catch` — execute xt; push 0 on clean
     return, or restore stacks and push the THROW code on exception. */
-_FF_CASE(FF_OP_CATCH)
+case FF_OP_CATCH:
     _FF_SL(1);
     {
         ff_word_t *xt = (ff_word_t *)(intptr_t)tos;
@@ -271,7 +271,7 @@ _FF_CASE(FF_OP_CATCH)
     _FF_NEXT();
 
 /** ( -- bp )  `if` — emit forward QBRANCH placeholder (immediate). */
-_FF_CASE(FF_OP_IF)
+case FF_OP_IF:
     _FF_COMPILING;
     _FF_SO(1);
     {
@@ -283,7 +283,7 @@ _FF_CASE(FF_OP_IF)
     _FF_NEXT();
 
 /** ( bp1 -- bp2 )  `else` — patch IF, emit forward BRANCH placeholder. */
-_FF_CASE(FF_OP_ELSE)
+case FF_OP_ELSE:
     _FF_COMPILING;
     _FF_SL(1);
     {
@@ -300,7 +300,7 @@ _FF_CASE(FF_OP_ELSE)
     _FF_NEXT();
 
 /** ( bp -- )  `then` — patch the matching forward branch. */
-_FF_CASE(FF_OP_THEN)
+case FF_OP_THEN:
     _FF_COMPILING;
     _FF_SL(1);
     {
@@ -316,7 +316,7 @@ _FF_CASE(FF_OP_THEN)
     _FF_NEXT();
 
 /** ( -- target )  `begin` — record the current heap position. */
-_FF_CASE(FF_OP_BEGIN)
+case FF_OP_BEGIN:
     _FF_COMPILING;
     _FF_SO(1);
     {
@@ -329,7 +329,7 @@ _FF_CASE(FF_OP_BEGIN)
     _FF_NEXT();
 
 /** ( target -- )  `until` — emit conditional back-branch. */
-_FF_CASE(FF_OP_UNTIL)
+case FF_OP_UNTIL:
     _FF_COMPILING;
     _FF_SL(1);
     {
@@ -341,7 +341,7 @@ _FF_CASE(FF_OP_UNTIL)
     _FF_NEXT();
 
 /** ( target -- )  `again` — emit unconditional back-branch. */
-_FF_CASE(FF_OP_AGAIN)
+case FF_OP_AGAIN:
     _FF_COMPILING;
     _FF_SL(1);
     {
@@ -353,7 +353,7 @@ _FF_CASE(FF_OP_AGAIN)
     _FF_NEXT();
 
 /** ( target -- target bp )  `while` — emit forward QBRANCH inside BEGIN..REPEAT. */
-_FF_CASE(FF_OP_WHILE)
+case FF_OP_WHILE:
     _FF_COMPILING;
     _FF_SO(1);
     {
@@ -365,7 +365,7 @@ _FF_CASE(FF_OP_WHILE)
     _FF_NEXT();
 
 /** ( target bp -- )  `repeat` — back-branch and patch WHILE's forward branch. */
-_FF_CASE(FF_OP_REPEAT)
+case FF_OP_REPEAT:
     _FF_COMPILING;
     _FF_SL(2);
     {
@@ -383,7 +383,7 @@ _FF_CASE(FF_OP_REPEAT)
     _FF_NEXT();
 
 /** ( -- bp )  `do` — emit XDO + leave-offset placeholder. */
-_FF_CASE(FF_OP_DO)
+case FF_OP_DO:
     _FF_COMPILING;
     _FF_SO(1);
     {
@@ -395,7 +395,7 @@ _FF_CASE(FF_OP_DO)
     _FF_NEXT();
 
 /** ( -- bp )  `?do` — emit XQDO + leave-offset placeholder. */
-_FF_CASE(FF_OP_QDO)
+case FF_OP_QDO:
     _FF_COMPILING;
     _FF_SO(1);
     {
@@ -407,7 +407,7 @@ _FF_CASE(FF_OP_QDO)
     _FF_NEXT();
 
 /** ( bp -- )  `loop` — emit XLOOP + back-offset, patch leave-target. */
-_FF_CASE(FF_OP_LOOP)
+case FF_OP_LOOP:
     _FF_COMPILING;
     _FF_SL(1);
     {
@@ -423,7 +423,7 @@ _FF_CASE(FF_OP_LOOP)
     _FF_NEXT();
 
 /** ( bp -- )  `+loop` — emit PXLOOP + back-offset, patch leave-target. */
-_FF_CASE(FF_OP_PLOOP)
+case FF_OP_PLOOP:
     _FF_COMPILING;
     _FF_SL(1);
     {
@@ -442,7 +442,7 @@ _FF_CASE(FF_OP_PLOOP)
  * `abort"` — at compile-time set up the inline string anticipation;
  * at runtime print the inline string and abort the engine.
  */
-_FF_CASE(FF_OP_ABORTQ)
+case FF_OP_ABORTQ:
     /* If invoked at compile time (direct entry from ff_eval), set up to
        compile (abortq) + string. If invoked at runtime in compiled heap,
        print the inline string and abort. */

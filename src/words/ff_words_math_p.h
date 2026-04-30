@@ -11,7 +11,7 @@
  */
 
 /** ( n1 n2 -- n3 )  `+` — n3 = n1 + n2. */
-_FF_CASE(FF_OP_ADD)
+case FF_OP_ADD:
     _FF_SL(2);
     tos = _NOS + tos;
     --S->top;
@@ -19,14 +19,14 @@ _FF_CASE(FF_OP_ADD)
 
 /** ( a b -- a a+b )  Superinstruction: `over +` — common base+offset
     idiom. Saves one push/pop round-trip. */
-_FF_CASE(FF_OP_OVER_PLUS)
+case FF_OP_OVER_PLUS:
     _FF_SL(2);
     tos += _NOS;
     _FF_NEXT();
 
 /** ( n -- n+r )  Superinstruction: `r@ +` — index-relative offset
     add inside DO loops without the intermediate push. */
-_FF_CASE(FF_OP_R_PLUS)
+case FF_OP_R_PLUS:
     _FF_RSL_T(1);
     _FF_SL(1);
     tos += *ff_tos(R);
@@ -34,27 +34,27 @@ _FF_CASE(FF_OP_R_PLUS)
 
 /** ( a -- 2a )  Superinstruction: `dup +` — double TOS in place,
     saving the dup push then add-and-drop round-trip. */
-_FF_CASE(FF_OP_DUP_ADD)
+case FF_OP_DUP_ADD:
     _FF_SL(1);
     tos += tos;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `-` — n3 = n1 - n2. */
-_FF_CASE(FF_OP_SUB)
+case FF_OP_SUB:
     _FF_SL(2);
     tos = _NOS - tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `*` — n3 = n1 * n2. */
-_FF_CASE(FF_OP_MUL)
+case FF_OP_MUL:
     _FF_SL(2);
     tos = _NOS * tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `/` — n3 = n1 / n2; raises FF_ERR_DIV_ZERO if n2 is 0. */
-_FF_CASE(FF_OP_DIV)
+case FF_OP_DIV:
     _FF_SL(2);
     if (tos == 0)
     {
@@ -67,7 +67,7 @@ _FF_CASE(FF_OP_DIV)
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `mod` — n3 = n1 % n2; raises FF_ERR_DIV_ZERO if n2 is 0. */
-_FF_CASE(FF_OP_MOD)
+case FF_OP_MOD:
     _FF_SL(2);
     if (tos == 0)
     {
@@ -80,100 +80,100 @@ _FF_CASE(FF_OP_MOD)
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `and` — bitwise AND. */
-_FF_CASE(FF_OP_AND)
+case FF_OP_AND:
     _FF_SL(2);
     tos = _NOS & tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `or` — bitwise OR. */
-_FF_CASE(FF_OP_OR)
+case FF_OP_OR:
     _FF_SL(2);
     tos = _NOS | tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `xor` — bitwise exclusive OR. */
-_FF_CASE(FF_OP_XOR)
+case FF_OP_XOR:
     _FF_SL(2);
     tos = _NOS ^ tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `not` — bitwise complement. */
-_FF_CASE(FF_OP_NOT)
+case FF_OP_NOT:
     _FF_SL(1);
     tos = ~tos;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `=` — flag is FF_TRUE iff n1 == n2. */
-_FF_CASE(FF_OP_EQ)
+case FF_OP_EQ:
     _FF_SL(2);
     tos = (_NOS == tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `<>` — flag is FF_TRUE iff n1 != n2. */
-_FF_CASE(FF_OP_NEQ)
+case FF_OP_NEQ:
     _FF_SL(2);
     tos = (_NOS != tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `<` — flag is FF_TRUE iff n1 <  n2. */
-_FF_CASE(FF_OP_LT)
+case FF_OP_LT:
     _FF_SL(2);
     tos = (_NOS < tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `>` — flag is FF_TRUE iff n1 >  n2. */
-_FF_CASE(FF_OP_GT)
+case FF_OP_GT:
     _FF_SL(2);
     tos = (_NOS > tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `<=` — flag is FF_TRUE iff n1 <= n2. */
-_FF_CASE(FF_OP_LE)
+case FF_OP_LE:
     _FF_SL(2);
     tos = (_NOS <= tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `>=` — flag is FF_TRUE iff n1 >= n2. */
-_FF_CASE(FF_OP_GE)
+case FF_OP_GE:
     _FF_SL(2);
     tos = (_NOS >= tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 -- flag )  `0=` — flag is FF_TRUE iff n1 is zero. */
-_FF_CASE(FF_OP_ZERO_EQ)
+case FF_OP_ZERO_EQ:
     _FF_SL(1);
     tos = (tos == 0) ? FF_TRUE : FF_FALSE;
     _FF_NEXT();
 
 /** ( n1 -- flag )  `0<` — flag is FF_TRUE iff n1 is negative. */
-_FF_CASE(FF_OP_ZERO_LT)
+case FF_OP_ZERO_LT:
     _FF_SL(1);
     tos = (tos < 0) ? FF_TRUE : FF_FALSE;
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `1+` — increment TOS. */
-_FF_CASE(FF_OP_INC)
+case FF_OP_INC:
     _FF_SL(1);
     tos += 1;
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `1-` — decrement TOS. */
-_FF_CASE(FF_OP_DEC)
+case FF_OP_DEC:
     _FF_SL(1);
     tos -= 1;
     _FF_NEXT();
 
 /** ( n1 n2 -- rem quot )  `/mod` — Euclidean div+mod in one shot. */
-_FF_CASE(FF_OP_DIVMOD)
+case FF_OP_DIVMOD:
     _FF_SL(2);
     if (tos == 0)
     {
@@ -189,7 +189,7 @@ _FF_CASE(FF_OP_DIVMOD)
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `min` — n3 = min(n1, n2). */
-_FF_CASE(FF_OP_MIN)
+case FF_OP_MIN:
     _FF_SL(2);
     if (tos > _NOS)
         tos = _NOS;
@@ -197,7 +197,7 @@ _FF_CASE(FF_OP_MIN)
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `max` — n3 = max(n1, n2). */
-_FF_CASE(FF_OP_MAX)
+case FF_OP_MAX:
     _FF_SL(2);
     if (tos < _NOS)
         tos = _NOS;
@@ -205,32 +205,32 @@ _FF_CASE(FF_OP_MAX)
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `negate` — arithmetic negation. */
-_FF_CASE(FF_OP_NEGATE)
+case FF_OP_NEGATE:
     _FF_SL(1);
     tos = -tos;
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `abs` — n2 = |n1|. */
-_FF_CASE(FF_OP_ABS)
+case FF_OP_ABS:
     _FF_SL(1);
     if (tos < 0)
         tos = -tos;
     _FF_NEXT();
 
 /** ( n1 -- flag )  `0<>` — flag is FF_TRUE iff n1 is non-zero. */
-_FF_CASE(FF_OP_ZERO_NEQ)
+case FF_OP_ZERO_NEQ:
     _FF_SL(1);
     tos = (tos != 0) ? FF_TRUE : FF_FALSE;
     _FF_NEXT();
 
 /** ( n1 -- flag )  `0>` — flag is FF_TRUE iff n1 is positive. */
-_FF_CASE(FF_OP_ZERO_GT)
+case FF_OP_ZERO_GT:
     _FF_SL(1);
     tos = (tos > 0) ? FF_TRUE : FF_FALSE;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `shift` — n2 > 0 left-shifts, n2 < 0 right-shifts. */
-_FF_CASE(FF_OP_SHIFT)
+case FF_OP_SHIFT:
     _FF_SL(2);
     tos = tos < 0
                 ? (_NOS >> (-tos))
@@ -239,31 +239,31 @@ _FF_CASE(FF_OP_SHIFT)
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `2+` — add 2. */
-_FF_CASE(FF_OP_INC2)
+case FF_OP_INC2:
     _FF_SL(1);
     tos += 2;
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `2-` — subtract 2. */
-_FF_CASE(FF_OP_DEC2)
+case FF_OP_DEC2:
     _FF_SL(1);
     tos -= 2;
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `2*` — multiply by 2. */
-_FF_CASE(FF_OP_MUL2)
+case FF_OP_MUL2:
     _FF_SL(1);
     tos *= 2;
     _FF_NEXT();
 
 /** ( n1 -- n2 )  `2/` — divide by 2. */
-_FF_CASE(FF_OP_DIV2)
+case FF_OP_DIV2:
     _FF_SL(1);
     tos /= 2;
     _FF_NEXT();
 
 /** ( n -- )  `base` — set numeric base; only 10 and 16 are accepted. */
-_FF_CASE(FF_OP_SET_BASE)
+case FF_OP_SET_BASE:
     _FF_SL(1);
     switch (tos)
     {

@@ -9,14 +9,14 @@
  */
 
 /** ( -- s )  `(strlit)` — push pointer to the inline string payload. */
-_FF_CASE(FF_OP_STRLIT)
+case FF_OP_STRLIT:
     _FF_SO(1);
     _PUSH_PTR(ip + 1);
     ip += *ip;
     _FF_NEXT();
 
 /** ( n -- )  `string` — create a named buffer of n bytes. */
-_FF_CASE(FF_OP_STRING)
+case FF_OP_STRING:
     _FF_SL(1);
     ff->state |= FF_STATE_DEF_PENDING;
     ff_dict_append(&ff->dict,
@@ -27,7 +27,7 @@ _FF_CASE(FF_OP_STRING)
     _FF_NEXT();
 
 /** ( src dst -- )  `s!` — strcpy(dst, src). */
-_FF_CASE(FF_OP_S_STORE)
+case FF_OP_S_STORE:
     _FF_SL(2);
     /* `strcpy` reads the source up to '\0' and writes the same span
        to the destination, so both endpoints need the source length
@@ -43,7 +43,7 @@ _FF_CASE(FF_OP_S_STORE)
     _FF_NEXT();
 
 /** ( src dst -- )  `s+` — strcat(dst, src). */
-_FF_CASE(FF_OP_S_CAT)
+case FF_OP_S_CAT:
     _FF_SL(2);
     _FF_CHECK_ADDR((const void *)(intptr_t)_NOS, 1);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
@@ -59,14 +59,14 @@ _FF_CASE(FF_OP_S_CAT)
     _FF_NEXT();
 
 /** ( s -- n )  `strlen` — replace string with its length. */
-_FF_CASE(FF_OP_STRLEN)
+case FF_OP_STRLEN:
     _FF_SL(1);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
     tos = (ff_int_t)strlen((const char *)(intptr_t)tos);
     _FF_NEXT();
 
 /** ( s1 s2 -- n )  `strcmp` — -1 / 0 / +1 lexicographic comparison. */
-_FF_CASE(FF_OP_STRCMP)
+case FF_OP_STRCMP:
     _FF_SL(2);
     _FF_CHECK_ADDR((const void *)(intptr_t)_NOS, 1);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);

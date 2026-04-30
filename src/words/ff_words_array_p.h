@@ -6,7 +6,7 @@
  */
 
 /** ( n -- )  `array` — define a new word that holds n cells of storage. */
-_FF_CASE(FF_OP_ARRAY)
+case FF_OP_ARRAY:
     _FF_SL(1);
     ff->state |= FF_STATE_DEF_PENDING;
     ff_dict_append(&ff->dict,
@@ -18,7 +18,7 @@ _FF_CASE(FF_OP_ARRAY)
     _FF_NEXT();
 
 /** ( idx -- a )  Runtime entry: TOS = array_base + idx. */
-_FF_CASE(FF_OP_ARRAY_RUNTIME)
+case FF_OP_ARRAY_RUNTIME:
     _FF_SL(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;

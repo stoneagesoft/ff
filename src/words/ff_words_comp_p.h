@@ -7,7 +7,7 @@
 
 /** ( -- a )  R: ( -- ret cur )  Runtime entry of a DOES>-built word:
     save caller frame, jump to the does-clause, push the data field. */
-_FF_CASE(FF_OP_DOES_RUNTIME)
+case FF_OP_DOES_RUNTIME:
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         _FF_RSO_T(2);
@@ -23,41 +23,41 @@ _FF_CASE(FF_OP_DOES_RUNTIME)
     _FF_NEXT();
 
 /** ( -- )  `immediate` — flag the most recent definition as immediate. */
-_FF_CASE(FF_OP_IMMEDIATE)
+case FF_OP_IMMEDIATE:
     ff_dict_top(&ff->dict)->flags |= FF_WORD_IMMEDIATE;
     _FF_NEXT();
 
 /** ( -- )  `[` — switch from compile to interpret mode (immediate). */
-_FF_CASE(FF_OP_LBRACKET)
+case FF_OP_LBRACKET:
     _FF_COMPILING;
     ff->state &= ~FF_STATE_COMPILING;
     _FF_NEXT();
 
 /** ( -- )  `]` — switch from interpret to compile mode. */
-_FF_CASE(FF_OP_RBRACKET)
+case FF_OP_RBRACKET:
     ff->state |= FF_STATE_COMPILING;
     _FF_NEXT();
 
 /** ( -- flag )  `state` — push -1 if compiling, 0 if interpreting. */
-_FF_CASE(FF_OP_STATE)
+case FF_OP_STATE:
     _FF_SO(1);
     _PUSH((ff->state & FF_STATE_COMPILING) ? FF_TRUE : FF_FALSE);
     _FF_NEXT();
 
 /** ( -- )  `[']` — anticipate next-token tick (compile-time literal address). */
-_FF_CASE(FF_OP_BRACKET_TICK)
+case FF_OP_BRACKET_TICK:
     _FF_COMPILING;
     ff->state |= FF_STATE_CTICK_PENDING;
     _FF_NEXT();
 
 /** ( -- )  `[compile]` — compile next word non-immediate. */
-_FF_CASE(FF_OP_BRACKET_COMPILE)
+case FF_OP_BRACKET_COMPILE:
     _FF_COMPILING;
     ff->state |= FF_STATE_CBRACK_PENDING;
     _FF_NEXT();
 
 /** ( v -- )  `literal` — pop and compile a literal of that value. */
-_FF_CASE(FF_OP_LITERAL)
+case FF_OP_LITERAL:
     _FF_COMPILING;
     _FF_SL(1);
     ff_heap_compile_lit(&ff_dict_top(&ff->dict)->heap, tos);
@@ -65,20 +65,20 @@ _FF_CASE(FF_OP_LITERAL)
     _FF_NEXT();
 
 /** ( -- )  `compile` — compile the next inline cell verbatim. */
-_FF_CASE(FF_OP_COMPILE)
+case FF_OP_COMPILE:
     _FF_COMPILING;
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, *ip++);
     _FF_NEXT();
 
 /** ( -- )  `:` — start a new colon-def; placeholder name is renamed by next token. */
-_FF_CASE(FF_OP_COLON)
+case FF_OP_COLON:
     ff->state |= FF_STATE_COMPILING | FF_STATE_DEF_PENDING;
     ff_dict_append(&ff->dict,
                    ff_word_new(" ", NULL, FF_OP_NONE, NULL));
     _FF_NEXT();
 
 /** ( -- )  `;` — finish a colon-def; emits EXIT or folds to TNEST tail-call. */
-_FF_CASE(FF_OP_SEMICOLON)
+case FF_OP_SEMICOLON:
     _FF_COMPILING;
     {
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
@@ -99,7 +99,7 @@ _FF_CASE(FF_OP_SEMICOLON)
     _FF_NEXT();
 
 /** ( -- xt )  `'` — read next word, push its xt (or defer across input lines). */
-_FF_CASE(FF_OP_TICK)
+case FF_OP_TICK:
     _FF_SO(1);
     _FF_SYNC();
     {
@@ -150,7 +150,7 @@ _FF_CASE(FF_OP_TICK)
     ff_exec sets ff->ip to NULL on its way out (the sentinel that
     terminates an interpreter run); we save the outer ip across the
     nested call so the caller resumes at the next opcode. */
-_FF_CASE(FF_OP_EXECUTE)
+case FF_OP_EXECUTE:
     _FF_SL(1);
     {
         ff_word_t *tw = (ff_word_t *)(intptr_t)tos;
@@ -168,7 +168,7 @@ _FF_CASE(FF_OP_EXECUTE)
  * ( -- )  `does>` — install runtime body for the word being defined,
  * then bail out of the definition like an EXIT.
  */
-_FF_CASE(FF_OP_DOES)
+case FF_OP_DOES:
     _FF_RSL_T(2);
     ff_dict_top(&ff->dict)->does = ip;
     ff_dict_top(&ff->dict)->opcode = FF_OP_DOES_RUNTIME;
