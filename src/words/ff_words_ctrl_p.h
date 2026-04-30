@@ -5,15 +5,17 @@
  * It is NOT a standalone header — don't include it elsewhere.
  */
 
-/** ( -- )  R: ( -- ret )  Enter a colon-def: push current ip to R. */
+/** ( -- )  R: ( -- ret cur )  Enter a colon-def: push the caller's ip
+    and cur_word, then jump to the callee's heap. EXIT pops both. */
 case FF_OP_NEST:
     _FF_WATCHDOG_TICK();
-    _FF_RSO_T(1);
+    _FF_RSO_T(2);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         if (ff->state & FF_STATE_BACKTRACE)
             ff_bt_stack_push(BT, ff->cur_word);
         ff_stack_push(R, (ff_int_t)(intptr_t)ip);
+        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
         ff->cur_word = nw;
         ip = nw->heap.data;
     }
@@ -35,9 +37,11 @@ case FF_OP_TNEST:
     }
     _FF_NEXT();
 
-/** ( -- )  R: ( ret -- )  Return from a colon-def. */
+/** ( -- )  R: ( ret cur -- )  Return from a colon-def. */
 case FF_OP_EXIT:
-    _FF_RSL_T(1);
+    _FF_RSL_T(2);
+    ff->cur_word = (ff_word_t *)(intptr_t)*ff_tos(R);
+    R->top--;
     ip = (ff_int_t *)(intptr_t)*ff_tos(R);
     R->top--;
     if (!ip)

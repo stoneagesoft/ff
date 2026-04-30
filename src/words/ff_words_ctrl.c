@@ -18,10 +18,11 @@
 
 static void ff_w_nest(ff_t *ff)
 {
-    FF_RSO(ff, 1);
+    FF_RSO(ff, 2);
     if (ff->state & FF_STATE_BACKTRACE)
         ff_bt_stack_push(&ff->bt_stack, ff->cur_word);
     ff_stack_push(&ff->r_stack, (ff_int_t)(intptr_t)ff->ip);
+    ff_stack_push(&ff->r_stack, (ff_int_t)(intptr_t)ff->cur_word);
     ff->ip = ff->cur_word->heap.data;
 }
 

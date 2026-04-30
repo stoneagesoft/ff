@@ -15,7 +15,6 @@ case FF_OP_CREATE_RUNTIME:
     _FF_SO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        ff->cur_word = nw;
         _PUSH_PTR(nw->heap.data);
     }
     _FF_NEXT();
@@ -58,7 +57,6 @@ case FF_OP_CONSTANT_RUNTIME:
     _FF_SO(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        ff->cur_word = nw;
         _PUSH(nw->heap.data[0]);
     }
     _FF_NEXT();
@@ -93,11 +91,12 @@ case FF_OP_CONSTANT:
     _DROP();
     _FF_NEXT();
 
-/** ( -- )  Runtime entry for a DEFER-built word: call through stored xt. */
+/** ( -- )  Runtime entry for a DEFER-built word: call through stored xt.
+    cur_word is left untouched — the recursive ff_exec saves and
+    restores it via prev_cur_word, so the caller's value survives. */
 case FF_OP_DEFER_RUNTIME:
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        ff->cur_word = nw;
         ff_word_t *target = (ff_word_t *)(intptr_t)nw->heap.data[0];
         if (target == NULL)
         {

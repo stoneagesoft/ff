@@ -20,7 +20,6 @@ case FF_OP_ARRAY_RUNTIME:
     _FF_SL(1);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        ff->cur_word = nw;
         tos = (ff_int_t)(intptr_t)(nw->heap.data + tos);
     }
     _FF_NEXT();

@@ -40,6 +40,34 @@
 #include <string.h>
 
 
+/* ===================================================================
+ * Async abort flag — set by ff_request_abort (which may be called
+ * from a signal handler or another thread) and polled by the inner
+ * interpreter at every back-branch and word call.
+ *
+ * On a C11 toolchain with atomics support we use atomic_int with
+ * release/acquire semantics, so a setter on one CPU is observable
+ * to the polling loop on another within bounded latency on weakly-
+ * ordered architectures (ARM, RISC-V). On older toolchains and on
+ * MSVC builds without C11 atomics we fall back to
+ * `volatile sig_atomic_t` — same-thread (signal-handler) safety
+ * still holds; cross-thread visibility relies on the implementation.
+ * =================================================================== */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L \
+        && !defined(__STDC_NO_ATOMICS__)
+#  include <stdatomic.h>
+   typedef atomic_int ff_abort_flag_t;
+#  define FF_ABORT_LOAD(p)    atomic_load_explicit((p), memory_order_acquire)
+#  define FF_ABORT_STORE(p,v) atomic_store_explicit((p), (v), memory_order_release)
+#  define FF_ABORT_CLEAR(p)   atomic_store_explicit((p), 0, memory_order_relaxed)
+#else
+   typedef volatile sig_atomic_t ff_abort_flag_t;
+#  define FF_ABORT_LOAD(p)    (*(p))
+#  define FF_ABORT_STORE(p,v) (*(p) = (v))
+#  define FF_ABORT_CLEAR(p)   (*(p) = 0)
+#endif
+
+
 /**
  * @struct ff
  * @brief The interpreter instance.
@@ -65,8 +93,13 @@ struct ff
     ff_bt_stack_t bt_stack;             /**< Back-trace stack (when FF_STATE_BACKTRACE is on). */
     ff_int_t *ip;                       /**< Current instruction pointer (NULL when not running). */
 
-    char pad[FF_PAD_COUNT][FF_PAD_SIZE];/**< Ring of scratch byte buffers for transient strings. */
-    int pad_i;                          /**< Next ring slot to write. */
+    /* Bump arena for transient interpret-time strings. Strings are
+       appended forward; the arena grows on demand and is reset only
+       by ff_abort. See FF_PAD_INIT_SIZE in ff_config_p.h for the
+       lifetime contract. */
+    char  *pad_buf;                     /**< Heap-allocated arena base; NULL until first use. */
+    size_t pad_used;                    /**< Bytes consumed from @ref pad_buf. */
+    size_t pad_size;                    /**< Allocated capacity of @ref pad_buf. */
 
     ff_tokenizer_t tokenizer;           /**< Persistent lexer state. */
     const char *input;                  /**< Currently-tokenizing source buffer. */
@@ -81,12 +114,13 @@ struct ff
     /* Watchdog state. `abort_requested` is set asynchronously (by
        ff_request_abort, possibly from a signal handler or another
        thread) and polled by the inner interpreter at every
-       back-branch and word call. `opcodes_run` is the running
-       opcode count consulted by the polling watchdog callback;
-       reset on each ff_exec entry. */
-    volatile sig_atomic_t abort_requested;
-    uint64_t              opcodes_run;
-    uint64_t              next_watchdog_at;
+       back-branch and word call. See FF_ABORT_LOAD / FF_ABORT_STORE
+       above for the memory-order contract. `opcodes_run` is the
+       running opcode count consulted by the polling watchdog
+       callback; reset on each ff_exec entry. */
+    ff_abort_flag_t abort_requested;
+    uint64_t        opcodes_run;
+    uint64_t        next_watchdog_at;
 };
 
 

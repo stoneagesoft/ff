@@ -5,15 +5,17 @@
  * It is NOT a standalone header — don't include it elsewhere.
  */
 
-/** ( -- a )  R: ( -- ret )  Runtime entry of a DOES>-built word: jump to does-clause. */
+/** ( -- a )  R: ( -- ret cur )  Runtime entry of a DOES>-built word:
+    save caller frame, jump to the does-clause, push the data field. */
 case FF_OP_DOES_RUNTIME:
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        _FF_RSO_T(1);
+        _FF_RSO_T(2);
         _FF_SO(1);
         if (ff->state & FF_STATE_BACKTRACE)
             ff_bt_stack_push(BT, ff->cur_word);
         ff_stack_push(R, (ff_int_t)(intptr_t)ip);
+        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
         ff->cur_word = nw;
         ip = nw->does;
         _PUSH_PTR(nw->heap.data);
@@ -164,10 +166,13 @@ case FF_OP_EXECUTE:
  * then bail out of the definition like an EXIT.
  */
 case FF_OP_DOES:
-    _FF_RSL_T(1);
+    _FF_RSL_T(2);
     ff_dict_top(&ff->dict)->does = ip;
     ff_dict_top(&ff->dict)->opcode = FF_OP_DOES_RUNTIME;
-    /* Simulate EXIT to bail out of the definition. */
+    /* Simulate EXIT to bail out of the definition: pop the 2-cell
+       return frame (cur_word on top, ip below). */
+    ff->cur_word = (ff_word_t *)(intptr_t)*ff_tos(R);
+    R->top--;
     ip = (ff_int_t *)(intptr_t)*ff_tos(R);
     R->top--;
     if (BT->top > 0)

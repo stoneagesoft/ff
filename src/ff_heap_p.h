@@ -117,6 +117,8 @@ void ff_heap_compile_op(ff_heap_t *h, ff_opcode_t op);
 void ff_heap_compile_lit(ff_heap_t *h, ff_int_t v);
 
 
+typedef struct ff_arena ff_arena_t;
+
 /**
  * @struct ff_heap
  * @brief Growable cell array backing one word.
@@ -137,7 +139,30 @@ struct ff_heap
      * LIT 5 + → LITADD 5).
      */
     ff_opcode_t last_op;
+
+    /**
+     * When non-NULL, points at the dict's mutation_seq; bumped on
+     * any realloc that moves @ref data so the dict's interval index
+     * knows to rebuild. NULL for ad-hoc heaps not owned by a dict.
+     */
+    unsigned long *mutation_seq_p;
+
+    /**
+     * When non-NULL, every growth allocates a fresh region from the
+     * arena instead of malloc/realloc. The heap never frees its data
+     * (arena owns the lifetime); native-word heaps with a fn pointer
+     * already stashed at heap.data[0] keep the malloc path so that
+     * pre-arena allocation isn't orphaned.
+     */
+    ff_arena_t *arena;
 };
+
+/**
+ * Slow-path heap growth: handles both the malloc-realloc and the
+ * arena-allocate-new-region modes. The fast path is inlined in
+ * @ref ff_heap_ensure below.
+ */
+void ff_heap_grow(ff_heap_t *h, size_t extra);
 
 /**
  * Clear the peephole tracker so the next @ref ff_heap_compile_op
@@ -160,15 +185,7 @@ static inline void ff_heap_inhibit_peephole(ff_heap_t *h)
 static inline void ff_heap_ensure(ff_heap_t *h, size_t extra)
 {
     if (h->size + extra > h->capacity)
-    {
-        size_t nc = h->capacity
-                        ? h->capacity * 2
-                        : FF_INIT_HEAP_SIZE;
-        while (nc < h->size + extra)
-            nc *= 2;
-        h->data = (ff_int_t *)realloc(h->data, nc * sizeof(ff_int_t));
-        h->capacity = nc;
-    }
+        ff_heap_grow(h, extra);
 }
 
 /**

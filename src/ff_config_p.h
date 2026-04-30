@@ -19,10 +19,17 @@
 /** @brief Depth of the back-trace stack used for error reporting. */
 #define FF_BT_STACK_SIZE    256
 
-/** @brief Number of slots in the temporary string ring buffer. */
-#define FF_PAD_COUNT        128
-/** @brief Bytes per ring-buffer slot in the string pad. */
-#define FF_PAD_SIZE         256
+/**
+ * @brief Initial capacity of the transient-string bump arena, in bytes.
+ *
+ * Strings pushed by interpret-time string literals (`"foo"`) are
+ * appended here. The arena grows on demand and is reset by
+ * @ref ff_abort. Pointers handed out remain stable for the engine's
+ * lifetime (or until the next abort), eliminating the "silent ring
+ * recycle" footgun where two long-lived stack pointers ended up
+ * aliasing the same slot after >128 string pushes.
+ */
+#define FF_PAD_INIT_SIZE    (32 * 1024)
 
 /** @brief Maximum length of a single token, in bytes. */
 #define FF_TOKEN_SIZE       256
