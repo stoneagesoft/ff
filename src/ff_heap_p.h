@@ -165,6 +165,18 @@ struct ff_heap
 void ff_heap_grow(ff_heap_t *h, size_t extra);
 
 /**
+ * Shrink an arena-bound heap's reservation to its actual used size,
+ * returning the unused tail to the arena's bump pointer.
+ *
+ * Only effective when the heap was the most recent allocation in its
+ * arena slab — otherwise the call is a no-op. Used as a "definition
+ * is now closed" hook to recover the doubling overhead from
+ * `ff_heap_grow` (a finalized 50-cell colon-def normally occupies
+ * a 64-cell slot; trim returns those 14 cells to the arena).
+ */
+void ff_heap_trim(ff_heap_t *h);
+
+/**
  * Clear the peephole tracker so the next @ref ff_heap_compile_op
  * can't fuse with whatever was emitted before. Called by every
  * control-flow immediate (IF/THEN/ELSE/BEGIN/…) so a fold doesn't

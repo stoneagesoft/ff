@@ -4,6 +4,7 @@
 
 #include <ff_p.h>
 #include <ff_word_def_p.h>
+#include <ff_opcode_meta_p.h>
 
 #include "ff_md.h"
 
@@ -378,42 +379,15 @@ static void see_continue(see_printer_t *p, const char *kw)
 }
 
 /* Length of an opcode's encoded form (opcode cell + any inline operand
-   cells). Returns 1 unless the opcode carries operands. */
+   cells). Reads from the central metadata table so adding a new
+   peephole opcode only updates ff_opcode_meta.c, not this site. */
 static size_t see_opcode_len(const ff_int_t *cells, size_t pos, size_t end)
 {
     if (pos >= end)
         return 1;
-    ff_opcode_t op = (ff_opcode_t)cells[pos];
-    switch (op)
-    {
-        case FF_OP_LIT:
-        case FF_OP_LITADD:
-        case FF_OP_LITSUB:
-        case FF_OP_FLIT:
-        case FF_OP_BRANCH:
-        case FF_OP_QBRANCH:
-        case FF_OP_XDO:
-        case FF_OP_XQDO:
-        case FF_OP_XLOOP:
-        case FF_OP_PXLOOP:
-        case FF_OP_NEST:
-        case FF_OP_TNEST:
-        case FF_OP_CALL:
-        case FF_OP_DOES_RUNTIME:
-        case FF_OP_CREATE_RUNTIME:
-        case FF_OP_CONSTANT_RUNTIME:
-        case FF_OP_ARRAY_RUNTIME:
-        case FF_OP_DEFER_RUNTIME:
-        case FF_OP_VAR_FETCH:
-        case FF_OP_VAR_STORE:
-        case FF_OP_VAR_PLUS_STORE:
-            return 2;
-        case FF_OP_STRLIT:
-            return 1 + (pos + 1 < end ? (size_t)cells[pos + 1] : 0);
-        default:
-            return 1;
-    }
+    return ff_opcode_encoded_cells((ff_opcode_t)cells[pos], cells, pos, end);
 }
+
 
 /* Pre-pass: mark each cell index that is the target of a backward
    branch. Caller owns the buffer and frees it. */
@@ -681,11 +655,22 @@ static void see_decompile_body(ff_t *ff, const ff_int_t *cells, size_t size,
 
             default:
             {
-                const ff_word_t *ow = ff_see_opcode_to_word(d, op);
-                if (ow)
-                    see_text(pr, "%s", ow->name);
+                /* Default render: read the surface-syntax name from the
+                   central metadata table. Falls back to the dict-walk
+                   only when the opcode has no canonical name there
+                   (mostly internal flow opcodes that should be handled
+                   by an explicit case above). */
+                const ff_opcode_meta_t *m = ff_opcode_meta(op);
+                if (m->name)
+                    see_text(pr, "%s", m->name);
                 else
-                    see_text(pr, "<%d>", op);
+                {
+                    const ff_word_t *ow = ff_see_opcode_to_word(d, op);
+                    if (ow)
+                        see_text(pr, "%s", ow->name);
+                    else
+                        see_text(pr, "<%d>", op);
+                }
                 pos += 1;
                 break;
             }

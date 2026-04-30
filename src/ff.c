@@ -615,7 +615,20 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             #include "ff_words_dict_p.h"
 
             default:
+                /* Trusted builds keep the unreachable hint so the
+                   compiler can elide bounds checks on the dispatch
+                   table. Safe builds turn it into a noisy error so a
+                   wild opcode (heap corruption, stale ip) raises a
+                   clean FF_ERR_BAD_OPCODE instead of UB. */
+#if FF_SAFE_MEM
+                _FF_SYNC();
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_OPCODE,
+                          "Bad opcode 0x%llx.",
+                          (unsigned long long)*(ip - 1));
+                goto broken;
+#else
                 FF_UNREACHABLE();
+#endif
         }
     }
 
