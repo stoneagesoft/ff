@@ -75,14 +75,11 @@ research:
 - **Token-threaded code**: compiled words are arrays of machine-cell-
   sized opcode tokens rather than trees or ASTs. Every built-in is an
   opcode — even `NEST`, `EXIT`, and the `does>`/`create` runtimes.
-- **Computed-goto threaded dispatch (GCC/Clang) with switch fallback
-  (MSVC)**: on GCC and Clang each handler ends with
-  `goto *dt[*ip++]` — one indirect branch into a static per-opcode
-  jump table. The CPU's indirect-branch predictor can specialize per
-  call-site. MSVC, which lacks the labels-as-values extension, uses a
-  `switch (*ip++)` loop that the compiler compiles to a jump table.
-  Both paths use the same per-category `#include`d case bodies and
-  share a common prologue/epilogue.
+- **Switch-dispatch with inlined case bodies**: a single
+  `switch (*ip++)` walks the bytecode. Each case body is `#include`d
+  from a per-category file in `words/`, so the generated code is one
+  indirect jump per opcode — matching computed-goto throughput on
+  modern GCC/Clang while still building cleanly under MSVC.
 - **Register-cached hot path**: the top-of-stack is held in a local
   scalar (`tos`) for the duration of `ff_exec`, and the instruction
   pointer is a local pointer; both can live in registers. Cached values
@@ -581,34 +578,28 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
 
     ff_int_t tos = S->top ? S->data[S->top - 1] : 0;
 
-    /* GCC/Clang: computed-goto, each handler ends with goto *dt[*ip++].
-       MSVC: for (;;) switch (*ip++) with case bodies. */
-    #define _FF_CASE(op)  lbl_##op:               /* GCC/Clang */
-    #define _FF_NEXT()    goto *dt[(ff_opcode_t)*ip++]
+    for (;;) switch (*ip++)
+    {
+        case FF_OP_CALL:
+            {
+                ff_word_fn fn = (ff_word_fn)(intptr_t)*ip++;
+                _FF_SYNC();
+                fn(ff);
+                _FF_RESTORE();
+            }
+            if (!ip) goto done;
+            break;
 
-    if (!dt[FF_OP_CALL]) goto _ff_fill_dt;
-    _FF_NEXT();
+        #include "ff_words_stack_p.h"
+        #include "ff_words_stack2_p.h"
+        #include "ff_words_math_p.h"
+        #include "ff_words_ctrl_p.h"
+        #include "ff_words_real_p.h"
+        /* …twelve more category headers… */
 
-    _FF_CASE(FF_OP_CALL)
-        {
-            ff_word_fn fn = (ff_word_fn)(intptr_t)*ip++;
-            _FF_SYNC();
-            fn(ff);
-            _FF_RESTORE();
-        }
-        if (!ip) goto done;
-        _FF_NEXT();
-
-    #include "ff_words_stack_p.h"
-    /* …fifteen more category headers… */
-
-    lbl_unknown: FF_UNREACHABLE();
-
-_ff_fill_dt:
-    for (int i = 0; i < FF_OP_COUNT; i++) dt[i] = &&lbl_unknown;
-    dt[FF_OP_CALL] = &&lbl_FF_OP_CALL;
-    /* …one entry per opcode… */
-    _FF_NEXT();
+        default:
+            FF_UNREACHABLE();
+    }
 }
 ~~~
 
@@ -616,10 +607,11 @@ The case bodies live in `words/ff_words_*_p.h`. They reference shared
 macros (`_FF_SL`/`_FF_SO` validators, `_FF_SYNC`/`_FF_RESTORE` for
 calls out to C, `_TOS`/`_NOS`/`_PUSH`/`_DROP` for stack access against
 the cached top-of-stack) and shared locals (`S`, `R`, `BT`, `ip`,
-`tos`, `ff`) that are in scope at the point of inclusion. The two
-`_FF_CASE(op)` and `_FF_NEXT()` macros are the only difference between
-the GCC/Clang computed-goto version (lbl_##op: / goto *dt[…]) and the
-MSVC switch version (case op: / break).
+`tos`, `ff`) that are in scope at the point of inclusion. Using
+`#include` rather than computed-goto keeps the source portable across
+GCC, Clang and MSVC while still giving the compiler enough visibility
+to compile the switch to a jump table — one indirect branch per
+opcode, branch-target predicted per case.
 
 
 ## Performance optimisations
@@ -698,25 +690,19 @@ do_add:
 ~~~
 
 
-### Computed-goto dispatch with inlined handlers
+### Switch dispatch with inlined cases
 
-On GCC and Clang, `ff_exec` uses a static dispatch table
-`void *dt[FF_OP_COUNT]` filled lazily on the first call. Each
-opcode handler is a label (`lbl_FF_OP_XXX:`) and ends with
-`goto *dt[(ff_opcode_t)*ip++]` — one indirect branch with
-per-call-site branch-target prediction. The table is filled after
-all handler labels so every `&&label` is a backward reference,
-satisfying Clang's requirement that label addresses not be forward
-references.
+The dispatch loop is a single `switch (*ip++)` whose case bodies are
+`#include`d from per-category headers. On modern GCC and Clang this
+compiles to a jump-table indirect branch with one branch site per
+case, which is functionally equivalent to GCC's labels-as-values
+computed-goto trick: the branch-target predictor sees a recurring
+pattern at each opcode handler rather than at one mega-site. The
+switch form has the additional virtue of building cleanly under MSVC,
+which has no labels-as-values extension.
 
-On MSVC (which lacks the labels-as-values extension), the same
-handler bodies are compiled into a `for (;;) switch (*ip++)` loop
-that the MSVC optimizer converts to a comparable jump table. Both
-paths share the `_FF_CASE(op)` / `_FF_NEXT()` interface, defined
-differently per platform.
-
-The `lbl_unknown:` / `default:` arm is marked `FF_UNREACHABLE()` on
-trusted builds so the compiler can elide bounds checks.
+The `default:` arm is marked `FF_UNREACHABLE()`, so on GCC/Clang the
+compiler can elide bounds checks on the dispatch table.
 
 
 ### Instruction-pointer register caching

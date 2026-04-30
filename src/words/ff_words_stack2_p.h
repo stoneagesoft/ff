@@ -6,7 +6,7 @@
  */
 
 /** ( a b -- a b a b )  `2dup` — duplicate the top two cells. */
-_FF_CASE(FF_OP_2DUP)
+case FF_OP_2DUP:
     _FF_SL(2);
     _FF_SO(2);
     {
@@ -17,13 +17,13 @@ _FF_CASE(FF_OP_2DUP)
     _FF_NEXT();
 
 /** ( a b -- )  `2drop` — discard two cells. */
-_FF_CASE(FF_OP_2DROP)
+case FF_OP_2DROP:
     _FF_SL(2);
     _DROPN(2);
     _FF_NEXT();
 
 /** ( a b c d -- c d a b )  `2swap` — exchange the two pairs. */
-_FF_CASE(FF_OP_2SWAP)
+case FF_OP_2SWAP:
     _FF_SL(4);
     {
         ff_int_t a = tos, b = _NOS;
@@ -35,7 +35,7 @@ _FF_CASE(FF_OP_2SWAP)
     _FF_NEXT();
 
 /** ( a b c d -- a b c d a b )  `2over` — copy second pair to top. */
-_FF_CASE(FF_OP_2OVER)
+case FF_OP_2OVER:
     _FF_SL(4);
     _FF_SO(2);
     {

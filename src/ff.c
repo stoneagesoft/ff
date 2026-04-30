@@ -1,25 +1,13 @@
 /**
  * @file ff.c
  * @brief Engine top-level: lifecycle, source evaluator, and the inner
- *        interpreter.
+ *        interpreter that walks compiled bytecode via a single switch.
  *
- * Two implementations of @ref ff_exec are compiled here, selected at
- * build time by the toolchain:
- *
- *  - **GCC / Clang** (`#ifndef _MSC_VER`): computed-goto threaded
- *    dispatch.  Each handler ends with `goto *dt[*ip++]` — one
- *    indirect branch, no switch overhead, no bounds compare.
- *
- *  - **MSVC** (`#ifdef _MSC_VER`): classic `switch (*ip++)` loop.
- *    MSVC optimises this to an indirect jump table comparable to the
- *    GCC path.
- *
- * Both versions share the same prologue (`ff_exec_setup_p.h`), the
- * same built-in word bodies (`words/ff_words_*_p.h`), and the same
- * exit-label / macro-cleanup epilogue (`ff_exec_teardown_p.h`).  The
- * only platform-specific code in each function is the dispatch-table
- * initialisation (GCC) or the `for (;;) switch` wrapper (MSVC), plus
- * the `_FF_NEXT()` and `_FF_CASE(op)` macro definitions.
+ * Built-in word bodies live in per-category `words/ff_words_*_p.h`
+ * files that are #include'd inside the switch in @ref ff_exec, so the
+ * generated code is one indirect jump per opcode — matching the speed
+ * of computed-goto dispatch on modern GCC/Clang while still building
+ * cleanly under MSVC.
  *
  * The data-stack TOS is cached in a local register inside ff_exec; see
  * the @c _PUSH / @c _DROP / @c _NOS / @c _SAT macros and the
@@ -352,321 +340,279 @@ out:
     return ec;
 }
 
-/* ====================================================================
- * GCC / Clang implementation — computed-goto threaded dispatch.
- *
- * Each handler ends with `_FF_NEXT()` which expands to a direct
- * indirect branch into the static dispatch table: one `jmp *(%reg)`
- * per opcode, no switch overhead, no bounds compare on the hot path.
- * ==================================================================== */
-#ifndef _MSC_VER
-
 /** @copydoc ff_exec */
 bool ff_exec(ff_t *ff, ff_word_t *w)
 {
-#include "ff_exec_setup_p.h"
+    assert(w);
 
-    /* Dispatch table (static, zero-initialised on first load).
-       Populated lazily at _ff_fill_dt, placed AFTER all lbl_XX labels
-       so &&label expressions reference already-defined labels — this
-       satisfies Clang's requirement that label addresses not be forward
-       references.  All writes are idempotent, so a benign race on the
-       very first concurrent call is safe. */
-    static void *dt[FF_OP_COUNT];
+    ff_stack_t *S = &ff->stack;
+    ff_stack_t *R = &ff->r_stack;
+    ff_bt_stack_t *BT = &ff->bt_stack;
 
-    #define _FF_CASE(op)  lbl_##op:
-    #define _FF_NEXT()    goto *dt[(ff_opcode_t)*ip++]
+    /* Local watchdog batch counter. Initialised before the
+       early-goto-done path so the done block's flush is well-defined
+       even when no dispatch ran. */
+    int wd_tick = FF_WD_BATCH;
 
-    /* First call: jump past the handlers to fill the table. */
-    if (ff_unlikely(!dt[FF_OP_CALL]))
-        goto _ff_fill_dt;
-    _FF_NEXT();
+    /* Snapshot cur_word so an error-path `goto done` (which bypasses
+       any pending EXITs) restores the caller's value. The clean-EXIT
+       path also unwinds correctly because every NEST / DOES_RUNTIME
+       saves cur_word into the return frame and EXIT pops it back. */
+    ff_word_t *prev_cur_word = ff->cur_word;
+    ff->cur_word = w;
+    int bt_size = BT->top;
 
-    /* Structural escape hatch: external C word. The external fn
-       accesses the data stack through ff->stack only, so sync/restore
-       the cached TOS around the call. */
-    _FF_CASE(FF_OP_CALL)
-        {
-            ff_word_fn fn = (ff_word_fn)(intptr_t)*ip++;
-            _FF_SYNC();
-            fn(ff);
-            _FF_RESTORE();
-        }
-        if (!ip)
-            goto done;
-        _FF_NEXT();
+    if (ff->state & (FF_STATE_TRACE | FF_STATE_BACKTRACE))
+    {
+        if (ff->state & FF_STATE_TRACE)
+            ff_tracef(ff, FF_SEV_TRACE, "%s \xe2\x86\x92", w->name);
+        if (ff->state & FF_STATE_BACKTRACE)
+            ff_bt_stack_push(BT, w);
+    }
 
-    /* Built-in word bodies live in per-category headers included here
-       so each handler is inline.  The headers reference the macros
-       (_FF_NEXT, _FF_CASE, _FF_SYNC, _FF_RESTORE, _FF_SO, _FF_RSO),
-       labels (done, broken), and local variables (S, R, BT, ip, ff,
-       bt_size) in this scope. */
-    #include "ff_words_stack_p.h"
-    #include "ff_words_stack2_p.h"
-    #include "ff_words_math_p.h"
-    #include "ff_words_ctrl_p.h"
-    #include "ff_words_real_p.h"
-    #include "ff_words_string_p.h"
-    #include "ff_words_conio_p.h"
-    #include "ff_words_heap_p.h"
-    #include "ff_words_eval_p.h"
-    #include "ff_words_debug_p.h"
-    #include "ff_words_field_p.h"
-    #include "ff_words_file_p.h"
-    #include "ff_words_var_p.h"
-    #include "ff_words_comp_p.h"
-    #include "ff_words_array_p.h"
-    #include "ff_words_dict_p.h"
+    /* Prepare dispatch.
+       - Opcoded built-in  → synthesize a tiny bytecode [opcode, (word_ptr),
+         FF_OP_EXIT]. Push a NULL return sentinel on R so EXIT terminates
+         cleanly.
+       - External FF_OP_NONE word with a fn pointer → call it directly
+         (it may, for colon-def'd words via ff_w_nest, set ff->ip).
+       - Otherwise nothing to run. */
+    ff_int_t exec_scratch[3];
+    ff_int_t *ip;
 
-    lbl_unknown:
-        /* Trusted builds keep the unreachable hint so the compiler can
-           elide bounds checks.  Safe builds raise a clean error instead
-           of UB on heap corruption / stale ip. */
+    if (w->opcode != FF_OP_NONE)
+    {
+        exec_scratch[0] = w->opcode;
+        int n = 1;
+        if (w->opcode == FF_OP_NEST
+                || w->opcode == FF_OP_TNEST
+                || w->opcode == FF_OP_DOES_RUNTIME
+                || w->opcode == FF_OP_CREATE_RUNTIME
+                || w->opcode == FF_OP_CONSTANT_RUNTIME
+                || w->opcode == FF_OP_ARRAY_RUNTIME
+                || w->opcode == FF_OP_DEFER_RUNTIME)
+            exec_scratch[n++] = (ff_int_t)(intptr_t)w;
+        exec_scratch[n] = FF_OP_EXIT;
+        /* Two-cell return frame: [saved_ip, saved_cur_word]. The
+           outermost ip is NULL — the EXIT case detects that and goes
+           to `done`. The cur_word slot carries the caller's value so
+           a nested ff_exec (e.g. via EXECUTE) restores it cleanly. */
+        ff_stack_push(R, 0);
+        ff_stack_push(R, (ff_int_t)(intptr_t)prev_cur_word);
+        ip = exec_scratch;
+    }
+    else if (w->flags & FF_WORD_NATIVE)
+    {
+        ff_word_native_fn(w)(ff);
+        ip = ff->ip;
+    }
+    else
+    {
+        ip = NULL;
+    }
+
+    if (!ip)
+        goto done;
+
+    /* Top-of-stack register cache. While dispatching, the topmost data
+       stack value lives in `tos` (when S->top > 0); the in-memory slot at
+       S->data[S->top - 1] is treated as scratch and may be stale until the
+       next _SYNC_TOS / _FF_SYNC. This shaves a load+store off every
+       arithmetic operation that takes or returns TOS in place. Pure pushes
+       still have to write the displaced TOS back, so the optimization
+       targets compute-heavy bytecode rather than push-heavy code. */
+    ff_int_t tos = S->top
+                        ? S->data[S->top - 1]
+                        : 0;
+
+    #define _SYNC_TOS()   do { if (S->top) S->data[S->top - 1] = tos; } while (0)
+    #define _LOAD_TOS()   do { if (S->top) tos = S->data[S->top - 1]; } while (0)
+
+    #define _FF_SYNC()    do { ff->ip = ip; _SYNC_TOS(); } while (0)
+    #define _FF_RESTORE() do { ip = ff->ip; _LOAD_TOS(); } while (0)
+
+    /* In-register convenience accessors used by case bodies. _TOS is the
+       cached TOS value (lvalue), _NOS / _SAT(i) reach into memory below
+       the cache. _SAT(0) is invalid — use _TOS for index 0. */
+    #define _TOS          tos
+    #define _NOS          (S->data[S->top - 2])
+    #define _SAT(i)       (S->data[S->top - 1 - (i)])
+
+    /* Stack-mutating helpers used by case bodies. _PUSH stores the
+       displaced TOS to memory before bringing in the new top; _DROP /
+       _DROPN reload TOS from memory if any items remain. */
+    #define _PUSH(x) \
+        do { \
+            if (S->top) S->data[S->top - 1] = tos; \
+            tos = (x); \
+            ++S->top; \
+        } while (0)
+    #define _PUSH_PTR(p)  _PUSH((ff_int_t)(intptr_t)(p))
+    #define _PUSH_REAL(r) \
+        do { \
+            if (S->top) S->data[S->top - 1] = tos; \
+            ff_set_real(&tos, (r)); \
+            ++S->top; \
+        } while (0)
+    #define _DROP() \
+        do { \
+            if (--S->top) tos = S->data[S->top - 1]; \
+        } while (0)
+    #define _DROPN(n) \
+        do { \
+            S->top -= (n); \
+            if (S->top) tos = S->data[S->top - 1]; \
+        } while (0)
+
+    /* Dispatch-context validation. Unlike FF_SL/FF_SO/FF_RSL/FF_RSO in
+       ff_p.h these `goto done` rather than `return`-ing, because ff_exec
+       returns bool and must restore state before returning. */
+    #define _FF_SL(n) \
+        do { \
+            if (ff_unlikely((int)S->top < (int)(n))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER, \
+                          "Stack underflow: %d item(s) expected.", (int)(n)); \
+                goto done; \
+            } \
+        } while (0)
+    #define _FF_SO(n) \
+        do { \
+            if (ff_unlikely((int)S->top + (int)(n) > FF_STACK_SIZE)) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_OVER, \
+                          "Stack overflow: %d item(s) would not fit.", (int)(n)); \
+                goto done; \
+            } \
+        } while (0)
+    #define _FF_RSL(n) \
+        do { \
+            if (ff_unlikely((int)R->top < (int)(n))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_UNDER, \
+                          "Return stack underflow: %d item(s) expected.", (int)(n)); \
+                goto done; \
+            } \
+        } while (0)
+    #define _FF_RSO(n) \
+        do { \
+            if (ff_unlikely((int)R->top + (int)(n) > FF_STACK_SIZE)) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER, \
+                          "Return stack overflow: %d item(s) would not fit.", (int)(n)); \
+                goto done; \
+            } \
+        } while (0)
+    #define _FF_COMPILING \
+        do { \
+            if (ff_unlikely(!(ff->state & FF_STATE_COMPILING))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF, \
+                          "Compiler word outside definition."); \
+                goto done; \
+            } \
+        } while (0)
+
+    /* Dispatch-context address check; gated by FF_SAFE_MEM. Compiles
+       to nothing in the default build. See ff_p.h:FF_CHECK_ADDR for
+       the word-fn variant. */
 #if FF_SAFE_MEM
-        _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_OPCODE,
-                  "Bad opcode 0x%llx.",
-                  (unsigned long long)*(ip - 1));
-        goto broken;
+    #define _FF_CHECK_ADDR(addr, bytes) \
+        do { \
+            if (ff_unlikely(!ff_addr_valid(ff, (addr), (size_t)(bytes)))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
+                          "Bad pointer: %p (size %zu).", \
+                          (const void *)(addr), (size_t)(bytes)); \
+                goto done; \
+            } \
+        } while (0)
+    #define _FF_CHECK_XT(w) \
+        do { \
+            if (ff_unlikely(!ff_word_valid(ff, (w)))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
+                          "Bad execution token: %p.", (const void *)(w)); \
+                goto done; \
+            } \
+        } while (0)
 #else
-        FF_UNREACHABLE();
+    #define _FF_CHECK_ADDR(addr, bytes) ((void)0)
+    #define _FF_CHECK_XT(w)             ((void)0)
 #endif
 
-    /* --- Dispatch table fill (first call only) ---
-       All lbl_XX labels are defined above this point, so &&label is
-       a backward reference and both GCC and Clang accept it. */
-_ff_fill_dt:
-    for (int _i = 0; _i < FF_OP_COUNT; _i++)
-        dt[_i] = &&lbl_unknown;
-    dt[FF_OP_CALL]             = &&lbl_FF_OP_CALL;
-    dt[FF_OP_NEST]             = &&lbl_FF_OP_NEST;
-    dt[FF_OP_TNEST]            = &&lbl_FF_OP_TNEST;
-    dt[FF_OP_EXIT]             = &&lbl_FF_OP_EXIT;
-    dt[FF_OP_LIT]              = &&lbl_FF_OP_LIT;
-    dt[FF_OP_LIT0]             = &&lbl_FF_OP_LIT0;
-    dt[FF_OP_LIT1]             = &&lbl_FF_OP_LIT1;
-    dt[FF_OP_LITM1]            = &&lbl_FF_OP_LITM1;
-    dt[FF_OP_LITADD]           = &&lbl_FF_OP_LITADD;
-    dt[FF_OP_LITSUB]           = &&lbl_FF_OP_LITSUB;
-    dt[FF_OP_FLIT]             = &&lbl_FF_OP_FLIT;
-    dt[FF_OP_STRLIT]           = &&lbl_FF_OP_STRLIT;
-    dt[FF_OP_BRANCH]           = &&lbl_FF_OP_BRANCH;
-    dt[FF_OP_QBRANCH]          = &&lbl_FF_OP_QBRANCH;
-    dt[FF_OP_DOES_RUNTIME]     = &&lbl_FF_OP_DOES_RUNTIME;
-    dt[FF_OP_CREATE_RUNTIME]   = &&lbl_FF_OP_CREATE_RUNTIME;
-    dt[FF_OP_CONSTANT_RUNTIME] = &&lbl_FF_OP_CONSTANT_RUNTIME;
-    dt[FF_OP_ARRAY_RUNTIME]    = &&lbl_FF_OP_ARRAY_RUNTIME;
-    dt[FF_OP_DEFER_RUNTIME]    = &&lbl_FF_OP_DEFER_RUNTIME;
-    dt[FF_OP_VAR_FETCH]        = &&lbl_FF_OP_VAR_FETCH;
-    dt[FF_OP_VAR_STORE]        = &&lbl_FF_OP_VAR_STORE;
-    dt[FF_OP_VAR_PLUS_STORE]   = &&lbl_FF_OP_VAR_PLUS_STORE;
-    dt[FF_OP_DUP]              = &&lbl_FF_OP_DUP;
-    dt[FF_OP_DROP]             = &&lbl_FF_OP_DROP;
-    dt[FF_OP_SWAP]             = &&lbl_FF_OP_SWAP;
-    dt[FF_OP_OVER]             = &&lbl_FF_OP_OVER;
-    dt[FF_OP_ROT]              = &&lbl_FF_OP_ROT;
-    dt[FF_OP_NROT]             = &&lbl_FF_OP_NROT;
-    dt[FF_OP_PICK]             = &&lbl_FF_OP_PICK;
-    dt[FF_OP_ROLL]             = &&lbl_FF_OP_ROLL;
-    dt[FF_OP_DEPTH]            = &&lbl_FF_OP_DEPTH;
-    dt[FF_OP_CLEAR]            = &&lbl_FF_OP_CLEAR;
-    dt[FF_OP_TO_R]             = &&lbl_FF_OP_TO_R;
-    dt[FF_OP_FROM_R]           = &&lbl_FF_OP_FROM_R;
-    dt[FF_OP_FETCH_R]          = &&lbl_FF_OP_FETCH_R;
-    dt[FF_OP_2DUP]             = &&lbl_FF_OP_2DUP;
-    dt[FF_OP_2DROP]            = &&lbl_FF_OP_2DROP;
-    dt[FF_OP_2SWAP]            = &&lbl_FF_OP_2SWAP;
-    dt[FF_OP_2OVER]            = &&lbl_FF_OP_2OVER;
-    dt[FF_OP_ADD]              = &&lbl_FF_OP_ADD;
-    dt[FF_OP_SUB]              = &&lbl_FF_OP_SUB;
-    dt[FF_OP_MUL]              = &&lbl_FF_OP_MUL;
-    dt[FF_OP_DIV]              = &&lbl_FF_OP_DIV;
-    dt[FF_OP_MOD]              = &&lbl_FF_OP_MOD;
-    dt[FF_OP_DIVMOD]           = &&lbl_FF_OP_DIVMOD;
-    dt[FF_OP_MIN]              = &&lbl_FF_OP_MIN;
-    dt[FF_OP_MAX]              = &&lbl_FF_OP_MAX;
-    dt[FF_OP_NEGATE]           = &&lbl_FF_OP_NEGATE;
-    dt[FF_OP_ABS]              = &&lbl_FF_OP_ABS;
-    dt[FF_OP_AND]              = &&lbl_FF_OP_AND;
-    dt[FF_OP_OR]               = &&lbl_FF_OP_OR;
-    dt[FF_OP_XOR]              = &&lbl_FF_OP_XOR;
-    dt[FF_OP_NOT]              = &&lbl_FF_OP_NOT;
-    dt[FF_OP_SHIFT]            = &&lbl_FF_OP_SHIFT;
-    dt[FF_OP_EQ]               = &&lbl_FF_OP_EQ;
-    dt[FF_OP_NEQ]              = &&lbl_FF_OP_NEQ;
-    dt[FF_OP_LT]               = &&lbl_FF_OP_LT;
-    dt[FF_OP_GT]               = &&lbl_FF_OP_GT;
-    dt[FF_OP_LE]               = &&lbl_FF_OP_LE;
-    dt[FF_OP_GE]               = &&lbl_FF_OP_GE;
-    dt[FF_OP_ZERO_EQ]          = &&lbl_FF_OP_ZERO_EQ;
-    dt[FF_OP_ZERO_NEQ]         = &&lbl_FF_OP_ZERO_NEQ;
-    dt[FF_OP_ZERO_LT]          = &&lbl_FF_OP_ZERO_LT;
-    dt[FF_OP_ZERO_GT]          = &&lbl_FF_OP_ZERO_GT;
-    dt[FF_OP_INC]              = &&lbl_FF_OP_INC;
-    dt[FF_OP_DEC]              = &&lbl_FF_OP_DEC;
-    dt[FF_OP_INC2]             = &&lbl_FF_OP_INC2;
-    dt[FF_OP_DEC2]             = &&lbl_FF_OP_DEC2;
-    dt[FF_OP_MUL2]             = &&lbl_FF_OP_MUL2;
-    dt[FF_OP_DIV2]             = &&lbl_FF_OP_DIV2;
-    dt[FF_OP_SET_BASE]         = &&lbl_FF_OP_SET_BASE;
-    dt[FF_OP_FADD]             = &&lbl_FF_OP_FADD;
-    dt[FF_OP_FSUB]             = &&lbl_FF_OP_FSUB;
-    dt[FF_OP_FMUL]             = &&lbl_FF_OP_FMUL;
-    dt[FF_OP_FDIV]             = &&lbl_FF_OP_FDIV;
-    dt[FF_OP_FNEGATE]          = &&lbl_FF_OP_FNEGATE;
-    dt[FF_OP_FABS]             = &&lbl_FF_OP_FABS;
-    dt[FF_OP_FSQRT]            = &&lbl_FF_OP_FSQRT;
-    dt[FF_OP_FSIN]             = &&lbl_FF_OP_FSIN;
-    dt[FF_OP_FCOS]             = &&lbl_FF_OP_FCOS;
-    dt[FF_OP_FTAN]             = &&lbl_FF_OP_FTAN;
-    dt[FF_OP_FASIN]            = &&lbl_FF_OP_FASIN;
-    dt[FF_OP_FACOS]            = &&lbl_FF_OP_FACOS;
-    dt[FF_OP_FATAN]            = &&lbl_FF_OP_FATAN;
-    dt[FF_OP_FATAN2]           = &&lbl_FF_OP_FATAN2;
-    dt[FF_OP_FEXP]             = &&lbl_FF_OP_FEXP;
-    dt[FF_OP_FLOG]             = &&lbl_FF_OP_FLOG;
-    dt[FF_OP_FPOW]             = &&lbl_FF_OP_FPOW;
-    dt[FF_OP_F_DOT]            = &&lbl_FF_OP_F_DOT;
-    dt[FF_OP_FLOAT]            = &&lbl_FF_OP_FLOAT;
-    dt[FF_OP_FIX]              = &&lbl_FF_OP_FIX;
-    dt[FF_OP_PI]               = &&lbl_FF_OP_PI;
-    dt[FF_OP_E_CONST]          = &&lbl_FF_OP_E_CONST;
-    dt[FF_OP_FEQ]              = &&lbl_FF_OP_FEQ;
-    dt[FF_OP_FNEQ]             = &&lbl_FF_OP_FNEQ;
-    dt[FF_OP_FLT]              = &&lbl_FF_OP_FLT;
-    dt[FF_OP_FGT]              = &&lbl_FF_OP_FGT;
-    dt[FF_OP_FLE]              = &&lbl_FF_OP_FLE;
-    dt[FF_OP_FGE]              = &&lbl_FF_OP_FGE;
-    dt[FF_OP_DOT]              = &&lbl_FF_OP_DOT;
-    dt[FF_OP_QUESTION]         = &&lbl_FF_OP_QUESTION;
-    dt[FF_OP_CR]               = &&lbl_FF_OP_CR;
-    dt[FF_OP_EMIT]             = &&lbl_FF_OP_EMIT;
-    dt[FF_OP_TYPE]             = &&lbl_FF_OP_TYPE;
-    dt[FF_OP_DOT_S]            = &&lbl_FF_OP_DOT_S;
-    dt[FF_OP_DOT_PAREN]        = &&lbl_FF_OP_DOT_PAREN;
-    dt[FF_OP_DOTQUOTE]         = &&lbl_FF_OP_DOTQUOTE;
-    dt[FF_OP_XDO]              = &&lbl_FF_OP_XDO;
-    dt[FF_OP_XQDO]             = &&lbl_FF_OP_XQDO;
-    dt[FF_OP_XLOOP]            = &&lbl_FF_OP_XLOOP;
-    dt[FF_OP_PXLOOP]           = &&lbl_FF_OP_PXLOOP;
-    dt[FF_OP_LOOP_I]           = &&lbl_FF_OP_LOOP_I;
-    dt[FF_OP_LOOP_J]           = &&lbl_FF_OP_LOOP_J;
-    dt[FF_OP_LEAVE]            = &&lbl_FF_OP_LEAVE;
-    dt[FF_OP_I_ADD]            = &&lbl_FF_OP_I_ADD;
-    dt[FF_OP_I_ADD_LOOP]       = &&lbl_FF_OP_I_ADD_LOOP;
-    dt[FF_OP_NIP]              = &&lbl_FF_OP_NIP;
-    dt[FF_OP_TUCK]             = &&lbl_FF_OP_TUCK;
-    dt[FF_OP_OVER_PLUS]        = &&lbl_FF_OP_OVER_PLUS;
-    dt[FF_OP_R_PLUS]           = &&lbl_FF_OP_R_PLUS;
-    dt[FF_OP_DUP_ADD]          = &&lbl_FF_OP_DUP_ADD;
-    dt[FF_OP_COLON]            = &&lbl_FF_OP_COLON;
-    dt[FF_OP_SEMICOLON]        = &&lbl_FF_OP_SEMICOLON;
-    dt[FF_OP_IMMEDIATE]        = &&lbl_FF_OP_IMMEDIATE;
-    dt[FF_OP_LBRACKET]         = &&lbl_FF_OP_LBRACKET;
-    dt[FF_OP_RBRACKET]         = &&lbl_FF_OP_RBRACKET;
-    dt[FF_OP_TICK]             = &&lbl_FF_OP_TICK;
-    dt[FF_OP_BRACKET_TICK]     = &&lbl_FF_OP_BRACKET_TICK;
-    dt[FF_OP_EXECUTE]          = &&lbl_FF_OP_EXECUTE;
-    dt[FF_OP_STATE]            = &&lbl_FF_OP_STATE;
-    dt[FF_OP_BRACKET_COMPILE]  = &&lbl_FF_OP_BRACKET_COMPILE;
-    dt[FF_OP_LITERAL]          = &&lbl_FF_OP_LITERAL;
-    dt[FF_OP_COMPILE]          = &&lbl_FF_OP_COMPILE;
-    dt[FF_OP_DOES]             = &&lbl_FF_OP_DOES;
-    dt[FF_OP_QDUP]             = &&lbl_FF_OP_QDUP;
-    dt[FF_OP_IF]               = &&lbl_FF_OP_IF;
-    dt[FF_OP_ELSE]             = &&lbl_FF_OP_ELSE;
-    dt[FF_OP_THEN]             = &&lbl_FF_OP_THEN;
-    dt[FF_OP_BEGIN]            = &&lbl_FF_OP_BEGIN;
-    dt[FF_OP_UNTIL]            = &&lbl_FF_OP_UNTIL;
-    dt[FF_OP_AGAIN]            = &&lbl_FF_OP_AGAIN;
-    dt[FF_OP_WHILE]            = &&lbl_FF_OP_WHILE;
-    dt[FF_OP_REPEAT]           = &&lbl_FF_OP_REPEAT;
-    dt[FF_OP_DO]               = &&lbl_FF_OP_DO;
-    dt[FF_OP_QDO]              = &&lbl_FF_OP_QDO;
-    dt[FF_OP_LOOP]             = &&lbl_FF_OP_LOOP;
-    dt[FF_OP_PLOOP]            = &&lbl_FF_OP_PLOOP;
-    dt[FF_OP_QUIT]             = &&lbl_FF_OP_QUIT;
-    dt[FF_OP_ABORT]            = &&lbl_FF_OP_ABORT;
-    dt[FF_OP_THROW]            = &&lbl_FF_OP_THROW;
-    dt[FF_OP_CATCH]            = &&lbl_FF_OP_CATCH;
-    dt[FF_OP_ABORTQ]           = &&lbl_FF_OP_ABORTQ;
-    dt[FF_OP_CREATE]           = &&lbl_FF_OP_CREATE;
-    dt[FF_OP_FORGET]           = &&lbl_FF_OP_FORGET;
-    dt[FF_OP_VARIABLE]         = &&lbl_FF_OP_VARIABLE;
-    dt[FF_OP_CONSTANT]         = &&lbl_FF_OP_CONSTANT;
-    dt[FF_OP_DEFER]            = &&lbl_FF_OP_DEFER;
-    dt[FF_OP_IS]               = &&lbl_FF_OP_IS;
-    dt[FF_OP_HERE]             = &&lbl_FF_OP_HERE;
-    dt[FF_OP_STORE]            = &&lbl_FF_OP_STORE;
-    dt[FF_OP_FETCH]            = &&lbl_FF_OP_FETCH;
-    dt[FF_OP_PLUS_STORE]       = &&lbl_FF_OP_PLUS_STORE;
-    dt[FF_OP_ALLOT]            = &&lbl_FF_OP_ALLOT;
-    dt[FF_OP_COMMA]            = &&lbl_FF_OP_COMMA;
-    dt[FF_OP_C_STORE]          = &&lbl_FF_OP_C_STORE;
-    dt[FF_OP_C_FETCH]          = &&lbl_FF_OP_C_FETCH;
-    dt[FF_OP_C_COMMA]          = &&lbl_FF_OP_C_COMMA;
-    dt[FF_OP_C_ALIGN]          = &&lbl_FF_OP_C_ALIGN;
-    dt[FF_OP_STRING]           = &&lbl_FF_OP_STRING;
-    dt[FF_OP_S_STORE]          = &&lbl_FF_OP_S_STORE;
-    dt[FF_OP_S_CAT]            = &&lbl_FF_OP_S_CAT;
-    dt[FF_OP_STRLEN]           = &&lbl_FF_OP_STRLEN;
-    dt[FF_OP_STRCMP]           = &&lbl_FF_OP_STRCMP;
-    dt[FF_OP_EVALUATE]         = &&lbl_FF_OP_EVALUATE;
-    dt[FF_OP_LOAD]             = &&lbl_FF_OP_LOAD;
-    dt[FF_OP_FIND]             = &&lbl_FF_OP_FIND;
-    dt[FF_OP_TO_NAME]          = &&lbl_FF_OP_TO_NAME;
-    dt[FF_OP_TO_BODY]          = &&lbl_FF_OP_TO_BODY;
-    dt[FF_OP_ARRAY]            = &&lbl_FF_OP_ARRAY;
-    dt[FF_OP_SYSTEM]           = &&lbl_FF_OP_SYSTEM;
-    dt[FF_OP_STDIN]            = &&lbl_FF_OP_STDIN;
-    dt[FF_OP_STDOUT]           = &&lbl_FF_OP_STDOUT;
-    dt[FF_OP_STDERR]           = &&lbl_FF_OP_STDERR;
-    dt[FF_OP_FOPEN]            = &&lbl_FF_OP_FOPEN;
-    dt[FF_OP_FCLOSE]           = &&lbl_FF_OP_FCLOSE;
-    dt[FF_OP_FGETS]            = &&lbl_FF_OP_FGETS;
-    dt[FF_OP_FPUTS]            = &&lbl_FF_OP_FPUTS;
-    dt[FF_OP_FGETC]            = &&lbl_FF_OP_FGETC;
-    dt[FF_OP_FPUTC]            = &&lbl_FF_OP_FPUTC;
-    dt[FF_OP_FTELL]            = &&lbl_FF_OP_FTELL;
-    dt[FF_OP_FSEEK]            = &&lbl_FF_OP_FSEEK;
-    dt[FF_OP_SEEK_SET]         = &&lbl_FF_OP_SEEK_SET;
-    dt[FF_OP_SEEK_CUR]         = &&lbl_FF_OP_SEEK_CUR;
-    dt[FF_OP_SEEK_END]         = &&lbl_FF_OP_SEEK_END;
-    dt[FF_OP_ERRNO]            = &&lbl_FF_OP_ERRNO;
-    dt[FF_OP_STRERROR]         = &&lbl_FF_OP_STRERROR;
-    dt[FF_OP_TRACE]            = &&lbl_FF_OP_TRACE;
-    dt[FF_OP_BACKTRACE]        = &&lbl_FF_OP_BACKTRACE;
-    dt[FF_OP_DUMP]             = &&lbl_FF_OP_DUMP;
-    dt[FF_OP_MEMSTAT]          = &&lbl_FF_OP_MEMSTAT;
-    dt[FF_OP_WORDS]            = &&lbl_FF_OP_WORDS;
-    dt[FF_OP_WORDSUSED]        = &&lbl_FF_OP_WORDSUSED;
-    dt[FF_OP_WORDSUNUSED]      = &&lbl_FF_OP_WORDSUNUSED;
-    dt[FF_OP_MAN]              = &&lbl_FF_OP_MAN;
-    dt[FF_OP_DUMP_WORD]        = &&lbl_FF_OP_DUMP_WORD;
-    dt[FF_OP_SEE]              = &&lbl_FF_OP_SEE;
-    _FF_NEXT();   /* redo the first dispatch with the table now full */
+    /* Watchdog: count back-branches and word calls, check for an
+       async abort, and (every N opcodes) call the host's polling
+       watchdog.
 
-#include "ff_exec_teardown_p.h"
-}
+       The hot path is a local-counter decrement-and-test — no
+       memory write, no atomic load, no flag check on the typical
+       tick. Every FF_WD_BATCH ticks (256) we sync the local count
+       to ff->opcodes_run, do the atomic abort load, and compare
+       against the watchdog threshold.
 
-/* ====================================================================
- * MSVC implementation — switch-based dispatch.
- * ==================================================================== */
-#else  /* _MSC_VER */
+       Async-abort latency goes from "next opcode" to "next 256
+       opcodes" — sub-microsecond on this hardware, and well below
+       the documented 65536-default watchdog interval. The
+       FF_WD_BATCH constant is defined at file scope below so the
+       local `wd_tick` declaration can reference it. */
+    #define _FF_WATCHDOG_TICK() \
+        do { \
+            if (ff_unlikely(--wd_tick <= 0)) \
+            { \
+                wd_tick = FF_WD_BATCH; \
+                ff->opcodes_run += FF_WD_BATCH; \
+                if (ff_unlikely(FF_ABORT_LOAD(&ff->abort_requested))) \
+                    goto _watchdog_abort; \
+                if (ff->platform.watchdog \
+                        && ff->opcodes_run >= ff->next_watchdog_at) \
+                { \
+                    _FF_SYNC(); \
+                    ff_watchdog_action_t _wd = \
+                        ff->platform.watchdog(ff->platform.context, \
+                                              ff->opcodes_run); \
+                    _FF_RESTORE(); \
+                    uint32_t _step = ff->platform.watchdog_interval \
+                                         ? ff->platform.watchdog_interval \
+                                         : 65536; \
+                    ff->next_watchdog_at = ff->opcodes_run + _step; \
+                    if (_wd != FF_WD_CONTINUE) \
+                        goto _watchdog_abort; \
+                } \
+            } \
+        } while (0)
 
-/** @copydoc ff_exec */
-bool ff_exec(ff_t *ff, ff_word_t *w)
-{
-#include "ff_exec_setup_p.h"
+    /* Trusted-bytecode return-stack checks. Inside opcodes that the
+       compiler emits in matched pairs (XDO ... XLOOP, etc.), the
+       _FF_RSL_T / _FF_RSO_T checks guard an engine-bug-only failure
+       and can be elided when FF_R_TRUSTED is on. The unsuffixed
+       _FF_RSL / _FF_RSO above stay live because they protect words
+       (>R, R>, R@) that user code can stand-alone-misuse. */
+#if FF_R_TRUSTED
+    #define _FF_RSL_T(n)  ((void)0)
+    #define _FF_RSO_T(n)  ((void)0)
+#else
+    #define _FF_RSL_T(n)  _FF_RSL(n)
+    #define _FF_RSO_T(n)  _FF_RSO(n)
+#endif
 
-    #define _FF_CASE(op)  case op:
     #define _FF_NEXT()    break
 
     for (;;)
     {
         switch (*ip++)
         {
-            /* Structural escape hatch: external C word. */
+            /* Structural escape hatch: external C word. The external word
+               accesses the data stack through ff->stack only, so we must
+               sync the cached TOS into memory before the call and reload
+               it (the helper may have pushed/popped/replaced TOS). */
             case FF_OP_CALL:
                 {
                     ff_word_fn fn = (ff_word_fn)(intptr_t)*ip++;
@@ -678,6 +624,11 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                     goto done;
                 _FF_NEXT();
 
+            /* Built-in word bodies live in per-category headers that
+               are included here so each case is inline. The headers
+               reference the macros (_FF_NEXT, _FF_SYNC, _FF_RESTORE, _FF_SO,
+               _FF_RSO), labels (done, broken), and local variables
+               (S, R, BT, ip, ff, nest_code, bt_size) in this scope. */
             #include "ff_words_stack_p.h"
             #include "ff_words_stack2_p.h"
             #include "ff_words_math_p.h"
@@ -696,6 +647,11 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             #include "ff_words_dict_p.h"
 
             default:
+                /* Trusted builds keep the unreachable hint so the
+                   compiler can elide bounds checks on the dispatch
+                   table. Safe builds turn it into a noisy error so a
+                   wild opcode (heap corruption, stale ip) raises a
+                   clean FF_ERR_BAD_OPCODE instead of UB. */
 #if FF_SAFE_MEM
                 _FF_SYNC();
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_OPCODE,
@@ -708,10 +664,62 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
         }
     }
 
-#include "ff_exec_teardown_p.h"
-}
 
-#endif  /* _MSC_VER */
+    /* --- Exit points --- */
+
+_watchdog_abort:
+    /* Watchdog or async ff_request_abort fired. Surface it as a
+       FF_SEV_ERROR | FF_ERR_ABORTED, clear the flag (so the next
+       ff_eval call starts fresh), and join the broken-state cleanup
+       path. */
+    _FF_SYNC();
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_ABORTED,
+              "Aborted after %llu opcodes.",
+              (unsigned long long)ff->opcodes_run);
+    FF_ABORT_CLEAR(&ff->abort_requested);
+    ff->state |= FF_STATE_BROKEN;
+    goto broken;
+
+broken:
+    /* Flush the local watchdog batch counter back into the engine's
+       running total before returning, so a host that reads
+       ff->opcodes_run after a failed run sees an accurate count. */
+    ff->opcodes_run += (uint64_t)(FF_WD_BATCH - wd_tick);
+    ff->ip = ip;
+    if (S->top) S->data[S->top - 1] = tos;
+    ff->cur_word = prev_cur_word;
+    BT->top = bt_size;
+    return false;
+
+done:
+    ff->opcodes_run += (uint64_t)(FF_WD_BATCH - wd_tick);
+    ff->ip = ip;
+    if (S->top) S->data[S->top - 1] = tos;
+    ff->cur_word = prev_cur_word;
+    BT->top = bt_size;
+    return true;
+
+    #undef _FF_NEXT
+    #undef _FF_SYNC
+    #undef _FF_RESTORE
+    #undef _SYNC_TOS
+    #undef _LOAD_TOS
+    #undef _TOS
+    #undef _NOS
+    #undef _SAT
+    #undef _PUSH
+    #undef _PUSH_PTR
+    #undef _PUSH_REAL
+    #undef _DROP
+    #undef _DROPN
+    #undef _FF_SL
+    #undef _FF_SO
+    #undef _FF_RSL
+    #undef _FF_RSO
+    #undef _FF_RSL_T
+    #undef _FF_RSO_T
+    #undef _FF_COMPILING
+}
 
 /** @copydoc ff_load */
 ff_error_t ff_load(ff_t *ff, const char *path)

@@ -10,14 +10,14 @@
  */
 
 /** ( cmd -- ec )  `system` — pass cmd to the C library system(). */
-_FF_CASE(FF_OP_SYSTEM)
+case FF_OP_SYSTEM:
     _FF_SL(1);
     _FF_SYNC();
     tos = system((const char *)(intptr_t)tos);
     _FF_NEXT();
 
 /** ( mode path -- fp )  `fopen` — open a file; aborts on failure. */
-_FF_CASE(FF_OP_FOPEN)
+case FF_OP_FOPEN:
     _FF_SL(2);
     _FF_SYNC();
     {
@@ -36,14 +36,14 @@ _FF_CASE(FF_OP_FOPEN)
     _FF_NEXT();
 
 /** ( fp -- ec )  `fclose` — close a file. */
-_FF_CASE(FF_OP_FCLOSE)
+case FF_OP_FCLOSE:
     _FF_SL(1);
     _FF_SYNC();
     tos = fclose((FILE *)(intptr_t)tos);
     _FF_NEXT();
 
 /** ( fp size buf -- result )  `fgets` — read line into buf. */
-_FF_CASE(FF_OP_FGETS)
+case FF_OP_FGETS:
     _FF_SL(3);
     _FF_SYNC();
     {
@@ -55,7 +55,7 @@ _FF_CASE(FF_OP_FGETS)
     _FF_NEXT();
 
 /** ( fp s -- result )  `fputs` — write a string. */
-_FF_CASE(FF_OP_FPUTS)
+case FF_OP_FPUTS:
     _FF_SL(2);
     _FF_SYNC();
     {
@@ -67,14 +67,14 @@ _FF_CASE(FF_OP_FPUTS)
     _FF_NEXT();
 
 /** ( fp -- ch )  `fgetc` — read a single byte. */
-_FF_CASE(FF_OP_FGETC)
+case FF_OP_FGETC:
     _FF_SL(1);
     _FF_SYNC();
     tos = fgetc((FILE *)(intptr_t)tos);
     _FF_NEXT();
 
 /** ( fp ch -- result )  `fputc` — write a single byte. */
-_FF_CASE(FF_OP_FPUTC)
+case FF_OP_FPUTC:
     _FF_SL(2);
     _FF_SYNC();
     {
@@ -85,14 +85,14 @@ _FF_CASE(FF_OP_FPUTC)
     _FF_NEXT();
 
 /** ( fp -- pos )  `ftell` — current file position. */
-_FF_CASE(FF_OP_FTELL)
+case FF_OP_FTELL:
     _FF_SL(1);
     _FF_SYNC();
     tos = ftell((FILE *)(intptr_t)tos);
     _FF_NEXT();
 
 /** ( fp off whence -- result )  `fseek` — reposition fp. */
-_FF_CASE(FF_OP_FSEEK)
+case FF_OP_FSEEK:
     _FF_SL(3);
     _FF_SYNC();
     {
@@ -104,43 +104,43 @@ _FF_CASE(FF_OP_FSEEK)
     _FF_NEXT();
 
 /** ( -- fp )  `stdin` — push the standard input file pointer. */
-_FF_CASE(FF_OP_STDIN)
+case FF_OP_STDIN:
     _FF_SO(1);
     _PUSH_PTR(stdin);
     _FF_NEXT();
 
 /** ( -- fp )  `stdout` — push the standard output file pointer. */
-_FF_CASE(FF_OP_STDOUT)
+case FF_OP_STDOUT:
     _FF_SO(1);
     _PUSH_PTR(stdout);
     _FF_NEXT();
 
 /** ( -- fp )  `stderr` — push the standard error file pointer. */
-_FF_CASE(FF_OP_STDERR)
+case FF_OP_STDERR:
     _FF_SO(1);
     _PUSH_PTR(stderr);
     _FF_NEXT();
 
 /** ( -- whence )  `seek_set` — push SEEK_SET. */
-_FF_CASE(FF_OP_SEEK_SET)
+case FF_OP_SEEK_SET:
     _FF_SO(1);
     _PUSH(SEEK_SET);
     _FF_NEXT();
 
 /** ( -- whence )  `seek_cur` — push SEEK_CUR. */
-_FF_CASE(FF_OP_SEEK_CUR)
+case FF_OP_SEEK_CUR:
     _FF_SO(1);
     _PUSH(SEEK_CUR);
     _FF_NEXT();
 
 /** ( -- whence )  `seek_end` — push SEEK_END. */
-_FF_CASE(FF_OP_SEEK_END)
+case FF_OP_SEEK_END:
     _FF_SO(1);
     _PUSH(SEEK_END);
     _FF_NEXT();
 
 /** ( errno -- s )  `strerror` — translate errno into a message pointer. */
-_FF_CASE(FF_OP_STRERROR)
+case FF_OP_STRERROR:
     _FF_SL(1);
     tos = (ff_int_t)(intptr_t)strerror((int)tos);
     _FF_NEXT();

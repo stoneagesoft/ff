@@ -89,24 +89,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 - Source layout reorganised: each subsystem in one `.c`, every
   built-in word category split into a registration `.c` plus a
   dispatch-include `_p.h`.
-- Inner interpreter switched to **computed-goto threaded dispatch**
-  on GCC / Clang (`goto *dt[*ip++]`). Each handler ends with a
-  direct indirect branch into a static per-opcode jump table; the
-  CPU's indirect-branch predictor can specialize per call-site. MSVC
-  retains the `switch (*ip++)` loop via `#ifdef _MSC_VER`. Both
-  implementations share the same prologue (`ff_exec_setup_p.h`),
-  the same per-category handler headers (`ff_words_*_p.h`), and the
-  same epilogue (`ff_exec_teardown_p.h`); only `_FF_CASE(op)` and
-  `_FF_NEXT()` differ. Benchmarks updated:
-  - b1 empty loop: 310 → 210 ms (−32 %)
-  - b5 nested loops: 310 → 210 ms (−32 %)
-  - b3 fib(36): 760 → 740 ms (−3 %)
-  - b2 sum / b4 var: within measurement noise (peephole-bound).
-  *ff* now beats `gforth-itc` and `gforth` on all five benchmarks
-  and matches `gforth-fast` on the two pure-dispatch workloads (b1,
-  b5).
-- Top-of-stack is held in a register-cached local for the duration
-  of `ff_exec`.
+- Inner interpreter now uses a `switch (*ip++)` whose case bodies
+  are `#include`d from the per-category `_p.h` headers. Top-of-stack
+  is held in a register-cached local for the duration of `ff_exec`.
 - Per-word heaps replace the classical contiguous Forth heap. Each
   word owns its body and can `realloc` independently.
 - Strings are NUL-terminated C strings rather than counted strings.
