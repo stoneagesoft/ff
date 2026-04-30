@@ -35,7 +35,10 @@ within its own body, so b3 calls `fib` directly.
 
 **Hardware**: AMD Ryzen 7 2700X, single thread, no frequency pinning
 (default scaling governor). **Build flags**: *ff* compiled with Clang
-18 at `-O3 -g0 -fno-exceptions`. **gforth**: as packaged by Ubuntu.
+18.1.3 at `-O3 -g0 -fno-exceptions`. **gforth**: 0.7.3 as packaged
+by Ubuntu (the same binary serves all three of gforth, gforth-itc,
+gforth-fast — they're separate executables built from the same
+release with different threading strategies).
 
 
 ## Workloads
@@ -117,6 +120,77 @@ Cortex-M targets, and exposes a stable inline-C API for embedding.
 A native-code translator would change all four properties.
 
 
+## Comparison against native C
+
+A useful framing for embedders evaluating *ff*: how much does the
+"interpreter tax" cost compared to writing the same code in C? The
+question matters because *ff*'s primary design goal is embedding —
+the host already has a working C compiler, and the *ff* code is
+glue, not the hot path.
+
+The same three workloads as Forth, transcribed to C and compiled
+with the same Clang 18.1.3 the *ff* binaries were built with:
+
+~~~{.c}
+/* fib(36) */
+static int fib(int n) { return n < 2 ? n : fib(n-1) + fib(n-2); }
+int main(void) { volatile int r = fib(36); (void)r; return 0; }
+
+/* sum 0..49,999,999 */
+int main(void) {
+    volatile long sum = 0;
+    for (long i = 0; i < 50000000L; i++) sum += i;
+    return 0;
+}
+
+/* empty 100M iter */
+int main(void) {
+    volatile int x = 0;
+    for (long i = 0; i < 100000000L; i++) { x = 1; (void)x; }
+    return 0;
+}
+~~~
+
+Wall-clock results, milliseconds, best of five:
+
+| Benchmark            | C `-O0` | C `-O3` | ff (release) | ff vs C `-O3` |
+|----------------------|--------:|--------:|-------------:|--------------:|
+| empty loop (100M)    |     210 |      20 |          340 |        ~17×   |
+| sum 0..49,999,999    |     110 |     100 |          120 |        ~1.2×  |
+| fib(36)              |     100 |      50 |          850 |        ~17×   |
+
+**For honest interpreter-vs-native code comparison**, look at the
+first and third rows: roughly **15-20× slower** than `-O3` C. That's
+the irreducible cost of switch-dispatched bytecode versus native
+machine code, and no threaded-code Forth (gforth, gforth-itc, *ff*)
+closes that gap. Only `gforth-fast`-style dynamic native-code
+synthesis does, at the cost of MSVC compatibility, embeddability,
+and source-tree size.
+
+The `sum` row is misleadingly close: I had to write `volatile long
+sum` to stop Clang `-O3` from eliminating the entire loop as
+dead-code (the result is unused). Without the `volatile`, `-O3` C
+reduces the loop to a constant — effectively infinite speed-up.
+The 1.2× ratio there reflects "compiler handicapped to keep loop
+running", not real-world compute.
+
+**What this means for embedders:**
+
+- **For host-driven control flow with occasional Forth glue**, the
+  15-20× tax is invisible — time spent in C native words dominates
+  whatever the script is doing. Forth coordinates; C does the work.
+- **For Forth-heavy compute** (numeric inner loops, parsing, big
+  string processing), expect the 15-20× hit. That's still ~5-10
+  Mops/sec on this Ryzen, more than enough for most embedding
+  tasks (configuration, scripting, ad-hoc reports).
+- **The escape hatch is custom native words.** Write the hot 5 % in
+  C against `<ff_p.h>`, register through `FF_W`, and that 5 % runs
+  at full C speed. The rest stays in Forth — readable, redefinable
+  at runtime, hot-loaded over a network if you like. See
+  [doc/md/40-extending.md](40-extending.md) for the integration
+  pattern.
+
+
 ## Reproducing the numbers
 
 The `test/bench/` directory ships the sources verbatim. To re-run on
@@ -130,6 +204,17 @@ cd test/bench
 The script measures the best of five runs of each benchmark against
 each engine, formats the results identically to this chapter, and
 takes about a minute to complete on the reference hardware.
+
+The C transcriptions sit next to the Forth ones as `c_b1.c`,
+`c_b2.c`, `c_b3.c`. Build and run them by hand:
+
+~~~{.sh}
+cd test/bench
+for src in c_b1 c_b2 c_b3; do
+    clang -O3 $src.c -o $src
+    /usr/bin/time -f '%e' ./$src
+done
+~~~
 
 
 ## Appendix: benchmark sources
