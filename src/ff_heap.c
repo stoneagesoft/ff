@@ -34,9 +34,25 @@ void ff_heap_destroy(ff_heap_t *h)
     memset(h, 0, sizeof(*h));
 }
 
-/* Forward decl — implementation lives in ff_dict.c next to the
+/* Forward decls — implementations live in ff_dict.c next to the
    arena struct definition. */
 extern void *ff_arena_alloc(ff_arena_t *a, size_t bytes);
+extern void  ff_arena_trim(ff_arena_t *a, void *region, size_t old_bytes,
+                           size_t new_bytes);
+
+/** @copydoc ff_heap_trim */
+void ff_heap_trim(ff_heap_t *h)
+{
+    if (!h->arena || h->capacity == 0 || h->capacity == h->size)
+        return;
+    /* Ask the arena to shrink the reservation in place. The arena
+       no-ops the request when this region isn't at its current bump
+       point (i.e. another word has allocated since this one grew). */
+    size_t old_bytes = h->capacity * sizeof(ff_int_t);
+    size_t new_bytes = h->size * sizeof(ff_int_t);
+    ff_arena_trim(h->arena, h->data, old_bytes, new_bytes);
+    h->capacity = h->size;
+}
 
 /** @copydoc ff_heap_grow */
 void ff_heap_grow(ff_heap_t *h, size_t extra)

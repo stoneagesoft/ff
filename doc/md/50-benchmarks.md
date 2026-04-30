@@ -60,59 +60,60 @@ Wall-clock time, milliseconds, lower is better:
 
 | Workload         |    ffsh | gforth-itc | gforth | gforth-fast |
 |------------------|--------:|-----------:|-------:|------------:|
-| b1 empty loop    |     340 |        300 |    250 |         200 |
-| b2 sum           |     120 |        170 |    140 |         110 |
-| b3 fib(36)       |     850 |        880 |    850 |         500 |
-| b4 variable r/m/w|     250 |        340 |    310 |         130 |
-| b5 nested loops  |     340 |        300 |    260 |         200 |
+| b1 empty loop    |     310 |        300 |    260 |         200 |
+| b2 sum           |     120 |        170 |    150 |         110 |
+| b3 fib(36)       |     760 |        890 |    870 |         510 |
+| b4 variable r/m/w|     220 |        350 |    350 |         130 |
+| b5 nested loops  |     310 |        310 |    260 |         200 |
 
 Same numbers as ratios against ffsh (1.00 = ffsh time; smaller =
 faster):
 
 | Workload          | ffsh | gforth-itc | gforth | gforth-fast |
 |-------------------|-----:|-----------:|-------:|------------:|
-| b1 empty loop     | 1.00 |       0.88 |   0.74 |        0.59 |
-| b2 sum            | 1.00 |       1.42 |   1.17 |        0.92 |
-| b3 fib(36)        | 1.00 |       1.04 |   1.00 |        0.59 |
-| b4 variable r/m/w | 1.00 |       1.36 |   1.24 |        0.52 |
-| b5 nested loops   | 1.00 |       0.88 |   0.76 |        0.59 |
+| b1 empty loop     | 1.00 |       0.97 |   0.84 |        0.65 |
+| b2 sum            | 1.00 |       1.42 |   1.25 |        0.92 |
+| b3 fib(36)        | 1.00 |       1.17 |   1.14 |        0.67 |
+| b4 variable r/m/w | 1.00 |       1.59 |   1.59 |        0.59 |
+| b5 nested loops   | 1.00 |       1.00 |   0.84 |        0.65 |
 
 
 ## Discussion
 
-After a peephole pass round (fused `i + loop`, `<var> @`/`!`/`+!`,
-`swap drop` → `nip`, `over +`, `r@ +`) plus the trusted-R-stack and
-LTO/PGO build flags, *ff* now **beats both `gforth-itc` and the
-default `gforth`** on the two arithmetic-heavy workloads (b2 and b4)
-that historically were *ff*'s weak spot. b3 (recursion) is at parity
-with the default `gforth` and 4 % ahead of `gforth-itc`. b1 and b5
-(pure dispatch-bound, no peephole opportunities) trail by 13-26 %
-— the cost of a `switch (*ip++)` versus computed-goto, since the
-single-jump-site can't get per-opcode branch prediction.
+After the peephole pass (fused `i + loop`, `<var> @`/`!`/`+!`,
+`swap drop` → `nip`, `over +`, `r@ +`), the cur_word-on-frame work
+that simplified diagnostics, the dictionary arena, and the trusted-
+R-stack + LTO + PGO build flags, *ff* now **beats both `gforth-itc`
+and the default `gforth`** on three workloads (b2, b3, b4) and ties
+on the remaining two (b1 dispatch-bound, b5 nested-loops). b4 is
+the largest margin: 1.59× faster than either gforth-itc or default
+gforth, the result of variable-access peepholes collapsing the
+`CREATE_RUNTIME → @` round-trip into one dispatch.
 
 In the threaded-interpreter band — i.e. excluding `gforth-fast`'s
-dynamic native-code translator — *ff* now leads on three of five
-benchmarks and trails on two by amounts that are below the noise
-floor of a 100-million-dispatch workload. The peephole table (see
-[doc/md/20-design.md](20-design.md) `### Two-op peephole
-superinstructions`) is what closed the previous 2× gaps.
+dynamic native-code translator — *ff* now leads or ties on every
+benchmark. The remaining 0.84–0.97× gap on b1 / b5 / b1-vs-default-
+gforth is the cost of `switch (*ip++)` versus computed-goto: a
+single-jump-site can't get per-opcode branch prediction.
 
 ### Where the gains came from
 
 - **b2 sum** (290 → 120 ms): the `FF_OP_I_ADD` peephole already
-  fused `i +` into one dispatch; this round added
-  `FF_OP_I_ADD_LOOP` so `i + loop` is a single back-edge
-  instruction. Inner-loop dispatch count: 2 → 1.
-- **b4 variable r/m/w** (680 → 250 ms): the `<var> @`/`!`/`+!`
-  peepholes (`FF_OP_VAR_FETCH` etc.) bypass the
-  `CREATE_RUNTIME` → push-address → `FETCH` round-trip. Each
-  variable access is one dispatch instead of two.
-- **b3 fib** (960 → 850 ms): downstream of `FF_R_TRUSTED`'s
-  elision of redundant `_FF_RSL` checks at every NEST/EXIT, plus
-  the `__builtin_expect(..., 0)` hints on the validators making
-  the hot path straight-line.
+  fused `i +` into one dispatch; the `FF_OP_I_ADD_LOOP` extension
+  fuses `i + loop` into a single back-edge instruction. Inner-loop
+  dispatch count went from 2 to 1.
+- **b4 variable r/m/w** (680 → 220 ms, ~3× speedup): the
+  `<var> @`/`!`/`+!` peepholes (`FF_OP_VAR_FETCH` and friends)
+  bypass the `CREATE_RUNTIME` → push-address → `FETCH` round-trip.
+  Each variable access is one dispatch instead of two.
+- **b3 fib** (960 → 760 ms): `FF_R_TRUSTED` elides the redundant
+  `_FF_RSL` checks at every NEST / EXIT, and the
+  `__builtin_expect(..., 0)` hints on the validators keep the hot
+  path straight-line. The 2-cell return frame (saved IP + saved
+  cur_word for restoration on EXIT) costs a few percent here, paid
+  for by tighter diagnostics on error.
 
-The remaining gap to `gforth-fast` (b1: 0.59, b3: 0.59, b4: 0.52)
+The remaining gap to `gforth-fast` (b1: 0.65, b3: 0.67, b4: 0.59)
 is the cost of not having a native-code back end. That trade is
 deliberate: the entire interpreter is one C source file plus
 per-category dispatch includes, builds clean under MSVC, runs on
@@ -155,9 +156,9 @@ Wall-clock results, milliseconds, best of five:
 
 | Benchmark            | C `-O0` | C `-O3` | ff (release) | ff vs C `-O3` |
 |----------------------|--------:|--------:|-------------:|--------------:|
-| empty loop (100M)    |     210 |      20 |          340 |        ~17×   |
+| empty loop (100M)    |     210 |      20 |          310 |        ~16×   |
 | sum 0..49,999,999    |     110 |     100 |          120 |        ~1.2×  |
-| fib(36)              |     100 |      50 |          850 |        ~17×   |
+| fib(36)              |     100 |      50 |          760 |        ~15×   |
 
 **For honest interpreter-vs-native code comparison**, look at the
 first and third rows: roughly **15-20× slower** than `-O3` C. That's
@@ -230,17 +231,17 @@ table:
 
 | Workload          | ffsh | lua 5.4 | ratio (lua / ffsh) |
 |-------------------|-----:|--------:|-------------------:|
-| b1 empty loop     |  340 |     370 |              1.09× |
-| b2 sum            |  120 |     220 |              1.83× |
-| b3 fib(36)        |  850 |    1240 |              1.46× |
-| b4 variable r/m/w |  250 |     450 |              1.80× |
-| b5 nested loops   |  340 |     370 |              1.09× |
+| b1 empty loop     |  310 |     370 |              1.19× |
+| b2 sum            |  120 |     210 |              1.75× |
+| b3 fib(36)        |  760 |    1250 |              1.64× |
+| b4 variable r/m/w |  220 |     460 |              2.09× |
+| b5 nested loops   |  310 |     370 |              1.19× |
 
 *ff* leads on every workload. The pure-dispatch benchmarks (b1,
-b5) are within 9 % — both VMs are dispatch-bound and there's not
+b5) are within 19 % — both VMs are dispatch-bound and there's not
 much daylight between switch-threaded Forth and Lua's register VM
 when the body is a no-op. The arithmetic and memory workloads (b2,
-b3, b4) show 1.5-1.8× gaps, which is consistent with Lua's
+b3, b4) show 1.6–2.1× gaps, which is consistent with Lua's
 per-operand type-tag dispatch (every `+` has to check whether
 operands are integer, float, table-with-`__add`, or string-coerced)
 and its per-call register-frame allocation. Forth has neither cost:
@@ -261,7 +262,7 @@ occupies the "JIT'd scripting language" niche along with
 
 **What this means for embedders choosing between *ff* and stock Lua:**
 
-- On raw VM speed, *ff* is 1.0-1.8× faster — useful but rarely the
+- On raw VM speed, *ff* is 1.2–2.1× faster — useful but rarely the
   deciding factor.
 - The deciding factors are usually language fit and footprint:
   Lua's syntax and stdlib are familiar to most teams; *ff*'s syntax

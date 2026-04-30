@@ -49,6 +49,31 @@ void *ff_arena_alloc(ff_arena_t *a, size_t bytes)
     return p;
 }
 
+/* Round a byte count up the same way ff_arena_alloc does, so trim
+   measurements line up with what alloc actually consumed. */
+static size_t ff_arena_round(size_t bytes)
+{
+    return (bytes + 7) & ~(size_t)7;
+}
+
+/* Try to shrink @p region from @p old_bytes to @p new_bytes. Effective
+   only when @p region is at the tail of the current slab — otherwise
+   this is a no-op (the freed space is sandwiched between live
+   regions and can't be reclaimed without compaction). */
+void ff_arena_trim(ff_arena_t *a, void *region, size_t old_bytes,
+                   size_t new_bytes)
+{
+    if (!a || !a->head || !region) return;
+    if (new_bytes >= old_bytes) return;
+    ff_arena_slab_t *s = a->head;
+    size_t old_aligned = ff_arena_round(old_bytes);
+    size_t new_aligned = ff_arena_round(new_bytes);
+    char *region_end = (char *)region + old_aligned;
+    if (region_end != &s->data[s->used])
+        return;     /* not at the tail — can't reclaim */
+    s->used -= (old_aligned - new_aligned);
+}
+
 /** @copydoc ff_arena_destroy */
 void ff_arena_destroy(ff_arena_t *a)
 {

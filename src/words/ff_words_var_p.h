@@ -79,6 +79,9 @@ case FF_OP_VARIABLE:
     ff_dict_append(&ff->dict,
                    ff_word_new(" ", NULL, FF_OP_CREATE_RUNTIME, NULL));
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, 0);
+    /* The variable's heap is exactly one cell — trim the doubling
+       overhead from the initial allocation. */
+    ff_heap_trim(&ff_dict_top(&ff->dict)->heap);
     _FF_NEXT();
 
 /** ( v -- )  `constant` — define a word whose runtime pushes v. */
@@ -88,6 +91,7 @@ case FF_OP_CONSTANT:
     ff_dict_append(&ff->dict,
                    ff_word_new(" ", NULL, FF_OP_CONSTANT_RUNTIME, NULL));
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, tos);
+    ff_heap_trim(&ff_dict_top(&ff->dict)->heap);
     _DROP();
     _FF_NEXT();
 
@@ -118,8 +122,11 @@ case FF_OP_DEFER:
     ff->state |= FF_STATE_DEF_PENDING;
     ff_dict_append(&ff->dict,
                    ff_word_new(" ", NULL, FF_OP_DEFER_RUNTIME, NULL));
-    /* Reserve a single cell holding the target xt; NULL until `is` sets it. */
+    /* Reserve a single cell holding the target xt; NULL until `is` sets it.
+       The xt slot is mutated by `is` later but the cell count is fixed,
+       so the trim is safe. */
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, 0);
+    ff_heap_trim(&ff_dict_top(&ff->dict)->heap);
     _FF_NEXT();
 
 /** ( xt -- )  `is` — store xt into the next-token-named deferred word. */

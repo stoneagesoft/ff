@@ -12,6 +12,8 @@ case FF_OP_ARRAY:
     ff_dict_append(&ff->dict,
                    ff_word_new(" ", NULL, FF_OP_ARRAY_RUNTIME, NULL));
     ff_heap_alloc(&ff_dict_top(&ff->dict)->heap, (int)tos);
+    /* Array size is fixed at definition; trim the doubling slack. */
+    ff_heap_trim(&ff_dict_top(&ff->dict)->heap);
     _DROP();
     _FF_NEXT();
 

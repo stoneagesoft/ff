@@ -90,6 +90,9 @@ case FF_OP_SEMICOLON:
             h->data[h->size - 2] = FF_OP_TNEST;
         else
             ff_heap_compile_op(h, FF_OP_EXIT);
+        /* Definition is closed — return the unused tail of this
+           heap's allocation to the arena. */
+        ff_heap_trim(h);
     }
     ff->state &= ~FF_STATE_COMPILING;
     ff_dict_top(&ff->dict)->opcode = FF_OP_NEST;

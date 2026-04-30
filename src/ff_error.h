@@ -41,6 +41,7 @@ typedef enum ff_error_code
 {
     FF_OK = 0,              /**< No error. */
 
+    FF_ERR_BAD_OPCODE,      /**< Bytecode contains an unrecognized opcode (corruption). */
     FF_ERR_BAD_PTR,         /**< Invalid pointer dereference. */
     FF_ERR_BROKEN,          /**< Engine is in a non-recoverable broken state. */
     FF_ERR_DIV_ZERO,        /**< Integer / real division by zero. */
