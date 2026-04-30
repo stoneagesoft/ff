@@ -70,7 +70,7 @@ case FF_OP_QBRANCH:
     }
     else
         ip++;
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( limit start -- )  R: ( -- leave-target limit index )  Runtime DO entry. */
@@ -79,27 +79,27 @@ case FF_OP_XDO:
     _FF_RSO_T(3);
     ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
     ip++;
-    ff_stack_push(R, _NOS);
+    ff_stack_push(R, _FF_NOS);
     ff_stack_push(R, tos);
-    _DROPN(2);
+    _FF_DROPN(2);
     _FF_NEXT();
 
 /** ( limit start -- )  Runtime ?DO entry: skip body when start == limit. */
 case FF_OP_XQDO:
     _FF_SL(2);
-    if (tos == _NOS)
+    if (tos == _FF_NOS)
     {
         ip += *ip;
-        _DROPN(2);
+        _FF_DROPN(2);
     }
     else
     {
         _FF_RSO_T(3);
         ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
         ip++;
-        ff_stack_push(R, _NOS);
+        ff_stack_push(R, _FF_NOS);
         ff_stack_push(R, tos);
-        _DROPN(2);
+        _FF_DROPN(2);
     }
     _FF_NEXT();
 
@@ -125,7 +125,7 @@ case FF_OP_PXLOOP:
     _FF_RSL_T(3);
     {
         ff_int_t niter = *ff_tos(R) + tos;
-        _DROP();
+        _FF_DROP();
         if (niter >= *ff_nos(R)
                 && *ff_tos(R) < *ff_nos(R))
         {
@@ -145,7 +145,7 @@ case FF_OP_PXLOOP:
 case FF_OP_LOOP_I:
     _FF_RSL_T(3);
     _FF_SO(1);
-    _PUSH(*ff_tos(R));
+    _FF_PUSH(*ff_tos(R));
     _FF_NEXT();
 
 /** ( n -- n+i )  Superinstruction emitted by the `i +` peephole. */
@@ -188,7 +188,7 @@ case FF_OP_QDUP:
     if (tos != 0)
     {
         _FF_SO(1);
-        _PUSH(tos);
+        _FF_PUSH(tos);
     }
     _FF_NEXT();
 
@@ -196,7 +196,7 @@ case FF_OP_QDUP:
 case FF_OP_LOOP_J:
     _FF_RSL_T(6);
     _FF_SO(1);
-    _PUSH(*ff_sat(R, 3));
+    _FF_PUSH(*ff_sat(R, 3));
     _FF_NEXT();
 
 /** ( -- )  `quit` — clear return stack and exit ff_exec. */
@@ -218,12 +218,12 @@ case FF_OP_THROW:
     _FF_SL(1);
     if (tos == 0)
     {
-        _DROP();
+        _FF_DROP();
     }
     else
     {
         ff->throw_code = tos;
-        _DROP();
+        _FF_DROP();
         ff->state |= FF_STATE_BROKEN | FF_STATE_THROWN;
         _FF_SYNC();
         goto broken;
@@ -237,7 +237,7 @@ case FF_OP_CATCH:
     {
         ff_word_t *xt = (ff_word_t *)(intptr_t)tos;
         _FF_CHECK_XT(xt);
-        _DROP();
+        _FF_DROP();
         /* Snapshot before the protected call. ff_exec leaves ff->ip
            cleared on return, so we also save the *outer* ip so the
            caller's bytecode position survives the nested run. */
@@ -261,11 +261,11 @@ case FF_OP_CATCH:
             ff->state &= ~(FF_STATE_BROKEN | FF_STATE_THROWN);
             if (S->top > 0)
                 tos = S->data[S->top - 1];
-            _PUSH(ff->throw_code);
+            _FF_PUSH(ff->throw_code);
         }
         else
         {
-            _PUSH(0);
+            _FF_PUSH(0);
         }
     }
     _FF_NEXT();
@@ -278,7 +278,7 @@ case FF_OP_IF:
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
         ff_heap_compile_int(h, 0);
-        _PUSH((ff_int_t)(h->size - 1));
+        _FF_PUSH((ff_int_t)(h->size - 1));
     }
     _FF_NEXT();
 
@@ -307,7 +307,7 @@ case FF_OP_THEN:
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         int bp = (int)tos;
         h->data[bp] = h->size - bp;
-        _DROP();
+        _FF_DROP();
         /* Position after THEN is a forward-branch target; the next
            op must not fold with whatever was the last op of the
            IF/ELSE clause. */
@@ -321,7 +321,7 @@ case FF_OP_BEGIN:
     _FF_SO(1);
     {
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
-        _PUSH((ff_int_t)h->size);
+        _FF_PUSH((ff_int_t)h->size);
         /* Position is the back-branch target; the next op mustn't
            fold with the previous one. */
         ff_heap_inhibit_peephole(h);
@@ -336,7 +336,7 @@ case FF_OP_UNTIL:
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
         ff_heap_compile_int(h, -(ff_int_t)(h->size - tos));
-        _DROP();
+        _FF_DROP();
     }
     _FF_NEXT();
 
@@ -348,7 +348,7 @@ case FF_OP_AGAIN:
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         ff_heap_compile_op(h, FF_OP_BRANCH);
         ff_heap_compile_int(h, -(ff_int_t)(h->size - tos));
-        _DROP();
+        _FF_DROP();
     }
     _FF_NEXT();
 
@@ -360,7 +360,7 @@ case FF_OP_WHILE:
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
         ff_heap_compile_int(h, 0);
-        _PUSH((ff_int_t)(h->size - 1));
+        _FF_PUSH((ff_int_t)(h->size - 1));
     }
     _FF_NEXT();
 
@@ -371,12 +371,12 @@ case FF_OP_REPEAT:
     {
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         int bp1 = (int)tos;
-        _DROP();
+        _FF_DROP();
         ff_heap_compile_op(h, FF_OP_BRANCH);
         int bp = (int)tos;
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
         h->data[bp1] = h->size - bp1;
-        _DROP();
+        _FF_DROP();
         /* Position after REPEAT is the WHILE forward target. */
         ff_heap_inhibit_peephole(h);
     }
@@ -390,7 +390,7 @@ case FF_OP_DO:
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         ff_heap_compile_op(h, FF_OP_XDO);
         ff_heap_compile_int(h, 0);
-        _PUSH((ff_int_t)h->size);
+        _FF_PUSH((ff_int_t)h->size);
     }
     _FF_NEXT();
 
@@ -402,7 +402,7 @@ case FF_OP_QDO:
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         ff_heap_compile_op(h, FF_OP_XQDO);
         ff_heap_compile_int(h, 0);
-        _PUSH((ff_int_t)h->size);
+        _FF_PUSH((ff_int_t)h->size);
     }
     _FF_NEXT();
 
@@ -416,7 +416,7 @@ case FF_OP_LOOP:
         int bp = (int)tos;
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
         h->data[bp - 1] = h->size - bp + 1;
-        _DROP();
+        _FF_DROP();
         /* DO leave-target lands here. */
         ff_heap_inhibit_peephole(h);
     }
@@ -432,7 +432,7 @@ case FF_OP_PLOOP:
         int bp = (int)tos;
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
         h->data[bp - 1] = h->size - bp + 1;
-        _DROP();
+        _FF_DROP();
         /* DO leave-target lands here. */
         ff_heap_inhibit_peephole(h);
     }

@@ -18,7 +18,7 @@ case FF_OP_DOES_RUNTIME:
         ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
         ff->cur_word = nw;
         ip = nw->does;
-        _PUSH_PTR(nw->heap.data);
+        _FF_PUSH_PTR(nw->heap.data);
     }
     _FF_NEXT();
 
@@ -41,7 +41,7 @@ case FF_OP_RBRACKET:
 /** ( -- flag )  `state` — push -1 if compiling, 0 if interpreting. */
 case FF_OP_STATE:
     _FF_SO(1);
-    _PUSH((ff->state & FF_STATE_COMPILING) ? FF_TRUE : FF_FALSE);
+    _FF_PUSH((ff->state & FF_STATE_COMPILING) ? FF_TRUE : FF_FALSE);
     _FF_NEXT();
 
 /** ( -- )  `[']` — anticipate next-token tick (compile-time literal address). */
@@ -61,7 +61,7 @@ case FF_OP_LITERAL:
     _FF_COMPILING;
     _FF_SL(1);
     ff_heap_compile_lit(&ff_dict_top(&ff->dict)->heap, tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( -- )  `compile` — compile the next inline cell verbatim. */
@@ -155,7 +155,7 @@ case FF_OP_EXECUTE:
     {
         ff_word_t *tw = (ff_word_t *)(intptr_t)tos;
         _FF_CHECK_XT(tw);
-        _DROP();
+        _FF_DROP();
         _FF_SYNC();
         ff_int_t *saved_ip = ip;
         ff_exec(ff, tw);

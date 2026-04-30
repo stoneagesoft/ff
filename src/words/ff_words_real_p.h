@@ -14,27 +14,27 @@
 /** ( -- r )  `(flit)` — push the inline real-literal cell. */
 case FF_OP_FLIT:
     _FF_SO(1);
-    _PUSH(*ip++);
+    _FF_PUSH(*ip++);
     _FF_NEXT();
 
 /** ( r1 r2 -- r3 )  `f+` — real addition. */
 case FF_OP_FADD:
     _FF_SL(2);
-    ff_set_real(&tos, ff_get_real(&_NOS) + ff_get_real(&tos));
+    ff_set_real(&tos, ff_get_real(&_FF_NOS) + ff_get_real(&tos));
     --S->top;
     _FF_NEXT();
 
 /** ( r1 r2 -- r3 )  `f-` — real subtraction. */
 case FF_OP_FSUB:
     _FF_SL(2);
-    ff_set_real(&tos, ff_get_real(&_NOS) - ff_get_real(&tos));
+    ff_set_real(&tos, ff_get_real(&_FF_NOS) - ff_get_real(&tos));
     --S->top;
     _FF_NEXT();
 
 /** ( r1 r2 -- r3 )  `f*` — real multiplication. */
 case FF_OP_FMUL:
     _FF_SL(2);
-    ff_set_real(&tos, ff_get_real(&_NOS) * ff_get_real(&tos));
+    ff_set_real(&tos, ff_get_real(&_FF_NOS) * ff_get_real(&tos));
     --S->top;
     _FF_NEXT();
 
@@ -47,7 +47,7 @@ case FF_OP_FDIV:
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO, "Division by real zero.");
         goto done;
     }
-    ff_set_real(&tos, ff_get_real(&_NOS) / ff_get_real(&tos));
+    ff_set_real(&tos, ff_get_real(&_FF_NOS) / ff_get_real(&tos));
     --S->top;
     _FF_NEXT();
 
@@ -108,7 +108,7 @@ case FF_OP_FATAN:
 /** ( y x -- atan2(y,x) )  `fatan2`. */
 case FF_OP_FATAN2:
     _FF_SL(2);
-    ff_set_real(&tos, atan2(ff_get_real(&_NOS), ff_get_real(&tos)));
+    ff_set_real(&tos, atan2(ff_get_real(&_FF_NOS), ff_get_real(&tos)));
     --S->top;
     _FF_NEXT();
 
@@ -127,7 +127,7 @@ case FF_OP_FLOG:
 /** ( base exp -- pow(base,exp) )  `fpow`. */
 case FF_OP_FPOW:
     _FF_SL(2);
-    ff_set_real(&tos, pow(ff_get_real(&_NOS), ff_get_real(&tos)));
+    ff_set_real(&tos, pow(ff_get_real(&_FF_NOS), ff_get_real(&tos)));
     --S->top;
     _FF_NEXT();
 
@@ -136,7 +136,7 @@ case FF_OP_F_DOT:
     _FF_SL(1);
     _FF_SYNC();
     ff_printf(ff, "%g", ff_get_real(&tos));
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( n -- r )  `float` — convert int to real. */
@@ -154,20 +154,20 @@ case FF_OP_FIX:
 /** ( -- pi )  `pi` — push 3.14159… */
 case FF_OP_PI:
     _FF_SO(1);
-    _PUSH_REAL(3.14159265358979323846);
+    _FF_PUSH_REAL(3.14159265358979323846);
     _FF_NEXT();
 
 /** ( -- e )  `e` — push 2.71828… */
 case FF_OP_E_CONST:
     _FF_SO(1);
-    _PUSH_REAL(2.71828182845904523536);
+    _FF_PUSH_REAL(2.71828182845904523536);
     _FF_NEXT();
 
 /** ( r1 r2 -- flag )  `f=`. */
 case FF_OP_FEQ:
     _FF_SL(2);
     {
-        ff_int_t t = (ff_get_real(&_NOS) == ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
+        ff_int_t t = (ff_get_real(&_FF_NOS) == ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
         --S->top;
         tos = t;
     }
@@ -177,7 +177,7 @@ case FF_OP_FEQ:
 case FF_OP_FNEQ:
     _FF_SL(2);
     {
-        ff_int_t t = (ff_get_real(&_NOS) != ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
+        ff_int_t t = (ff_get_real(&_FF_NOS) != ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
         --S->top;
         tos = t;
     }
@@ -187,7 +187,7 @@ case FF_OP_FNEQ:
 case FF_OP_FLT:
     _FF_SL(2);
     {
-        ff_int_t t = (ff_get_real(&_NOS) < ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
+        ff_int_t t = (ff_get_real(&_FF_NOS) < ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
         --S->top;
         tos = t;
     }
@@ -197,7 +197,7 @@ case FF_OP_FLT:
 case FF_OP_FGT:
     _FF_SL(2);
     {
-        ff_int_t t = (ff_get_real(&_NOS) > ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
+        ff_int_t t = (ff_get_real(&_FF_NOS) > ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
         --S->top;
         tos = t;
     }
@@ -207,7 +207,7 @@ case FF_OP_FGT:
 case FF_OP_FLE:
     _FF_SL(2);
     {
-        ff_int_t t = (ff_get_real(&_NOS) <= ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
+        ff_int_t t = (ff_get_real(&_FF_NOS) <= ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
         --S->top;
         tos = t;
     }
@@ -217,7 +217,7 @@ case FF_OP_FLE:
 case FF_OP_FGE:
     _FF_SL(2);
     {
-        ff_int_t t = (ff_get_real(&_NOS) >= ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
+        ff_int_t t = (ff_get_real(&_FF_NOS) >= ff_get_real(&tos)) ? FF_TRUE : FF_FALSE;
         --S->top;
         tos = t;
     }

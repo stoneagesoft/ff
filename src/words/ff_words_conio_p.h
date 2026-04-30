@@ -10,7 +10,7 @@ case FF_OP_DOT:
     _FF_SL(1);
     _FF_SYNC();
     ff_printf(ff, ff->base == FF_BASE_HEX ? "0x%lX" : "%ld", (long)tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( a -- )  `?` — print value at address TOS. */
@@ -19,7 +19,7 @@ case FF_OP_QUESTION:
     _FF_SYNC();
     ff_printf(ff, ff->base == FF_BASE_HEX ? "0x%lX" : "%ld",
               (long)*(ff_int_t *)(intptr_t)tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( -- )  `cr` — emit a newline. */
@@ -33,7 +33,7 @@ case FF_OP_EMIT:
     _FF_SL(1);
     _FF_SYNC();
     ff_printf(ff, "%c", (char)tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( s -- )  `type` — print NUL-terminated string at TOS. */
@@ -41,7 +41,7 @@ case FF_OP_TYPE:
     _FF_SL(1);
     _FF_SYNC();
     ff_printf(ff, "%s", (const char *)(intptr_t)tos);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( -- )  `.s` — print the entire data stack as a table. */

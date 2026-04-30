@@ -4,7 +4,7 @@
  * This header is included inside the `switch (*ip++)` in ff_exec().
  * It is NOT a standalone header — don't include it elsewhere.
  *
- * Binary ops follow the pattern `tos = _NOS op tos; --S->top;`. The
+ * Binary ops follow the pattern `tos = _FF_NOS op tos; --S->top;`. The
  * memory slot at the post-decrement S->data[S->top - 1] is left holding
  * the old NOS — that's fine, per the cached-TOS invariant the slot at
  * S->top - 1 is treated as scratch until the next sync.
@@ -13,7 +13,7 @@
 /** ( n1 n2 -- n3 )  `+` — n3 = n1 + n2. */
 case FF_OP_ADD:
     _FF_SL(2);
-    tos = _NOS + tos;
+    tos = _FF_NOS + tos;
     --S->top;
     _FF_NEXT();
 
@@ -21,7 +21,7 @@ case FF_OP_ADD:
     idiom. Saves one push/pop round-trip. */
 case FF_OP_OVER_PLUS:
     _FF_SL(2);
-    tos += _NOS;
+    tos += _FF_NOS;
     _FF_NEXT();
 
 /** ( n -- n+r )  Superinstruction: `r@ +` — index-relative offset
@@ -42,14 +42,14 @@ case FF_OP_DUP_ADD:
 /** ( n1 n2 -- n3 )  `-` — n3 = n1 - n2. */
 case FF_OP_SUB:
     _FF_SL(2);
-    tos = _NOS - tos;
+    tos = _FF_NOS - tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `*` — n3 = n1 * n2. */
 case FF_OP_MUL:
     _FF_SL(2);
-    tos = _NOS * tos;
+    tos = _FF_NOS * tos;
     --S->top;
     _FF_NEXT();
 
@@ -62,7 +62,7 @@ case FF_OP_DIV:
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO, "Division by zero.");
         goto done;
     }
-    tos = _NOS / tos;
+    tos = _FF_NOS / tos;
     --S->top;
     _FF_NEXT();
 
@@ -75,28 +75,28 @@ case FF_OP_MOD:
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO, "Division by zero.");
         goto done;
     }
-    tos = _NOS % tos;
+    tos = _FF_NOS % tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `and` — bitwise AND. */
 case FF_OP_AND:
     _FF_SL(2);
-    tos = _NOS & tos;
+    tos = _FF_NOS & tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `or` — bitwise OR. */
 case FF_OP_OR:
     _FF_SL(2);
-    tos = _NOS | tos;
+    tos = _FF_NOS | tos;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `xor` — bitwise exclusive OR. */
 case FF_OP_XOR:
     _FF_SL(2);
-    tos = _NOS ^ tos;
+    tos = _FF_NOS ^ tos;
     --S->top;
     _FF_NEXT();
 
@@ -109,42 +109,42 @@ case FF_OP_NOT:
 /** ( n1 n2 -- flag )  `=` — flag is FF_TRUE iff n1 == n2. */
 case FF_OP_EQ:
     _FF_SL(2);
-    tos = (_NOS == tos) ? FF_TRUE : FF_FALSE;
+    tos = (_FF_NOS == tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `<>` — flag is FF_TRUE iff n1 != n2. */
 case FF_OP_NEQ:
     _FF_SL(2);
-    tos = (_NOS != tos) ? FF_TRUE : FF_FALSE;
+    tos = (_FF_NOS != tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `<` — flag is FF_TRUE iff n1 <  n2. */
 case FF_OP_LT:
     _FF_SL(2);
-    tos = (_NOS < tos) ? FF_TRUE : FF_FALSE;
+    tos = (_FF_NOS < tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `>` — flag is FF_TRUE iff n1 >  n2. */
 case FF_OP_GT:
     _FF_SL(2);
-    tos = (_NOS > tos) ? FF_TRUE : FF_FALSE;
+    tos = (_FF_NOS > tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `<=` — flag is FF_TRUE iff n1 <= n2. */
 case FF_OP_LE:
     _FF_SL(2);
-    tos = (_NOS <= tos) ? FF_TRUE : FF_FALSE;
+    tos = (_FF_NOS <= tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- flag )  `>=` — flag is FF_TRUE iff n1 >= n2. */
 case FF_OP_GE:
     _FF_SL(2);
-    tos = (_NOS >= tos) ? FF_TRUE : FF_FALSE;
+    tos = (_FF_NOS >= tos) ? FF_TRUE : FF_FALSE;
     --S->top;
     _FF_NEXT();
 
@@ -182,8 +182,8 @@ case FF_OP_DIVMOD:
         goto done;
     }
     {
-        ff_int_t q = _NOS / tos;
-        _NOS %= tos;
+        ff_int_t q = _FF_NOS / tos;
+        _FF_NOS %= tos;
         tos = q;
     }
     _FF_NEXT();
@@ -191,16 +191,16 @@ case FF_OP_DIVMOD:
 /** ( n1 n2 -- n3 )  `min` — n3 = min(n1, n2). */
 case FF_OP_MIN:
     _FF_SL(2);
-    if (tos > _NOS)
-        tos = _NOS;
+    if (tos > _FF_NOS)
+        tos = _FF_NOS;
     --S->top;
     _FF_NEXT();
 
 /** ( n1 n2 -- n3 )  `max` — n3 = max(n1, n2). */
 case FF_OP_MAX:
     _FF_SL(2);
-    if (tos < _NOS)
-        tos = _NOS;
+    if (tos < _FF_NOS)
+        tos = _FF_NOS;
     --S->top;
     _FF_NEXT();
 
@@ -233,8 +233,8 @@ case FF_OP_ZERO_GT:
 case FF_OP_SHIFT:
     _FF_SL(2);
     tos = tos < 0
-                ? (_NOS >> (-tos))
-                : (_NOS << tos);
+                ? (_FF_NOS >> (-tos))
+                : (_FF_NOS << tos);
     --S->top;
     _FF_NEXT();
 
@@ -275,5 +275,5 @@ case FF_OP_SET_BASE:
                       "Unsupported base %ld.", (long)tos);
             goto done;
     }
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();

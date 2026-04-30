@@ -12,7 +12,7 @@ case FF_OP_TRACE:
         ff->state |= FF_STATE_TRACE;
     else
         ff->state &= ~FF_STATE_TRACE;
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( n -- )  `backtrace` — toggle FF_STATE_BACKTRACE based on n. */
@@ -22,21 +22,21 @@ case FF_OP_BACKTRACE:
         ff->state |= FF_STATE_BACKTRACE;
     else
         ff->state &= ~FF_STATE_BACKTRACE;
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( -- errno )  `ERRNO` — push the C library errno value. */
 case FF_OP_ERRNO:
     _FF_SO(1);
-    _PUSH((ff_int_t)errno);
+    _FF_PUSH((ff_int_t)errno);
     _FF_NEXT();
 
 /** ( a n -- )  `dump` — hex+ASCII print of n bytes starting at a. */
 case FF_OP_DUMP:
     _FF_SL(2);
     _FF_SYNC();
-    ff_dump_bytes(ff, (const char *)(intptr_t)_NOS, (size_t)tos);
-    _DROPN(2);
+    ff_dump_bytes(ff, (const char *)(intptr_t)_FF_NOS, (size_t)tos);
+    _FF_DROPN(2);
     _FF_NEXT();
 
 #ifdef FF_OS_UNIX

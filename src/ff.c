@@ -10,8 +10,8 @@
  * cleanly under MSVC.
  *
  * The data-stack TOS is cached in a local register inside ff_exec; see
- * the @c _PUSH / @c _DROP / @c _NOS / @c _SAT macros and the
- * @c _SYNC_TOS / @c _LOAD_TOS hooks woven into @c _FF_SYNC and
+ * the @c _FF_PUSH / @c _FF_DROP / @c _FF_NOS / @c _FF_SAT macros and the
+ * @c _FF_SYNC_TOS / @c _FF_LOAD_TOS hooks woven into @c _FF_SYNC and
  * @c _FF_RESTORE for the contract.
  */
 
@@ -417,7 +417,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     /* Top-of-stack register cache. While dispatching, the topmost data
        stack value lives in `tos` (when S->top > 0); the in-memory slot at
        S->data[S->top - 1] is treated as scratch and may be stale until the
-       next _SYNC_TOS / _FF_SYNC. This shaves a load+store off every
+       next _FF_SYNC_TOS / _FF_SYNC. This shaves a load+store off every
        arithmetic operation that takes or returns TOS in place. Pure pushes
        still have to write the displaced TOS back, so the optimization
        targets compute-heavy bytecode rather than push-heavy code. */
@@ -425,40 +425,40 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                         ? S->data[S->top - 1]
                         : 0;
 
-    #define _SYNC_TOS()   do { if (S->top) S->data[S->top - 1] = tos; } while (0)
-    #define _LOAD_TOS()   do { if (S->top) tos = S->data[S->top - 1]; } while (0)
+    #define _FF_SYNC_TOS()   do { if (S->top) S->data[S->top - 1] = tos; } while (0)
+    #define _FF_LOAD_TOS()   do { if (S->top) tos = S->data[S->top - 1]; } while (0)
 
-    #define _FF_SYNC()    do { ff->ip = ip; _SYNC_TOS(); } while (0)
-    #define _FF_RESTORE() do { ip = ff->ip; _LOAD_TOS(); } while (0)
+    #define _FF_SYNC()    do { ff->ip = ip; _FF_SYNC_TOS(); } while (0)
+    #define _FF_RESTORE() do { ip = ff->ip; _FF_LOAD_TOS(); } while (0)
 
-    /* In-register convenience accessors used by case bodies. _TOS is the
-       cached TOS value (lvalue), _NOS / _SAT(i) reach into memory below
-       the cache. _SAT(0) is invalid — use _TOS for index 0. */
-    #define _TOS          tos
-    #define _NOS          (S->data[S->top - 2])
-    #define _SAT(i)       (S->data[S->top - 1 - (i)])
+    /* In-register convenience accessors used by case bodies. _FF_TOS is the
+       cached TOS value (lvalue), _FF_NOS / _FF_SAT(i) reach into memory below
+       the cache. _FF_SAT(0) is invalid — use _FF_TOS for index 0. */
+    #define _FF_TOS          tos
+    #define _FF_NOS          (S->data[S->top - 2])
+    #define _FF_SAT(i)       (S->data[S->top - 1 - (i)])
 
-    /* Stack-mutating helpers used by case bodies. _PUSH stores the
-       displaced TOS to memory before bringing in the new top; _DROP /
-       _DROPN reload TOS from memory if any items remain. */
-    #define _PUSH(x) \
+    /* Stack-mutating helpers used by case bodies. _FF_PUSH stores the
+       displaced TOS to memory before bringing in the new top; _FF_DROP /
+       _FF_DROPN reload TOS from memory if any items remain. */
+    #define _FF_PUSH(x) \
         do { \
             if (S->top) S->data[S->top - 1] = tos; \
             tos = (x); \
             ++S->top; \
         } while (0)
-    #define _PUSH_PTR(p)  _PUSH((ff_int_t)(intptr_t)(p))
-    #define _PUSH_REAL(r) \
+    #define _FF_PUSH_PTR(p)  _FF_PUSH((ff_int_t)(intptr_t)(p))
+    #define _FF_PUSH_REAL(r) \
         do { \
             if (S->top) S->data[S->top - 1] = tos; \
             ff_set_real(&tos, (r)); \
             ++S->top; \
         } while (0)
-    #define _DROP() \
+    #define _FF_DROP() \
         do { \
             if (--S->top) tos = S->data[S->top - 1]; \
         } while (0)
-    #define _DROPN(n) \
+    #define _FF_DROPN(n) \
         do { \
             S->top -= (n); \
             if (S->top) tos = S->data[S->top - 1]; \
@@ -702,16 +702,16 @@ done:
     #undef _FF_NEXT
     #undef _FF_SYNC
     #undef _FF_RESTORE
-    #undef _SYNC_TOS
-    #undef _LOAD_TOS
-    #undef _TOS
-    #undef _NOS
-    #undef _SAT
-    #undef _PUSH
-    #undef _PUSH_PTR
-    #undef _PUSH_REAL
-    #undef _DROP
-    #undef _DROPN
+    #undef _FF_SYNC_TOS
+    #undef _FF_LOAD_TOS
+    #undef _FF_TOS
+    #undef _FF_NOS
+    #undef _FF_SAT
+    #undef _FF_PUSH
+    #undef _FF_PUSH_PTR
+    #undef _FF_PUSH_REAL
+    #undef _FF_DROP
+    #undef _FF_DROPN
     #undef _FF_SL
     #undef _FF_SO
     #undef _FF_RSL

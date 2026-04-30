@@ -14,7 +14,7 @@ case FF_OP_ARRAY:
     ff_heap_alloc(&ff_dict_top(&ff->dict)->heap, (int)tos);
     /* Array size is fixed at definition; trim the doubling slack. */
     ff_heap_trim(&ff_dict_top(&ff->dict)->heap);
-    _DROP();
+    _FF_DROP();
     _FF_NEXT();
 
 /** ( idx -- a )  Runtime entry: TOS = array_base + idx. */
