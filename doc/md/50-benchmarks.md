@@ -191,6 +191,89 @@ running", not real-world compute.
   pattern.
 
 
+## Comparison against Lua
+
+Lua is the obvious second comparison for embedders: like *ff* it
+ships as a small C library, lives in-process, and is the de-facto
+standard for "scripting embedded into a C/C++ host". The five
+workloads transcribed verbatim to Lua 5.4:
+
+~~~{.lua}
+-- b1 empty loop
+for i = 1, 100000000 do local x = 1 end
+
+-- b2 sum
+local s = 0
+for i = 0, 49999999 do s = s + i end
+
+-- b3 fib(36)
+local function fib(n)
+    if n < 2 then return n end
+    return fib(n - 1) + fib(n - 2)
+end
+fib(36)
+
+-- b4 variable r/m/w (1-element table to force load + store)
+local v = {0}
+for i = 1, 50000000 do v[1] = v[1] + 1 end
+
+-- b5 nested loops 10 000 x 10 000
+for i = 1, 10000 do
+    for j = 1, 10000 do
+        local x = 1
+    end
+end
+~~~
+
+Wall-clock, milliseconds, best of five, same hardware as the gforth
+table:
+
+| Workload          | ffsh | lua 5.4 | ratio (lua / ffsh) |
+|-------------------|-----:|--------:|-------------------:|
+| b1 empty loop     |  340 |     370 |              1.09× |
+| b2 sum            |  120 |     220 |              1.83× |
+| b3 fib(36)        |  850 |    1240 |              1.46× |
+| b4 variable r/m/w |  250 |     450 |              1.80× |
+| b5 nested loops   |  340 |     370 |              1.09× |
+
+*ff* leads on every workload. The pure-dispatch benchmarks (b1,
+b5) are within 9 % — both VMs are dispatch-bound and there's not
+much daylight between switch-threaded Forth and Lua's register VM
+when the body is a no-op. The arithmetic and memory workloads (b2,
+b3, b4) show 1.5-1.8× gaps, which is consistent with Lua's
+per-operand type-tag dispatch (every `+` has to check whether
+operands are integer, float, table-with-`__add`, or string-coerced)
+and its per-call register-frame allocation. Forth has neither cost:
+a cell is a cell, and call/return is push/pop on the return stack.
+
+The honest caveat: this is **stock Lua**, the reference interpreter.
+**LuaJIT** is a different engine entirely — a tracing JIT that
+synthesises native machine code for hot loops, in the same
+"different category" sense as `gforth-fast` is from `gforth`. On
+these microbenchmarks LuaJIT typically lands within 2-3× of `-O3`
+C, beating every threaded-code engine by an order of magnitude.
+If you need that performance ceiling and can accept LuaJIT's
+architectural footprint (its own assembler back end, narrower
+platform support than stock Lua), that's the choice. *ff* and stock
+Lua occupy the same "small portable interpreter" niche; LuaJIT
+occupies the "JIT'd scripting language" niche along with
+`gforth-fast`.
+
+**What this means for embedders choosing between *ff* and stock Lua:**
+
+- On raw VM speed, *ff* is 1.0-1.8× faster — useful but rarely the
+  deciding factor.
+- The deciding factors are usually language fit and footprint:
+  Lua's syntax and stdlib are familiar to most teams; *ff*'s syntax
+  is unfamiliar but the language is dramatically smaller (no GC,
+  no closures, no metatables, no string library — a few hundred
+  words against Lua's reference manual).
+- For compliance / rule-engine / config-DSL embedding where every
+  rule body is short and the host C does the heavy lifting through
+  registered native words, both fit. Pick on syntax preference and
+  audit surface area, not on these microbenchmarks.
+
+
 ## Reproducing the numbers
 
 The `test/bench/` directory ships the sources verbatim. To re-run on
@@ -213,6 +296,16 @@ cd test/bench
 for src in c_b1 c_b2 c_b3; do
     clang -O3 $src.c -o $src
     /usr/bin/time -f '%e' ./$src
+done
+~~~
+
+The Lua transcriptions sit alongside as `b1.lua` ... `b5.lua`. Run
+them with a stock Lua 5.4:
+
+~~~{.sh}
+cd test/bench
+for n in 1 2 3 4 5; do
+    /usr/bin/time -f '%e' lua5.4 b$n.lua
 done
 ~~~
 

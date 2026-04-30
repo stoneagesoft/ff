@@ -3,7 +3,8 @@
 # print the results table. Best of five runs per cell.
 #
 # Requires: ffsh built somewhere (set FFSH=… or pass --ffsh PATH),
-# gforth, gforth-itc, gforth-fast on PATH.
+# gforth, gforth-itc, gforth-fast on PATH. lua5.4 is optional; if
+# present, a "lua" column is appended to the output.
 
 set -euo pipefail
 
@@ -40,9 +41,18 @@ bench() {
     printf '%4d ' "$best"
 }
 
-printf '%-18s | %4s | %4s | %4s | %4s\n' \
-       "Workload (ms)" "ffsh" "g-itc" "g" "g-f"
-printf -- '-------------------+------+------+------+------\n'
+HAS_LUA=0
+if command -v lua5.4 >/dev/null 2>&1; then HAS_LUA=1; fi
+
+if [ "$HAS_LUA" = 1 ]; then
+    printf '%-18s | %4s | %4s | %4s | %4s | %4s\n' \
+           "Workload (ms)" "ffsh" "g-itc" "g" "g-f" "lua"
+    printf -- '-------------------+------+------+------+------+------\n'
+else
+    printf '%-18s | %4s | %4s | %4s | %4s\n' \
+           "Workload (ms)" "ffsh" "g-itc" "g" "g-f"
+    printf -- '-------------------+------+------+------+------\n'
+fi
 
 declare -A names=(
     [b1]="empty loop"
@@ -58,5 +68,8 @@ for n in 1 2 3 4 5; do
     bench "gforth-itc"  "b$n.gf" "/usr/bin/gforth-itc" ; printf '| '
     bench "gforth"      "b$n.gf" "/usr/bin/gforth"     ; printf '| '
     bench "gforth-fast" "b$n.gf" "/usr/bin/gforth-fast"
+    if [ "$HAS_LUA" = 1 ]; then
+        printf '| '; bench "lua" "b$n.lua" "/usr/bin/lua5.4"
+    fi
     echo
 done
