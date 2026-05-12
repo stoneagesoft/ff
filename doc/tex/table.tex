@@ -1,18 +1,11 @@
-\usepackage{longtable}[=v4.13]
-\usepackage{tabu}
+\usepackage{longtable}
 \usepackage{tabularray}
-\usepackage{multirow}
+% multirow is loaded by ff.sty.
 \usepackage{colortbl}
 \usepackage{environ}
 
-\tabulinesep=^1mm_1mm
-
-\newtabulinestyle{dottedline=0.5pt on 0.5pt off 2pt}
-\newcommand{\dottedline}{\tabucline[dottedline]{-}}
-
-\newcommand{\topline}{\tabucline[1.5pt]{-}}
-\newcommand{\bottomline}{\tabucline[1.5pt]{-}}
-\newcommand{\midline}{\tabucline{-}}
+% Default vertical cell padding for tabularray-based DoxyTables.
+\SetTblrInner{rowsep=1mm}
 
 
 % --- Doxygen ≥ 1.16 table machinery ---

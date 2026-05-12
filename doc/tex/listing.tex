@@ -1,11 +1,9 @@
 \usepackage{listings}
-\usepackage{chngcntr}
 \usepackage{color}
-\usepackage{fancyvrb}
-\usepackage{verbatim}
-\usepackage{tcolorbox}
+% chngcntr is loaded in header.tex.
+% fancyvrb / verbatim are loaded by ff.sty; tcolorbox by header.tex.
 
-\lstloadlanguages{[GNU]C++,Java,sh,xml,HTML,Perl,bash}
+\lstloadlanguages{C,Java,sh,xml,HTML,bash}
 
 %\AtBeginDocument{\counterwithin{lstlisting}{subsection}}
 
@@ -15,9 +13,10 @@
 \definecolor{colorCadetBlue}{cmyk}{0.62,0.57,0.23,0}
 \definecolor{colorSourceCodeBg}{HTML}{FCE94F}
 
-% Source code highlighting.
+% Source code highlighting. The project is C; the per-environment
+% wrappers below override `language` for C++/JSON/HTML/sh blocks.
 \lstset{
-    language=C++,
+    language=C,
     inputencoding=utf8,
     aboveskip=2mm,
     framexleftmargin=5mm,
@@ -114,7 +113,7 @@
 \lstnewenvironment{json}[1][]
 {
     \rm
-    \hfill\lstset{language=Java,#1}\minipage{0.8\linewidth}
+    \hfill\lstset{language=json,#1}\minipage{0.8\linewidth}
 }
 {
     \endminipage\hfill\null

@@ -12,24 +12,17 @@
 \usepackage{alltt}
 \usepackage{amssymb}
 \usepackage{amsmath}
-\usepackage{amsthm}
 \usepackage{xspace}
 \usepackage{datetime}
 \usepackage[fit]{truncate}
 \usepackage[pdftex]{graphicx}
-\usepackage{multicol}
 \usepackage{float}
 \usepackage{textcomp}
 \usepackage{chngcntr}
-\usepackage{subcaption}
-\usepackage{titlecaps}% http://ctan.org/pkg/titlecaps
-\usepackage{makeidx}
-\usepackage{forloop}
 \usepackage{xstring}
 \usepackage{enumitem}
-\usepackage{mathtools}
-\usepackage{bchart}
 \usepackage{svg}
+\usepackage{tcolorbox}
 
 \input{../tex/defines.tex}
 
@@ -61,35 +54,10 @@
 \newcommand\hrulefilll{\leavevmode\leaders\hrule\hskip 0pt plus 1filll\kern\z@}
 \makeatother
 
-% Headers & footers
-\usepackage{fancyhdr}
-\pagestyle{fancyplain}
-\renewcommand{\footrulewidth}{0.4pt}
-
-\fancypagestyle{fancyplain}{
-    \fancyhf{}
-    \fancyhead[LE, RO]{\bfseries\thepage}
-    \fancyhead[LO]{\bfseries\scriptsize\rightmark}
-    \fancyhead[RE]{\bfseries\scriptsize\leftmark}
-    \fancyfoot[LE, RO]{\bfseries\scriptsize\company{}}
-    \fancyfoot[LO, RE]{\bfseries\scriptsize\title{}}
-}
-
-\fancypagestyle{plain}{
-    \fancyhf{}
-    \fancyfoot[LO, RE]{\bfseries\scriptsize \title{} }
-    \renewcommand{\headrulewidth}{0pt}
-}
-
-\pagestyle{fancyplain}
-
-% ToC, LoF, LoT, bibliography, and index
-% Indices & bibliography
-%\usepackage{natbib}
-%\usepackage[titles]{tocloft}
-%\setcounter{tocdepth}{5}
-%\setcounter{secnumdepth}{5}
-
+% Page headers/footers are wired manually in page_header.tex and
+% page_footer.tex (\@oddhead / \@evenhead / \@oddfoot / \@evenfoot).
+% fancyhdr was previously also configured here but was overridden by
+% those direct redefinitions, so it has been removed.
 
 % Custom commands used by the header
 % Custom commands

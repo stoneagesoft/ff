@@ -27,7 +27,7 @@
 \RequirePackage{enumitem}
 \RequirePackage{alphalph}
 \RequirePackage[normalem]{ulem} % for strikeout, but don't modify emphasis
-\RequirePackage{tcolorbox}
+% tcolorbox is loaded in header.tex (before any \input files that use it).
 
 %---------- Internal commands used in this style file ----------------
 
@@ -245,7 +245,8 @@
 \setlist[DoxyEnumerate,12]{label=\enumAlphAlphcnt*.}
 
 % Used by bullet lists (using '-', @li, @arg, or <ul> ... </ul>)
-\setlistdepth{12}
+% setlistdepth was already raised to 12 above for DoxyEnumerate; it's
+% global, so we don't repeat it here.
 \newlist{DoxyItemize}{itemize}{12}
 \setlist[DoxyItemize]{label=\textperiodcentered}
 
@@ -402,112 +403,83 @@
   \end{DoxyDesc}%
 }
 
-% Used by parameter lists
-\newenvironment{DoxyParams}[2][]{%
-    \tabulinesep=1mm%
-    \par%
-    \ifthenelse{\equal{#1}{}}%
-      {\begin{longtabu*}spread 0pt [l]{|X[-1,l]|X[-1,l]|}}% name + description
-    {\ifthenelse{\equal{#1}{1}}%
-      {\begin{longtabu*}spread 0pt [l]{|X[-1,l]|X[-1,l]|X[-1,l]|}}% in/out + name + desc
-      {\begin{longtabu*}spread 0pt [l]{|X[-1,l]|X[-1,l]|X[-1,l]|X[-1,l]|}}% in/out + type + name + desc
-    }
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #2}\\[1ex]%
-    \hline%
-    \endfirsthead%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #2}\\[1ex]%
-    \hline%
-    \endhead%
-}{%
-    \end{longtabu*}%
-    \vspace{6pt}%
+% --- Doxy* parameter-set tables -------------------------------------
+% Replacement for the legacy `longtabu*` envs. These use plain
+% `longtable` rather than tabularray's `longtblr` because the doxygen
+% body emits inline \hline / \multicolumn / many \index calls per row,
+% and tabularray's regex-based table splitter overflows internal
+% counters on long enum tables under those conditions. `longtable` is
+% part of the standard LaTeX kernel, has no third-party deps, and
+% handles \multicolumn / \endfirsthead / \endhead natively.
+%
+% Title-row + page-repeat is done via \endfirsthead / \endhead, the
+% same idiom longtabu used.
+
+% Title-row helper. Picked up by \DoxyParamSet below.
+\providecommand{\DoxyParamTitle}[1]{%
+  \hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1%
 }
 
-% Used for fields of simple structs
-\newenvironment{DoxyFields}[1]{%
-    \tabulinesep=1mm%
-    \par%
-    \begin{longtabu*}spread 0pt [l]{|X[-1,r]|X[-1,l]|X[-1,l]|}%
-    \multicolumn{3}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endfirsthead%
-    \multicolumn{3}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endhead%
-}{%
-    \end{longtabu*}%
-    \vspace{6pt}%
+% Build a longtable with a title row spanning every column. The title
+% row appears once at the top and repeats on every page break.
+% #1 = total column count, #2 = longtable colspec, #3 = title, #4 = body.
+\NewDocumentCommand{\DoxyParamSet}{m m m +m}{%
+  \par
+  \begin{longtable}{#2}%
+  \multicolumn{#1}{l}{\DoxyParamTitle{#3}}\\[1ex]\hline
+  \endfirsthead
+  \multicolumn{#1}{l}{\DoxyParamTitle{#3}}\\[1ex]\hline
+  \endhead
+  #4
+  \end{longtable}%
+  \vspace{6pt}%
 }
 
-% Used for fields simple class style enums
-\newenvironment{DoxyEnumFields}[1]{%
-    \tabulinesep=1mm%
-    \par%
-    \begin{longtabu*}spread 0pt [l]{|X[-1,r]|X[-1,l]|}%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endfirsthead%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endhead%
-}{%
-    \end{longtabu*}%
-    \vspace{6pt}%
-}
+% Used by parameter lists. Optional #1: 0/missing = name+desc (2 cols);
+% 1 = in/out + name + desc (3 cols); 2 = in/out + type + name + desc.
+\NewDocumentEnvironment{DoxyParams}{O{0} m +b}{%
+  \ifnum#1>1
+    \DoxyParamSet{4}{|l|l|l|p{0.4\linewidth}|}{#2}{#3}%
+  \else\ifnum#1>0
+    \DoxyParamSet{3}{|l|l|p{0.55\linewidth}|}{#2}{#3}%
+  \else
+    \DoxyParamSet{2}{|l|p{0.7\linewidth}|}{#2}{#3}%
+  \fi\fi
+}{}
 
-% Used for parameters within a detailed function description
+% Used for fields of simple structs.
+\NewDocumentEnvironment{DoxyFields}{m +b}{%
+  \DoxyParamSet{3}{|r|l|p{0.6\linewidth}|}{#1}{#2}%
+}{}
+
+% Used for fields of simple class-style enums.
+\NewDocumentEnvironment{DoxyEnumFields}{O{2} m +b}{%
+  \ifnum#1>2
+    \DoxyParamSet{3}{|l|r|p{0.6\linewidth}|}{#2}{#3}%
+  \else
+    \DoxyParamSet{2}{|r|p{0.7\linewidth}|}{#2}{#3}%
+  \fi
+}{}
+
+% Used for parameters within a detailed function description.
 \newenvironment{DoxyParamCaption}{%
-  \renewcommand{\item}[3][]{\\ \hspace*{2.0cm} ##1 {\em ##2}##3}% 
-}{%
-}
+  \renewcommand{\item}[3][]{\\ \hspace*{2.0cm} ##1 {\em ##2}##3}%
+}{}
 
-% Used by return value lists
-\newenvironment{DoxyRetVals}[1]{%
-    \tabulinesep=1mm%
-    \par%
-    \begin{longtabu*}spread 0pt [l]{|X[-1,r]|X[-1,l]|}%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endfirsthead%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endhead%
-}{%
-    \end{longtabu*}%
-    \vspace{6pt}%
-}
+% Used by return value lists.
+\NewDocumentEnvironment{DoxyRetVals}{m +b}{%
+  \DoxyParamSet{2}{|r|p{0.7\linewidth}|}{#1}{#2}%
+}{}
 
-% Used by exception lists
-\newenvironment{DoxyExceptions}[1]{%
-    \tabulinesep=1mm%
-    \par%
-    \begin{longtabu*}spread 0pt [l]{|X[-1,r]|X[-1,l]|}%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endfirsthead%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endhead%
-}{%
-    \end{longtabu*}%
-    \vspace{6pt}%
-}
+% Used by exception lists.
+\NewDocumentEnvironment{DoxyExceptions}{m +b}{%
+  \DoxyParamSet{2}{|r|p{0.7\linewidth}|}{#1}{#2}%
+}{}
 
-% Used by template parameter lists
-\newenvironment{DoxyTemplParams}[1]{%
-    \tabulinesep=1mm%
-    \par%
-    \begin{longtabu*}spread 0pt [l]{|X[-1,r]|X[-1,l]|}%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endfirsthead%
-    \multicolumn{2}{l}{\hspace{-6pt}\bfseries\fontseries{bc}\selectfont\color{darkgray} #1}\\[1ex]%
-    \hline%
-    \endhead%
-}{%
-    \end{longtabu*}%
-    \vspace{6pt}%
-}
+% Used by template parameter lists.
+\NewDocumentEnvironment{DoxyTemplParams}{m +b}{%
+  \DoxyParamSet{2}{|r|p{0.7\linewidth}|}{#1}{#2}%
+}{}
 
 % Used for member lists
 \newenvironment{DoxyCompactItemize}{%
@@ -569,16 +541,16 @@
   \end{list}%
 }
 
-% Used by tables
+% Used by tables — generic long-table wrappers. `TabularC` is the
+% paginated, centred form; `TabularNC` is non-paginated, left-aligned.
 \newcommand{\PBS}[1]{\let\temp=\\#1\let\\=\temp}%
 \newenvironment{TabularC}[1]%
-{\tabulinesep=1mm
-\begin{longtabu*}spread 0pt [c]{*#1{|X[-1]}|}}%
-{\end{longtabu*}\par}%
+  {\begin{center}\begin{longtable}{*{#1}{|l}|}}%
+  {\end{longtable}\end{center}}
 
 \newenvironment{TabularNC}[1]%
-{\begin{tabu}spread 0pt [l]{*#1{|X[-1]}|}}%
-{\end{tabu}\par}%
+  {\begin{tabular}{*{#1}{|l}|}}%
+  {\end{tabular}\par}
 
 % Used for member group headers
 \newenvironment{Indent}{%
