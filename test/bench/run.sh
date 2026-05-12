@@ -42,17 +42,25 @@ bench() {
 }
 
 HAS_LUA=0
+HAS_PY=0
 if command -v lua5.4 >/dev/null 2>&1; then HAS_LUA=1; fi
+if command -v python3 >/dev/null 2>&1; then HAS_PY=1;  fi
 
+# Header. Optional columns appended in order: lua, py.
+header_fmt='%-18s | %4s | %4s | %4s | %4s'
+header_args=("Workload (ms)" "ffsh" "g-itc" "g" "g-f")
+sep='-------------------+------+------+------+------'
 if [ "$HAS_LUA" = 1 ]; then
-    printf '%-18s | %4s | %4s | %4s | %4s | %4s\n' \
-           "Workload (ms)" "ffsh" "g-itc" "g" "g-f" "lua"
-    printf -- '-------------------+------+------+------+------+------\n'
-else
-    printf '%-18s | %4s | %4s | %4s | %4s\n' \
-           "Workload (ms)" "ffsh" "g-itc" "g" "g-f"
-    printf -- '-------------------+------+------+------+------\n'
+    header_fmt+=' | %4s'; header_args+=("lua"); sep+='+------'
 fi
+if [ "$HAS_PY" = 1 ]; then
+    header_fmt+=' | %4s'; header_args+=("py");  sep+='+------'
+fi
+header_fmt+='\n'
+
+# shellcheck disable=SC2059  # printf format intentionally built dynamically
+printf "$header_fmt" "${header_args[@]}"
+printf -- '%s\n' "$sep"
 
 declare -A names=(
     [b1]="empty loop"
@@ -70,6 +78,9 @@ for n in 1 2 3 4 5; do
     bench "gforth-fast" "b$n.gf" "/usr/bin/gforth-fast"
     if [ "$HAS_LUA" = 1 ]; then
         printf '| '; bench "lua" "b$n.lua" "/usr/bin/lua5.4"
+    fi
+    if [ "$HAS_PY" = 1 ]; then
+        printf '| '; bench "python3" "b$n.py" "/usr/bin/python3"
     fi
     echo
 done

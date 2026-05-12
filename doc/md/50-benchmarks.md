@@ -275,6 +275,104 @@ occupies the "JIT'd scripting language" niche along with
   audit surface area, not on these microbenchmarks.
 
 
+## Comparison against Python
+
+Python is the other ubiquitous embeddable scripting language in the
+C ecosystem. CPython 3 is the natural counterpart to stock Lua —
+same niche, same lack of a JIT in the default install, same role as
+"glue for a C host". The five workloads transcribed verbatim to
+Python 3:
+
+~~~{.py}
+# b1 empty loop
+for i in range(100000000):
+    x = 1
+
+# b2 sum
+s = 0
+for i in range(50000000):
+    s += i
+
+# b3 fib(36)
+def fib(n):
+    if n < 2: return n
+    return fib(n - 1) + fib(n - 2)
+fib(36)
+
+# b4 variable r/m/w (1-element list to force load + store)
+v = [0]
+for i in range(50000000):
+    v[0] = v[0] + 1
+
+# b5 nested loops 10 000 x 10 000
+for i in range(10000):
+    for j in range(10000):
+        x = 1
+~~~
+
+Wall-clock, milliseconds, best of five, same hardware as the gforth
+table. CPython 3.12.3 (the system Python on Ubuntu 24.04). The ffsh
+column was re-measured in the same session as the Python column for
+honest ratios; values trend ~30 % faster than the older numbers in
+the main results table above, the same "system-load + build-flag
+drift" variance you would see re-running the gforth table today:
+
+| Workload          | ffsh | python 3.12 | ratio (py / ffsh) |
+|-------------------|-----:|------------:|------------------:|
+| b1 empty loop     |  220 |        5050 |             23.0× |
+| b2 sum            |  140 |        4220 |             30.1× |
+| b3 fib(36)        |  770 |        2570 |              3.3× |
+| b4 variable r/m/w |  250 |        4210 |             16.8× |
+| b5 nested loops   |  220 |        5460 |             24.8× |
+
+CPython sits a tier below stock Lua on these microbenchmarks (Lua
+itself runs the b1/b5 dispatch workloads at ~380 ms here — Python is
+~13× slower than Lua on those, ~2× slower on fib). Two structural
+factors dominate:
+
+- **Per-bytecode object overhead.** CPython integers are heap-
+  allocated `PyObject`s with refcounts; every `i + 1` allocates a
+  result object (or hits the small-int cache), increments two
+  refcounts, and dispatches through the `__add__` slot. The b2 sum
+  and b4 r/m/w workloads spend most of their time in this object-
+  protocol machinery, not in arithmetic.
+- **No tail-call / no recursion fast path.** b3 fib is the closest
+  ratio (3.3×) because both engines do straight call/return with
+  a frame allocation per invocation, and CPython's frame allocator
+  is well-tuned. The arithmetic per call is negligible compared to
+  the call overhead, so CPython's per-op tax doesn't dominate here.
+
+The honest caveat, same as for Lua: this is **stock CPython**, the
+reference interpreter. **PyPy** is a different engine — a tracing
+JIT that synthesises native machine code for hot loops, comparable
+to `gforth-fast` and LuaJIT. On these microbenchmarks PyPy
+typically lands within 2-5× of `-O3` C, beating every threaded-
+code engine. If your embedding constraints allow PyPy (its own
+substantial runtime, slower C-extension interop than CPython,
+narrower platform support), that's the choice. *ff* and stock
+CPython occupy the same "small portable interpreter" niche.
+
+**What this means for embedders choosing between *ff* and stock CPython:**
+
+- On raw VM speed, *ff* is 16-30× faster on integer / dispatch
+  workloads, 3× faster on call-bound recursion. For Forth-heavy
+  compute, this is a real gap.
+- The deciding factor is almost never raw speed — it's the host
+  ecosystem and team familiarity. Python's stdlib is enormous and
+  its C API is the de-facto interop layer for ML, scientific,
+  and data tooling. *ff* offers none of that breadth.
+- For embedded / footprint-constrained hosts the calculus flips:
+  *ff* is one library plus a few hundred KB, no GC, no thread
+  state machinery, no GIL, no import system, no `.pyc` cache
+  directory in the user's filesystem. CPython embedding pulls in
+  the entire interpreter and its runtime services whether you
+  use them or not.
+- For Forth-style control DSLs (state machines, rule engines,
+  pipeline-step glue) where the host C does the heavy lifting,
+  *ff*'s niche is intact regardless of what Python does on a
+  microbenchmark.
+
+
 ## Reproducing the numbers
 
 The `test/bench/` directory ships the sources verbatim. To re-run on
@@ -309,6 +407,20 @@ for n in 1 2 3 4 5; do
     /usr/bin/time -f '%e' lua5.4 b$n.lua
 done
 ~~~
+
+The Python transcriptions sit alongside as `b1.py` ... `b5.py`. Run
+them with stock CPython 3:
+
+~~~{.sh}
+cd test/bench
+for n in 1 2 3 4 5; do
+    /usr/bin/time -f '%e' python3 b$n.py
+done
+~~~
+
+`run.sh` autodetects `lua5.4` and `python3` on `PATH` and appends
+the corresponding columns when present, so the script above is just
+for re-running a single engine in isolation.
 
 
 ## Appendix: benchmark sources

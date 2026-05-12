@@ -123,4 +123,4 @@ the project follows [Semantic Versioning](https://semver.org/).
   - `40-extending.md` — adding native C words, including the
     `FF_CHECK_ADDR` / `FF_CHECK_XT` validators.
   - `50-benchmarks.md` — comparison against the three gforth
-    engines.
+    engines, stock Lua 5.4, and stock CPython 3.
