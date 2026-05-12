@@ -6,6 +6,13 @@
  * Windows/MSVC without external dependencies. There is no in-line
  * editing or tab completion; each line is simply read from stdin and
  * appended to a per-user history file as it is evaluated.
+ *
+ * Watchdog demo: Ctrl-C aborts a running evaluation via
+ * ff_request_abort() (the async kill-flag path), and an optional
+ * wall-clock budget set through the FFSH_TIMEOUT_MS env var aborts via
+ * the ff_platform_t.watchdog polling callback. Both unwind cleanly to
+ * the prompt with FF_ERR_ABORTED; the prompt's fgets is signal-safe
+ * thanks to SA_RESTART on POSIX.
  */
 
 #include "ffsh_version.h"
@@ -13,12 +20,16 @@
 #include <ff.h>
 #include <ff_platform.h>
 
+#include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #  include <direct.h>
+#  include <windows.h>
 #  define ffsh_mkdir(p) _mkdir(p)
 #  define FFSH_PATH_SEP '\\'
 #else
@@ -131,6 +142,71 @@ static int ffsh_vprintf(void *ctx, const char *fmt, va_list args)
     return n;
 }
 
+
+/* --- Watchdog demo -------------------------------------------------
+ *
+ * Two mechanisms cooperate, both unwinding through FF_ERR_ABORTED:
+ *
+ *  - Async kill-flag: SIGINT (Ctrl-C) handler calls ff_request_abort
+ *    on the engine. Picked up at the next dispatch boundary.
+ *  - Polling watchdog: a wall-clock deadline checked by the engine
+ *    every watchdog_interval opcodes. Enabled by FFSH_TIMEOUT_MS.
+ *
+ * The watchdog context is a pointer to g_wd. The SIGINT handler reads
+ * g_ff (set just before ff_eval, cleared just after) — sig_atomic_t so
+ * the read is safe from a signal handler.
+ */
+
+typedef struct ffsh_watchdog_state
+{
+    uint64_t deadline_ms;   /* Monotonic-ms deadline; 0 = no time budget. */
+} ffsh_wd_t;
+
+static ffsh_wd_t g_wd;
+static volatile sig_atomic_t g_in_eval = 0;
+static ff_t * volatile g_ff = NULL;
+
+static uint64_t ffsh_now_ms(void)
+{
+#if defined(_WIN32)
+    return (uint64_t)GetTickCount64();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)ts.tv_nsec / 1000000ULL;
+#endif
+}
+
+static ff_watchdog_action_t ffsh_watchdog(void *ctx, uint64_t opcodes_run)
+{
+    (void) opcodes_run;
+    ffsh_wd_t *wd = (ffsh_wd_t *)ctx;
+    if (wd->deadline_ms && ffsh_now_ms() >= wd->deadline_ms)
+        return FF_WD_ABORT;
+    return FF_WD_CONTINUE;
+}
+
+static void ffsh_sigint(int sig)
+{
+    (void) sig;
+    if (g_in_eval && g_ff)
+        ff_request_abort(g_ff);
+}
+
+static void ffsh_install_sigint(void)
+{
+#if defined(_WIN32)
+    signal(SIGINT, ffsh_sigint);
+#else
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = ffsh_sigint;
+    sa.sa_flags   = SA_RESTART;   /* don't kill fgets at the prompt */
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+#endif
+}
+
 int main(int argc, char **argv)
 {
     (void) argc;
@@ -139,16 +215,41 @@ int main(int argc, char **argv)
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
 
+    /* Parse FFSH_TIMEOUT_MS. 0 / unset / unparseable disables the
+       polling time-budget. The async Ctrl-C path stays on regardless. */
+    uint32_t timeout_ms = 0;
+    const char *timeout_env = getenv("FFSH_TIMEOUT_MS");
+    if (timeout_env && *timeout_env)
+    {
+        char *end = NULL;
+        unsigned long v = strtoul(timeout_env, &end, 10);
+        if (end != timeout_env && v > 0 && v < (1UL << 31))
+            timeout_ms = (uint32_t)v;
+    }
+
+    /* Pick a watchdog interval that's responsive without bloating
+       per-opcode overhead. ~4 K opcodes ≈ 30 µs on this hardware, fine
+       for sub-second time-budget enforcement. The engine's default
+       (65 K) only matters if no callback is registered, but we set it
+       explicitly anyway. */
     ff_platform_t p =
     {
-        .context = NULL,
-        .vprintf = ffsh_vprintf,
-        .vtracef = NULL
+        .context           = &g_wd,
+        .vprintf           = ffsh_vprintf,
+        .vtracef           = NULL,
+        .watchdog          = timeout_ms ? ffsh_watchdog : NULL,
+        .watchdog_interval = 4096
     };
 
     ff_t *ff = ff_new(&p);
+    g_ff = ff;
+
+    ffsh_install_sigint();
 
     ff_printf(ff, "%s\n", ff_banner(ff));
+    if (timeout_ms)
+        ff_printf(ff, "Watchdog: aborting after %u ms per line.\n", timeout_ms);
+    ff_printf(ff, "Press Ctrl-C to abort a running evaluation.\n");
 
     for (;;)
     {
@@ -161,7 +262,12 @@ int main(int argc, char **argv)
 
         if (*line)
         {
+            g_wd.deadline_ms = timeout_ms
+                ? ffsh_now_ms() + timeout_ms
+                : 0;
+            g_in_eval = 1;
             ff_error_t ec = ff_eval(ff, line);
+            g_in_eval = 0;
 
             ffsh_history_append(line);
 
@@ -170,6 +276,7 @@ int main(int argc, char **argv)
         }
     }
 
+    g_ff = NULL;
     ff_free(ff);
 
     return EXIT_SUCCESS;
