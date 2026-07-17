@@ -26,6 +26,13 @@ the project follows [Semantic Versioning](https://semver.org/).
     conditional compilation, enum blocks, and similar DSL syntax in
     pure Forth; the regression suite's `015_parse.ff` defines
     `[if]` / `[then]` as a worked example.
+- `ffsh` now ships a Forth **prelude** (`examples/ffsh/prelude.ff`),
+  embedded into the binary at build time and evaluated once at startup.
+  It defines `char` and `[char]` — character-literal words built on
+  `parse-word` / `postpone` — as convenience shortcuts. The prelude is
+  part of the shell, not the `ff` library: the engine keeps its
+  no-built-in-Forth, no-global-state stance, and the prelude demonstrates
+  that such conveniences are a library concern rather than an engine one.
 - Checked stack scopes: `{ ( a b -- c ) … }`. A scope names a
   definition's inputs and walls off the data stack — code between `{`
   and `}` starts from an empty stack, reads its arguments only by name,

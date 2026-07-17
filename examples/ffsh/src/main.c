@@ -16,6 +16,7 @@
  */
 
 #include "ffsh_version.h"
+#include "ffsh_prelude.h"
 
 #include <ff.h>
 #include <ff_platform.h>
@@ -243,6 +244,14 @@ int main(int argc, char **argv)
 
     ff_t *ff = ff_new(&p);
     g_ff = ff;
+
+    /* Load the embedded Forth prelude (see prelude.ff) before the first
+       prompt. It defines convenience words in Forth rather than in the
+       engine. A failure here is non-fatal — the shell is still usable,
+       the user is just missing the shortcuts — so we warn and continue. */
+    if (ff_eval(ff, FFSH_PRELUDE) != 0)
+        fprintf(stderr, "Warning: prelude failed to load: %s\n",
+                ff_strerror(ff));
 
     ffsh_install_sigint();
 

@@ -1,0 +1,62 @@
+\ =====================================================================
+\ ffsh prelude
+\ ---------------------------------------------------------------------
+\ Convenience words that ship with the *ffsh* shell, written in Forth
+\ rather than baked into the engine. ffsh evaluates this file once at
+\ startup, before the first prompt, so every word defined here is
+\ available in an interactive session.
+\
+\ This file is deliberately part of the *shell*, not the *ff* library.
+\ The engine has no built-in Forth and no global state; anything that
+\ can be expressed as a Forth definition lives here instead, which is
+\ the whole point of the parsing words (`parse-word`, `parse`) and
+\ `postpone`: new notation is a library, not a language change. Edit
+\ this file (it is embedded at build time) to add your own shortcuts.
+\ =====================================================================
+
+
+\ ---------------------------------------------------------------------
+\ char / [char] --- character literals
+\ ---------------------------------------------------------------------
+\ *ff*'s `parse ( char -- c-addr )` takes its delimiter as a character
+\ *code*, e.g. `41 parse` to read up to ')'. Writing raw ASCII codes is
+\ error-prone; `char` and `[char]` turn a character written literally in
+\ the source into its code, so you can write `char )` instead of `41`.
+\
+\ Two words are needed for the same reason `'` has the companion `[']`
+\ and why `literal` exists: a value produced while *interpreting* must be
+\ explicitly compiled in when it is wanted *inside a definition*.
+\
+\   - `char`   acts at interpret time and pushes the code now.
+\   - `[char]` acts at compile time: it is immediate, so when the word
+\              being defined is compiled it lays the code down as a
+\              literal that will be pushed when that word later runs.
+\
+\ Both read their character with `parse-word` (the next whitespace token
+\ as text) and take its first byte with `c@`. `[char]` additionally uses
+\ `postpone literal` so the literal is compiled when `[char]` *runs*,
+\ not while `[char]` itself is being defined (ff's `literal` is itself
+\ immediate and would otherwise fire one level too early).
+\
+\ Caveat: because they read through the tokenizer, `char` / `[char]`
+\ cannot capture characters that are lexically special — `(` (opens a
+\ comment), `"` (opens a string), `\` (line comment), or whitespace. For
+\ those, use the numeric code directly (e.g. `40` for '(' ). Every
+\ ordinary character works: letters, digits, `)` `+` `-` `]` `.` etc.
+
+\ char ( "name" -- c )  Push the code of the first character of the next
+\ whitespace-delimited token.  e.g.  char A .   →  65
+: char    parse-word c@ ;
+
+\ [char] ( "name" -- c )  Compile-time char: inside a definition, compile
+\ the code of the next token's first character as a literal.
+\   e.g.  : open-paren  [char] ( ;    open-paren .   →  40
+: [char]  parse-word c@ postpone literal ; immediate
+
+
+\ ---------------------------------------------------------------------
+\ Add your own convenience words below.
+\ ---------------------------------------------------------------------
+\ For a larger worked example of defining notation from Forth — an
+\ `[if]` / `[then]` conditional-compilation pair built on `parse-word` —
+\ see test/cases/015_parse.ff in the source tree.

@@ -46,6 +46,24 @@ set(FFSH_VERSION_PATCH 0)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/ffsh_version.h.in"
                "${CMAKE_CURRENT_BINARY_DIR}/ffsh_version.h")
 
+# Embed the Forth prelude (examples/ffsh/prelude.ff) into the binary as a
+# C string literal, so the shell auto-loads it at startup independent of
+# install path or working directory. Reading + escaping happens at
+# configure time; touching prelude.ff triggers a reconfigure so the
+# generated header stays in sync.
+set(FFSH_PRELUDE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/prelude.ff")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${FFSH_PRELUDE_SRC}")
+file(READ "${FFSH_PRELUDE_SRC}" FFSH_PRELUDE_ESCAPED)
+string(REPLACE "\\" "\\\\" FFSH_PRELUDE_ESCAPED "${FFSH_PRELUDE_ESCAPED}")
+string(REPLACE "\"" "\\\"" FFSH_PRELUDE_ESCAPED "${FFSH_PRELUDE_ESCAPED}")
+string(REPLACE "\n" "\\n\"\n\"" FFSH_PRELUDE_ESCAPED "${FFSH_PRELUDE_ESCAPED}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ffsh_prelude.h"
+     "#pragma once\n"
+     "/* Generated from examples/ffsh/prelude.ff — do not edit. */\n"
+     "static const char FFSH_PRELUDE[] =\n"
+     "\"${FFSH_PRELUDE_ESCAPED}\";\n")
+
 add_executable(ffsh "${CMAKE_CURRENT_SOURCE_DIR}/src/main.c")
 
 target_include_directories(ffsh
