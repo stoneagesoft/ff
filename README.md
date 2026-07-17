@@ -31,11 +31,13 @@ host-supplied native words.
 - **Fast.** Token-threaded bytecode dispatched through a single
   `switch (*ip++)` whose case bodies are `#include`d from per-category
   headers. Top-of-stack and instruction pointer are register-cached
-  for the duration of `ff_exec`. Roughly parity with
-  [gforth-itc](https://gforth.org/) on the [bundled benchmark
-  suite](doc/md/50-benchmarks.md), within ~10 % of plain `gforth` on
-  call-heavy workloads, and 1.7-2× slower on arithmetic-heavy loops
-  where gforth wins on fused super-instructions.
+  for the duration of `ff_exec`. On the [bundled benchmark
+  suite](doc/md/50-benchmarks.md), measured on the reference hardware,
+  *ff* leads both threaded [gforth](https://gforth.org/) engines
+  (`gforth-itc` and the direct-threaded default `gforth`) on all five
+  workloads, by 1.1–1.4×. Only `gforth-fast`'s native-code translator
+  is faster, and chiefly on the compute-bound loops — on the
+  dispatch-bound benchmarks *ff* runs within ~5 % of it.
 - **~130 opcodes** covering integer / floating-point math, stack
   manipulation, control flow, counted loops, `create`/`does>`,
   `defer`/`is`, dictionary introspection, file I/O, and string
