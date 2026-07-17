@@ -167,6 +167,8 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_BRACKET_COMPILE]   = { "[compile]", FF_OP_LAYOUT_NONE },
     [FF_OP_LITERAL]           = { "literal",   FF_OP_LAYOUT_NONE },
     [FF_OP_COMPILE]           = { "compile",   FF_OP_LAYOUT_NONE },
+    [FF_OP_POSTPONE]          = { "postpone",  FF_OP_LAYOUT_NONE },
+    [FF_OP_POSTPONE_RUNTIME]  = { NULL,        FF_OP_LAYOUT_WORD },
     [FF_OP_DOES]              = { "does>",     FF_OP_LAYOUT_NONE },
 
     [FF_OP_QDUP]              = { "?dup",      FF_OP_LAYOUT_NONE },
@@ -214,6 +216,8 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
 
     [FF_OP_EVALUATE]          = { "evaluate",  FF_OP_LAYOUT_NONE },
     [FF_OP_LOAD]              = { "load",      FF_OP_LAYOUT_NONE },
+    [FF_OP_PARSE_WORD]        = { "parse-word", FF_OP_LAYOUT_NONE },
+    [FF_OP_PARSE]             = { "parse",     FF_OP_LAYOUT_NONE },
 
     [FF_OP_FIND]              = { "find",      FF_OP_LAYOUT_NONE },
     [FF_OP_TO_NAME]           = { ">name",     FF_OP_LAYOUT_NONE },

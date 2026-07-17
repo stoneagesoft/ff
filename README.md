@@ -55,6 +55,13 @@ host-supplied native words.
   The signature is stored with the word, so `see` prints it back.
   Ordinary RPN still works unchanged — scopes are opt-in, per
   definition.
+- **Extensible from Forth.** `parse-word` and `parse` hand a definition
+  the raw next token / delimited text from the input stream, and
+  `postpone` defers a word's compilation semantics. With the built-in
+  `evaluate`, that is enough to define new notation — conditional
+  compilation, enum blocks, small DSLs — from inside Forth rather than
+  by patching the engine in C, keeping the "library, not a language"
+  stance.
 - **Optional memory safety.** A `FF_SAFE_MEM` build flag turns every
   `@`/`!`/`+!`/`c@`/`c!`/`s!`/`s+`/`strlen`/`strcmp`/`execute` into a
   bounds-checked operation against the engine's tracked regions. Off

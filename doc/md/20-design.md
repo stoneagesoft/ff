@@ -511,13 +511,13 @@ entries (the canonical list is `FF_OP_*` in
 | Floating-point | `FF_OP_FADD`/`FSUB`/`FMUL`/`FDIV`, `FF_OP_FNEGATE`/`FABS`/`FSQRT`, `FF_OP_FSIN`/`FCOS`/`FTAN`/`FASIN`/`FACOS`/`FATAN`/`FATAN2`, `FF_OP_FEXP`/`FLOG`/`FPOW`, `FF_OP_F_DOT`/`FLOAT`/`FIX`/`PI`/`E_CONST`, `FF_OP_FEQ`/`FNEQ`/`FLT`/`FGT`/`FLE`/`FGE` |
 | Console I/O | `FF_OP_DOT`, `FF_OP_QUESTION`, `FF_OP_CR`, `FF_OP_EMIT`, `FF_OP_TYPE`, `FF_OP_DOT_S`, `FF_OP_DOT_PAREN`, `FF_OP_DOTQUOTE` |
 | Counted loops | `FF_OP_XDO`, `FF_OP_XQDO`, `FF_OP_XLOOP`, `FF_OP_PXLOOP`, `FF_OP_LOOP_I`, `FF_OP_LOOP_J`, `FF_OP_LEAVE`, `FF_OP_I_ADD` (peephole `i +`), `FF_OP_I_ADD_LOOP` (peephole `i + loop`) |
-| Compiler / immediate | `FF_OP_COLON`, `FF_OP_SEMICOLON`, `FF_OP_IMMEDIATE`, `FF_OP_LBRACKET`, `FF_OP_RBRACKET`, `FF_OP_TICK`, `FF_OP_BRACKET_TICK`, `FF_OP_EXECUTE`, `FF_OP_STATE`, `FF_OP_BRACKET_COMPILE`, `FF_OP_LITERAL`, `FF_OP_COMPILE`, `FF_OP_DOES` |
+| Compiler / immediate | `FF_OP_COLON`, `FF_OP_SEMICOLON`, `FF_OP_IMMEDIATE`, `FF_OP_LBRACKET`, `FF_OP_RBRACKET`, `FF_OP_TICK`, `FF_OP_BRACKET_TICK`, `FF_OP_EXECUTE`, `FF_OP_STATE`, `FF_OP_BRACKET_COMPILE`, `FF_OP_LITERAL`, `FF_OP_COMPILE`, `FF_OP_POSTPONE`, `FF_OP_POSTPONE_RUNTIME`, `FF_OP_DOES` |
 | Control flow | `FF_OP_QDUP`, `FF_OP_IF`/`ELSE`/`THEN`, `FF_OP_BEGIN`/`UNTIL`/`AGAIN`, `FF_OP_WHILE`/`REPEAT`, `FF_OP_DO`/`QDO`/`LOOP`/`PLOOP`, `FF_OP_QUIT`, `FF_OP_ABORT`, `FF_OP_ABORTQ`, `FF_OP_THROW`, `FF_OP_CATCH` |
 | Stack scopes | `FF_OP_LBRACE`/`RBRACE` (immediate `{`/`}`), `FF_OP_SCOPE_ENTER`, `FF_OP_SCOPE_EXIT`, `FF_OP_ARG` |
 | Definitions | `FF_OP_CREATE`, `FF_OP_FORGET`, `FF_OP_VARIABLE`, `FF_OP_CONSTANT`, `FF_OP_ARRAY`, `FF_OP_DEFER`, `FF_OP_IS` |
 | Heap | `FF_OP_HERE`, `FF_OP_STORE`/`FETCH`/`PLUS_STORE`, `FF_OP_ALLOT`/`COMMA`, `FF_OP_C_STORE`/`C_FETCH`/`C_COMMA`/`C_ALIGN` |
 | Strings | `FF_OP_STRING`, `FF_OP_S_STORE`, `FF_OP_S_CAT`, `FF_OP_STRLEN`, `FF_OP_STRCMP` |
-| Evaluation | `FF_OP_EVALUATE`, `FF_OP_LOAD` |
+| Evaluation / parsing | `FF_OP_EVALUATE`, `FF_OP_LOAD`, `FF_OP_PARSE_WORD`, `FF_OP_PARSE` |
 | Word-field introspection | `FF_OP_FIND`, `FF_OP_TO_NAME`, `FF_OP_TO_BODY` |
 | File I/O | `FF_OP_SYSTEM`, `FF_OP_STDIN`/`STDOUT`/`STDERR`, `FF_OP_FOPEN`/`FCLOSE`/`FGETS`/`FPUTS`/`FGETC`/`FPUTC`/`FTELL`/`FSEEK`, `FF_OP_SEEK_SET`/`SEEK_CUR`/`SEEK_END`, `FF_OP_ERRNO`/`STRERROR` |
 | Debug | `FF_OP_TRACE`, `FF_OP_BACKTRACE`, `FF_OP_DUMP`, `FF_OP_MEMSTAT` |
@@ -735,6 +735,40 @@ the thing scopes exist to eliminate).
 
 Scopes are compile-mode only: `{` uses the same `_FF_COMPILING` guard as
 `if`/`do`/`begin` and reports cleanly at the top-level prompt.
+
+
+## Input-stream words
+
+Three words let Forth code reach the source text directly, which is what
+makes new notation definable from inside the language rather than only in
+C:
+
+- **`parse-word ( -- c-addr )`** returns the next whitespace-delimited
+  token as a NUL-terminated string in the pad arena (`ff_pad_intern`).
+  Unlike `'`, it does *not* look the token up — it hands back raw text.
+  The read-ahead mechanism is the same one `'` uses: sync, call
+  `ff_tokenizer_next` against `ff->input` / `ff->input_pos`, restore. The
+  evaluator picks up the advanced `input_pos` after the word returns.
+- **`parse ( char -- c-addr )`** scans `ff->input` from the current
+  position to the next occurrence of the delimiter character, consuming
+  it, and returns the text before it. It bypasses the tokenizer and does
+  not skip leading delimiters — standard `parse` semantics.
+- **`postpone`** appends a word's *compilation* semantics to the current
+  definition. It runs as an immediate word that sets
+  `FF_STATE_POSTPONE_PENDING`; the evaluator then resolves the next token
+  and, knowing its immediacy, either compiles a direct call (immediate
+  target — it should run when the new definition runs) or emits
+  `FF_OP_POSTPONE_RUNTIME` carrying the word pointer (non-immediate
+  target — a call to it should be *compiled* when the new definition
+  runs). The runtime opcode calls `ff_heap_compile_word` on the
+  definition then in progress, so it handles multi-cell colon-defs
+  correctly, which the older single-cell `compile` primitive does not.
+
+Because ff already exposes `evaluate`, `parse-word` closes the loop: a
+parsing word can read tokens, assemble a string, and `evaluate` it —
+enough to build conditional compilation, enum blocks, or other DSL
+syntax without touching the engine. The regression suite's
+`015_parse.ff` defines `[if]` / `[then]` this way.
 
 
 ## Performance optimisations

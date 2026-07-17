@@ -100,6 +100,42 @@ void ff_free(ff_t *ff)
 }
 
 /**
+ * Copy @p len bytes of @p s into the transient string arena as a
+ * NUL-terminated C string and return a stable pointer to it.
+ *
+ * The arena grows on demand and is reset only by ff_abort, so the
+ * returned pointer stays valid for the engine's lifetime (or until the
+ * next abort). Backs interpret-time string literals as well as
+ * `parse-word` / `parse`.
+ *
+ * @param ff  Engine.
+ * @param s   Source bytes (need not be NUL-terminated).
+ * @param len Number of bytes to copy.
+ * @return Interned C string, or NULL on allocation failure.
+ */
+static char *ff_pad_intern(ff_t *ff, const char *s, size_t len)
+{
+    size_t need = len + 1;
+    if (ff->pad_used + need > ff->pad_size)
+    {
+        size_t nc = ff->pad_size ? ff->pad_size : (size_t)FF_PAD_INIT_SIZE;
+        while (nc < ff->pad_used + need)
+            nc *= 2;
+        char *nb = (char *)realloc(ff->pad_buf, nc);
+        if (!nb)
+            return NULL;
+        ff->pad_buf  = nb;
+        ff->pad_size = nc;
+    }
+    char *dst = ff->pad_buf + ff->pad_used;
+    if (len)
+        memcpy(dst, s, len);
+    dst[len] = '\0';
+    ff->pad_used += need;
+    return dst;
+}
+
+/**
  * Finish a `{` signature at its closing `)`: emit FF_OP_SCOPE_ENTER and
  * hand the token stream back to the evaluator.
  *
@@ -393,6 +429,37 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                         goto out;
                     }
                 }
+                else if (ff->state & FF_STATE_POSTPONE_PENDING)
+                {
+                    /* `postpone name`. Append name's compilation semantics
+                       to the current definition: for an immediate word,
+                       compile a call so it runs when this definition runs;
+                       for a non-immediate word, emit POSTPONE_RUNTIME so
+                       that a call to name is *compiled* when this definition
+                       runs (deferred by one level). */
+                    ff->state &= ~FF_STATE_POSTPONE_PENDING;
+                    ff_word_t *w = ff_dict_lookup(d, t->token);
+                    if (!w)
+                    {
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+                                       "'%s' undefined.", t->token);
+                        goto out;
+                    }
+                    if (!(ff->state & FF_STATE_COMPILING))
+                    {
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
+                                       "postpone outside a definition.");
+                        goto out;
+                    }
+                    ff_heap_t *ph = &ff_dict_top(d)->heap;
+                    if (w->flags & FF_WORD_IMMEDIATE)
+                        ff_heap_compile_word(ph, w);
+                    else
+                    {
+                        ff_heap_compile_op(ph, FF_OP_POSTPONE_RUNTIME);
+                        ff_heap_compile_int(ph, (ff_int_t)(intptr_t)w);
+                    }
+                }
                 else if (ff->state & FF_STATE_TICK_PENDING)
                 {
                     ff->state &= ~FF_STATE_TICK_PENDING;
@@ -554,34 +621,15 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     }
                     else
                     {
-                        /* Append the string to the bump arena. The arena
-                           grows on demand and is reset only by ff_abort,
-                           so the pushed pointer is stable for the engine's
-                           lifetime — no silent recycling like the previous
-                           ring did. */
-                        size_t need = (size_t)t->token_len + 1;
-                        if (ff->pad_used + need > ff->pad_size)
+                        /* Intern into the bump arena; the pushed pointer
+                           stays stable for the engine's lifetime. */
+                        char *dst = ff_pad_intern(ff, t->token, t->token_len);
+                        if (!dst)
                         {
-                            size_t nc = ff->pad_size
-                                            ? ff->pad_size
-                                            : (size_t)FF_PAD_INIT_SIZE;
-                            while (nc < ff->pad_used + need)
-                                nc *= 2;
-                            char *nb = (char *)realloc(ff->pad_buf, nc);
-                            if (!nb)
-                            {
-                                ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
-                                               "Out of memory growing pad arena to %zu bytes.",
-                                               nc);
-                                goto out;
-                            }
-                            ff->pad_buf  = nb;
-                            ff->pad_size = nc;
+                            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
+                                           "Out of memory growing pad arena.");
+                            goto out;
                         }
-                        char *dst = ff->pad_buf + ff->pad_used;
-                        memcpy(dst, t->token, t->token_len);
-                        dst[t->token_len] = '\0';
-                        ff->pad_used += need;
                         ff_stack_push_ptr(&ff->stack, dst);
                     }
                 }

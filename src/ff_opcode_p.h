@@ -162,6 +162,8 @@ typedef enum ff_opcode
     FF_OP_BRACKET_COMPILE,      /**< `[compile]` — compile next word non-immediate. */
     FF_OP_LITERAL,              /**< Pop, compile a literal of that value. */
     FF_OP_COMPILE,              /**< Compile next inline cell verbatim. */
+    FF_OP_POSTPONE,             /**< `postpone` — parse next word; defer its compilation semantics. */
+    FF_OP_POSTPONE_RUNTIME,     /**< + word_ptr — compile a call to the word into the def then in progress. */
     FF_OP_DOES,                 /**< `DOES>` — install runtime body for the just-created word. */
 
     /* --- Control flow (immediate) --- */
@@ -211,6 +213,8 @@ typedef enum ff_opcode
 
     FF_OP_EVALUATE,             /**< ff_eval() on TOS-string. */
     FF_OP_LOAD,                 /**< ff_load() on TOS-path. */
+    FF_OP_PARSE_WORD,           /**< `parse-word` — next whitespace token as a C string. */
+    FF_OP_PARSE,                /**< `parse` — text up to a delimiter char as a C string. */
 
     /* --- Word-field introspection --- */
 

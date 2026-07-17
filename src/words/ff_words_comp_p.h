@@ -121,6 +121,31 @@ case FF_OP_COMPILE:
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, *ip++);
     _FF_NEXT();
 
+/** ( -- )  `postpone` — parse the next word and append its compilation
+    semantics to the current definition. Immediate — sets a pending flag
+    consumed by the evaluator, which knows the word's immediacy. */
+case FF_OP_POSTPONE:
+    _FF_COMPILING;
+    ff->state |= FF_STATE_POSTPONE_PENDING;
+    _FF_NEXT();
+
+/** ( -- )  Runtime of a postponed non-immediate word: compile a call to
+    the carried word into whatever definition is currently in progress.
+    This is what makes `postpone` defer by one level. */
+case FF_OP_POSTPONE_RUNTIME:
+    {
+        ff_word_t *w = (ff_word_t *)(intptr_t)*ip++;
+        if (ff_unlikely(!(ff->state & FF_STATE_COMPILING)))
+        {
+            _FF_SYNC();
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
+                      "A postponed word ran with no definition being compiled.");
+            goto done;
+        }
+        ff_heap_compile_word(&ff_dict_top(&ff->dict)->heap, w);
+    }
+    _FF_NEXT();
+
 /** ( -- )  `:` — start a new colon-def; placeholder name is renamed by next token. */
 case FF_OP_COLON:
     ff->state |= FF_STATE_COMPILING | FF_STATE_DEF_PENDING;

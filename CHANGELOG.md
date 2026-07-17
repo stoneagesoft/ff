@@ -9,6 +9,23 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Input-stream words `parse-word`, `parse`, and `postpone`, which let
+  new notation be defined from inside Forth instead of only in C.
+  - `parse-word ( -- c-addr )` returns the next whitespace-delimited
+    token as a NUL-terminated C string (not a dictionary lookup, unlike
+    `'`). `parse ( char -- c-addr )` returns the text up to and
+    including a delimiter character. Both intern into the transient
+    string arena via the new `ff_pad_intern` helper (extracted from the
+    string-literal path).
+  - `postpone` appends a word's compilation semantics to the current
+    definition: a direct call for an immediate target, or (via the new
+    `FF_OP_POSTPONE_RUNTIME` opcode) deferred compilation for a
+    non-immediate one — correct for multi-cell colon-defs, which the
+    older `compile` primitive is not. Supersedes `compile` / `[compile]`.
+  - Combined with the existing `evaluate`, these are enough to build
+    conditional compilation, enum blocks, and similar DSL syntax in
+    pure Forth; the regression suite's `015_parse.ff` defines
+    `[if]` / `[then]` as a worked example.
 - Checked stack scopes: `{ ( a b -- c ) … }`. A scope names a
   definition's inputs and walls off the data stack — code between `{`
   and `}` starts from an empty stack, reads its arguments only by name,

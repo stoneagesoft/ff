@@ -1,0 +1,43 @@
+\ parse-word, parse, and postpone.
+\
+\ These are the input-stream words: parse-word / parse let Forth code
+\ read the source text directly, and postpone defers a word's
+\ compilation semantics. Together with the existing `evaluate` they let
+\ new notation be defined from inside Forth rather than patched into the
+\ engine in C. The driver feeds the whole file to one ff_eval, so a
+\ parsing word can read across what look like separate lines.
+
+\ parse-word returns the next whitespace token as text — not a
+\ dictionary lookup, unlike `'`.
+parse-word hello strlen .          \ 5
+
+\ parse reads up to (and consumes) a delimiter char; 41 is ')'.
+41 parse abc) strlen .             \ 3
+
+\ postpone an immediate word: `endif` becomes a working alias for `then`.
+: endif postpone then ; immediate
+: pick-max { ( a b -- m ) a b > if a else b endif } ;
+9 4 pick-max .                     \ 9
+3 8 pick-max .                     \ 8
+
+\ postpone a non-immediate word from inside an immediate defining word:
+\ each `lay+` lays a `+` into the definition being compiled.
+: lay+ postpone + ; immediate
+: add3 lay+ lay+ ;                 \ compiles to  ( a b c -- a+b+c )
+1 2 3 add3 .                       \ 6
+
+\ Conditional compilation, defined entirely in Forth with parse-word:
+\ a false `[if]` skips tokens up to the matching `[then]`.
+: [if] ( flag -- )
+  0= if
+    begin
+      parse-word
+      dup strlen 0= if drop exit then
+      "[then]" strcmp 0=
+    until
+  then ; immediate
+: [then] ; immediate
+
+0 [if]  : skipped 111 ;  [then]
+1 [if]  : kept    222 ;  [then]
+kept .                             \ 222

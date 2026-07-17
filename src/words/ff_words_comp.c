@@ -83,6 +83,16 @@ const ff_word_def_t FF_COMP_WORDS[] =
       "Compiles the value on the top of the stack into the current definition.\n"
       "When the definition is executed, that value will be pushed onto\n"
       "the top of the stack."),
+    _FF_WI("postpone", FF_OP_POSTPONE,
+      "w ( -- )  Postpone compilation\n"
+      "Parses the next word *w* and appends its compilation semantics to\n"
+      "the current definition. If *w* is immediate, a call to *w* is\n"
+      "compiled so it runs when the new definition runs; if *w* is not\n"
+      "immediate, code is compiled that will itself compile a call to *w*\n"
+      "when the new definition runs. This is the standard way to build a\n"
+      "word that lays down control-flow words such as **if** or **then**.\n"
+      "\n"
+      "Supersedes the older **compile** / **[compile]** pair."),
     _FF_W("compile", FF_OP_COMPILE,
       "w ( -- )  Compile word\n"
       "Adds the compile address of the word *w* that follows\n"
