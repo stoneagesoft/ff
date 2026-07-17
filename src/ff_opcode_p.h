@@ -54,6 +54,12 @@ typedef enum ff_opcode
     FF_OP_BRANCH,               /**< + offset — unconditional jump. */
     FF_OP_QBRANCH,              /**< + offset — jump if TOS is zero (consumes TOS). */
 
+    /* --- Scopes: `{ ( a b -- c ) … }` --- */
+
+    FF_OP_SCOPE_ENTER,          /**< + packed — install the data-stack barrier. See FF_SCOPE_PACK_ENTER. */
+    FF_OP_SCOPE_EXIT,           /**< + packed — check arity, slide outputs over inputs, restore barrier. */
+    FF_OP_ARG,                  /**< + k — push data[floor - k]: a named scope input (k = 1..nargs). */
+
     /* --- Runtimes for words made with create / does> / constant / array --- */
 
     FF_OP_DOES_RUNTIME,         /**< + word_ptr — DOES>-clause entry. */
@@ -144,6 +150,8 @@ typedef enum ff_opcode
 
     FF_OP_COLON,                /**< Begin a colon-def. */
     FF_OP_SEMICOLON,            /**< End a colon-def (emits EXIT or folds tail-NEST). */
+    FF_OP_LBRACE,               /**< Immediate `{` — open a scope; starts signature collection. */
+    FF_OP_RBRACE,               /**< Immediate `}` — close a scope; emits FF_OP_SCOPE_EXIT. */
     FF_OP_IMMEDIATE,            /**< Mark just-defined word immediate. */
     FF_OP_LBRACKET,             /**< Switch to interpret mode inside a colon-def. */
     FF_OP_RBRACKET,             /**< Resume compile mode. */
@@ -241,3 +249,34 @@ typedef enum ff_opcode
 
     FF_OP_COUNT                 /**< Count of valid opcodes — keep last. */
 } ff_opcode_t;
+
+
+/* ===================================================================
+ * Scope operand packing
+ *
+ * SCOPE_ENTER / SCOPE_EXIT each carry exactly one inline operand cell,
+ * with their fields bit-packed into it. This is deliberate: every
+ * opcode in ff is `opcode + at most one cell` (see ff_opcode_meta_p.h),
+ * and the tail-call peephole in `;` reads data[size - 2] expecting an
+ * opcode. A two-operand encoding would put a small integer there and
+ * alias FF_OP_NEST (== 1) for a one-input scope.
+ * =================================================================== */
+
+/** @brief Pack a SCOPE_ENTER operand. @p inherit is true for `( ... -- ... )`. */
+#define FF_SCOPE_PACK_ENTER(nargs, inherit) \
+    ((ff_int_t)(((nargs) & 0xFFFF) | ((inherit) ? (1 << 16) : 0)))
+
+/** @brief Named-input count from a packed SCOPE_ENTER operand. */
+#define FF_SCOPE_NARGS(p)       ((int)((p) & 0xFFFF))
+/** @brief True when the scope inherits the enclosing barrier (`( ... -- ... )`). */
+#define FF_SCOPE_INHERIT(p)     (((p) & (1 << 16)) != 0)
+
+/** @brief Pack a SCOPE_EXIT operand. @p varout is true for `-- ...`. */
+#define FF_SCOPE_PACK_EXIT(nargs, nouts, varout) \
+    ((ff_int_t)(((nargs) & 0xFFFF) | (((nouts) & 0xFF) << 16) \
+                | ((varout) ? (1 << 24) : 0)))
+
+/** @brief Declared output count from a packed SCOPE_EXIT operand. */
+#define FF_SCOPE_NOUTS(p)       ((int)(((p) >> 16) & 0xFF))
+/** @brief True when the scope declared `-- ...` and skips the arity check. */
+#define FF_SCOPE_VAROUT(p)      (((p) & (1 << 24)) != 0)

@@ -1,0 +1,65 @@
+\ Stack scopes: `{ ( a b -- c ) … }`
+\
+\ A scope walls off the data stack. Code between `{` and `}` sees an
+\ empty stack and can reach its inputs only through their declared
+\ names; `}` checks the scope left exactly what it promised, drops the
+\ inputs, and leaves the outputs in their place.
+\
+\ Only success paths live here: the driver feeds the whole file to one
+\ ff_eval, so the first hard error would silently skip everything after
+\ it. Enforcement is covered by 013_scope_err.ff.
+
+\ Named inputs, checked output count.
+: max2 { ( a b -- m ) a b > if a else b then } ;
+3 7 max2 .
+9 4 max2 .
+
+\ Inputs are readable in any order and any number of times — the whole
+\ point being that no stack juggling is needed to get at them.
+: rev3 { ( a b c -- x y z ) c b a } ;
+1 2 3 rev3 . . .
+
+\ Nested scopes. The inner ones reuse `p`/`q` without colliding, because
+\ a name is only bound between its own `{` and `}`.
+: quad { ( x1 y1 x2 y2 -- q )
+    x2 x1 { ( p q -- s ) p q - dup * }
+    y2 y1 { ( p q -- s ) p q - dup * }
+    + } ;
+1 2 4 6 quad .
+
+\ Recursion through a scope: one barrier per active call.
+: fact { ( n -- r ) n 1 > if n n 1 - fact * else 1 then } ;
+5 fact .
+10 fact .
+
+\ Empty input and empty output sides.
+: sink { ( a -- ) a . } ;
+42 sink
+: five { ( -- n ) 5 } ;
+five .
+
+\ `-- ...` leaves an unchecked number of cells.
+: three { ( a -- ... ) a a a } ;
+5 three . . .
+
+\ `( ... -- ... )` inherits the enclosing barrier rather than installing
+\ a fresh one, so the scope can still see the caller's cells.
+: passthru { ( ... -- ... ) 1 + } ;
+41 passthru .
+
+\ A named input shadows a dictionary word of the same spelling for the
+\ body of its scope. Names are resolved before the dictionary and never
+\ create an entry, so this is a purely lexical rebinding.
+: shadow { ( dup -- n ) dup } ;
+7 shadow .
+
+\ A scope may sit inside a definition rather than wrap it.
+: mixed { ( a -- b ) a 2 * } ;
+: outer 100 mixed + ;
+5 outer .
+
+\ CATCH restores the barrier when a THROW unwinds out of an open scope;
+\ later scopes must still work.
+: boom { ( a -- b ) a 42 throw } ;
+1 ' boom catch .
+9 mixed .

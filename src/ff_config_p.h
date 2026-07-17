@@ -20,6 +20,21 @@
 #define FF_BT_STACK_SIZE    256
 
 /**
+ * @brief Maximum number of simultaneously-open `{` scopes at run time.
+ *
+ * Bounded by *call* depth, not by lexical nesting: a recursive scoped
+ * word holds one record per active invocation. Sized to match
+ * @ref FF_BT_STACK_SIZE, which is bounded the same way.
+ */
+#define FF_SCOPE_DEPTH      256
+
+/** @brief Maximum lexical nesting of `{` scopes at compile time. */
+#define FF_CSCOPE_DEPTH     8
+
+/** @brief Maximum named inputs in one `( a b -- c )` signature. */
+#define FF_SCOPE_ARGS_MAX   16
+
+/**
  * @brief Initial capacity of the transient-string bump arena, in bytes.
  *
  * Strings pushed by interpret-time string literals (`"foo"`) are

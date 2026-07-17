@@ -107,10 +107,44 @@ ff_word_t *ff_im_word_new(const char *name, ff_word_fn code,
 /**
  * @copydoc ff_word_free
  */
+/** @copydoc ff_word_add_sig */
+bool ff_word_add_sig(ff_word_t *w, size_t off, const char *text)
+{
+    ff_sig_t *grown = (ff_sig_t *)realloc(w->sigs,
+                                          (w->sigs_len + 1) * sizeof(ff_sig_t));
+    if (!grown)
+        return false;
+    w->sigs = grown;
+
+    char *copy = ff_strdup(text);
+    if (!copy)
+        return false;
+
+    w->sigs[w->sigs_len].ip_offset = off;
+    w->sigs[w->sigs_len].text      = copy;
+    w->sigs_len++;
+    return true;
+}
+
+/** @copydoc ff_word_sig_at */
+const char *ff_word_sig_at(const ff_word_t *w, size_t off)
+{
+    for (size_t i = 0; i < w->sigs_len; i++)
+        if (w->sigs[i].ip_offset == off)
+            return w->sigs[i].text;
+    return NULL;
+}
+
 void ff_word_free(ff_word_t *w)
 {
     if (!w)
         return;
+
+    for (size_t i = 0; i < w->sigs_len; i++)
+        free(w->sigs[i].text);
+    free(w->sigs);
+    w->sigs = NULL;
+    w->sigs_len = 0;
     /* FF_WORD_STATIC words live in the dict's pre-allocated pool with
        their names pointing into string literals — neither the struct
        nor the name is freed here; the heap may still hold an external

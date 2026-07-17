@@ -244,6 +244,13 @@ case FF_OP_CATCH:
         size_t saved_s  = S->top;
         size_t saved_r  = R->top;
         int    saved_bt = BT->top;
+        /* The barrier is part of the state a CATCH rolls back: a THROW
+           out of an open scope must not leave the floor pointing into
+           cells that no longer exist, or every later check is wrong.
+           Snapshot the register, not S->floor — the memory copy is only
+           refreshed by the _FF_SYNC() below. */
+        size_t saved_floor  = floor;
+        size_t saved_scopes = ff->n_scopes;
         ff_int_t   *saved_outer_ip = ip;
         ff_word_t  *saved_cur      = ff->cur_word;
         _FF_SYNC();
@@ -257,6 +264,9 @@ case FF_OP_CATCH:
             S->top  = saved_s;
             R->top  = saved_r;
             BT->top = saved_bt;
+            floor        = saved_floor;   /* register cache … */
+            S->floor     = saved_floor;   /* … and its memory copy */
+            ff->n_scopes = saved_scopes;
             ff->cur_word = saved_cur;
             ff->state &= ~(FF_STATE_BROKEN | FF_STATE_THROWN);
             if (S->top > 0)

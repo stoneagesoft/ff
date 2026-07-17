@@ -25,6 +25,7 @@
 #include <ff_dict_p.h>
 #include <ff_heap_p.h>
 #include <ff_opcode_p.h>
+#include <ff_scope_p.h>
 #include <ff_stack_p.h>
 #include <ff_state_p.h>
 #include <ff_tok_state_p.h>
@@ -111,6 +112,17 @@ struct ff
 
     ff_int_t throw_code;                /**< Exception code stashed by THROW; read by the matching CATCH. */
 
+    /* Scope state. `scopes` is the run-time stack of open `{` barriers;
+       it is indexed by call depth (a recursive scoped word holds one
+       record per active invocation), which is why it is sized like the
+       back-trace stack rather than by lexical nesting. `csig` is the
+       compile-time counterpart: lexically nested, so it is tiny, and it
+       carries the names needed to resolve a token to an FF_OP_ARG index. */
+    ff_scope_t  scopes[FF_SCOPE_DEPTH]; /**< Saved barrier/return-depth per open scope. */
+    size_t      n_scopes;               /**< Number of open scopes. */
+    ff_csig_t   csig[FF_CSCOPE_DEPTH];  /**< Compile-time signature stack. */
+    int         n_csig;                 /**< Depth of @ref csig. */
+
     /* Watchdog state. `abort_requested` is set asynchronously (by
        ff_request_abort, possibly from a signal handler or another
        thread) and polled by the inner interpreter at every
@@ -161,7 +173,7 @@ struct ff
  */
 #define FF_SL(e, n) \
     do { \
-        if (ff_unlikely((int)(e)->stack.top < (int)(n))) \
+        if (ff_unlikely((int)((e)->stack.top - (e)->stack.floor) < (int)(n))) \
         { \
             ff_tracef(e, FF_SEV_ERROR | FF_ERR_STACK_UNDER, \
                       "Stack underflow: %d item(s) expected.", (int)(n)); \

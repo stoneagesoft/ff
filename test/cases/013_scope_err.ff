@@ -1,0 +1,21 @@
+\ Scope enforcement: the barrier stops a scope reaching past its inputs.
+\
+\ The driver feeds the whole file to one ff_eval and ignores vtracef, so
+\ a hard error ends the run and everything after it is skipped. The
+\ expected output is therefore just the sentinel printed before the
+\ violation — which is the assertion: the violation was caught, rather
+\ than silently eating the caller's cells and carrying on.
+
+\ `a b +` leaves one cell above the barrier; dropping twice asks for a
+\ second. Without the barrier that drop would consume the caller's 111
+\ and the damage would surface somewhere unrelated. (The compiler folds
+\ `drop drop` into 2DROP, so the underflow is reported as needing two.)
+: eat { ( a b -- c ) a b + drop drop } ;
+
+\ Sentinel: everything up to the violation still runs.
+7 .
+
+111 222 1 2 eat
+
+\ Never reached.
+99 .

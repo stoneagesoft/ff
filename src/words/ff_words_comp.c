@@ -24,6 +24,34 @@ const ff_word_def_t FF_COMP_WORDS[] =
     _FF_WI(";", FF_OP_SEMICOLON,
       "( -- )  End definition\n"
       "Ends compilation of word."),
+    _FF_WI("{", FF_OP_LBRACE,
+      "( a b -- c )  Open a stack scope\n"
+      "Opens a scope over the data stack. The scope must be followed by a\n"
+      "signature `( a b -- c )`, where the names left of `--` bind the\n"
+      "caller's topmost cells and the names right of `--` declare how many\n"
+      "cells the scope leaves.\n"
+      "\n"
+      "Code inside the scope sees an **empty** stack: it can push and pop\n"
+      "freely, but reaching below what it pushed raises a stack underflow\n"
+      "rather than consuming the caller's cells. The declared inputs are\n"
+      "readable only by name.\n"
+      "\n"
+      "`...` opts out of a check: `( a b -- ... )` leaves an unchecked\n"
+      "number of cells, and `( ... -- ... )` inherits the enclosing barrier\n"
+      "instead of installing a new one. `...` on the input side cannot be\n"
+      "combined with named inputs, and forces `...` on the output side.\n"
+      "\n"
+      "    : dist { ( x1 y1 x2 y2 -- d )\n"
+      "        x2 x1 f- dup f*  y2 y1 f- dup f*  f+ sqrt } ;\n"
+      "\n"
+      "See also: **}**"),
+    _FF_WI("}", FF_OP_RBRACE,
+      "( -- )  Close a stack scope\n"
+      "Closes the scope opened by the matching `{`: checks that the scope\n"
+      "left exactly the number of cells its signature declared, drops the\n"
+      "named inputs, and leaves the outputs in their place.\n"
+      "\n"
+      "See also: **{**"),
     _FF_W("immediate", FF_OP_IMMEDIATE,
       "( -- )  Mark immediate\n"
       "The most recently defined word is marked for immediate execution;\n"

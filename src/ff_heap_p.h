@@ -20,6 +20,7 @@
 #include <ff_opcode_p.h>
 #include <ff_types_p.h>
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -175,6 +176,24 @@ void ff_heap_grow(ff_heap_t *h, size_t extra);
  * a 64-cell slot; trim returns those 14 cells to the arena).
  */
 void ff_heap_trim(ff_heap_t *h);
+
+/**
+ * Test whether @p idx is an instruction boundary in @p h.
+ *
+ * Walks the compiled body from the start, stepping by each opcode's
+ * encoded width, and reports whether any instruction begins exactly at
+ * @p idx. Needed because a cell's *value* says nothing about whether it
+ * is an opcode or an operand: a body ending in `[SCOPE_EXIT, packed]`
+ * has a packed operand whose low bits are a small integer, and
+ * FF_OP_NEST is 1.
+ *
+ * O(size); intended for compile-time use only (`;` runs it once).
+ *
+ * @param h   Heap.
+ * @param idx Cell index to test.
+ * @return true iff an instruction starts at @p idx.
+ */
+bool ff_heap_op_starts_at(const ff_heap_t *h, size_t idx);
 
 /**
  * Clear the peephole tracker so the next @ref ff_heap_compile_op

@@ -58,6 +58,10 @@ typedef enum ff_error_code
     FF_ERR_RSTACK_UNDER,    /**< Return stack underflow. */
     FF_ERR_RUN_COMMENT,     /**< Source ended inside an open `(` comment. */
     FF_ERR_RUN_STRING,      /**< Source ended inside an open string literal. */
+    FF_ERR_SCOPE_ARITY,     /**< `}` reached with a cell count the signature didn't declare. */
+    FF_ERR_SCOPE_OVER,      /**< Open `{` scopes exceeded FF_SCOPE_DEPTH. */
+    FF_ERR_SCOPE_RSTACK,    /**< `}` reached with the return stack unbalanced. */
+    FF_ERR_SCOPE_SIG,       /**< Malformed `{ ( … -- … )` signature. */
     FF_ERR_STACK_OVER,      /**< Data stack overflow. */
     FF_ERR_STACK_UNDER,     /**< Data stack underflow. */
     FF_ERR_UNDEFINED,       /**< Word name not present in dictionary. */

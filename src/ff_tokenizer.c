@@ -209,9 +209,12 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
             continue;
         }
 
-        /* Block comment: open paren. */
+        /* Block comment: open paren. Suppressed in signature mode, where
+           `{` needs `( a b -- c )` delivered as ordinary tokens rather
+           than skipped as a comment. */
         if (t->token_len == 1
-                && t->token[0] == '(')
+                && t->token[0] == '('
+                && !(t->state & FF_TOK_STATE_SIG))
         {
             while (!ff_tok_eof(src, *pos)
                         && ff_tok_get(src, pos) != ')')

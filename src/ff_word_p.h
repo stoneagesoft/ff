@@ -14,6 +14,7 @@
 
 #include <ff_heap_p.h>
 #include <ff_opcode_p.h>
+#include <ff_scope_p.h>
 #include <ff_types_p.h>
 #include <ff_word_flags_p.h>
 
@@ -105,6 +106,29 @@ void ff_word_init_static(ff_word_t *w, const char *name, ff_word_fn code,
                          ff_opcode_t opcode, const char *manual);
 
 /**
+ * Record the source text of a scope signature against the bytecode
+ * offset of its FF_OP_SCOPE_ENTER.
+ *
+ * Consulted only by `see`; nothing on the execution path reads it.
+ *
+ * @param w    Word being compiled.
+ * @param off  Index of the FF_OP_SCOPE_ENTER cell in @c w->heap.
+ * @param text Signature source, copied.
+ * @return false on allocation failure (the signature is simply not
+ *         recorded; compilation can continue).
+ */
+bool ff_word_add_sig(ff_word_t *w, size_t off, const char *text);
+
+/**
+ * Look up the signature recorded at bytecode offset @p off.
+ *
+ * @param w   Word.
+ * @param off Index of an FF_OP_SCOPE_ENTER cell.
+ * @return Signature text, or NULL if none was recorded.
+ */
+const char *ff_word_sig_at(const ff_word_t *w, size_t off);
+
+/**
  * Test whether @p w has no compiled Forth body. True for built-ins
  * (empty heap) and external natives (FF_WORD_NATIVE flag); false for
  * colon-defs and DOES>/CREATE-runtime words that store data or
@@ -141,6 +165,8 @@ struct ff_word
     ff_word_flags_t flags;      /**< OR of FF_WORD_* flags. */
     ff_int_t *does;             /**< DOES> clause IP (NULL if none). */
     ff_heap_t heap;             /**< Compiled bytecode (colon-defs) or fn pointer (natives). */
+    ff_sig_t *sigs;             /**< Scope signatures by bytecode offset, for `see`; NULL if none. */
+    size_t sigs_len;            /**< Count of @ref sigs. */
     const char *manual;         /**< Markdown manual entry; may be NULL. */
     const char *man_desc;       /**< Points into @ref manual past the first newline. */
     struct ff_word *next_bucket;/**< Singly-linked dict hash chain (newest-first). */

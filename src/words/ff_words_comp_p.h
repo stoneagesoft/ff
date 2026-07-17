@@ -22,6 +22,57 @@ case FF_OP_DOES_RUNTIME:
     }
     _FF_NEXT();
 
+/** ( -- )  `{` — open a scope. Pushes a compile-time signature record and
+    hands the next tokens to the signature parser in ff_eval, which emits
+    FF_OP_SCOPE_ENTER once it reaches the closing `)`. */
+case FF_OP_LBRACE:
+    _FF_COMPILING;
+    if (ff_unlikely(ff->n_csig >= FF_CSCOPE_DEPTH))
+    {
+        _FF_SYNC();
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_OVER,
+                  "Scopes nested deeper than %d.", FF_CSCOPE_DEPTH);
+        goto done;
+    }
+    {
+        ff_csig_t *cs = &ff->csig[ff->n_csig++];
+        memset(cs, 0, sizeof(*cs));
+        cs->phase = FF_CSIG_EXPECT_OPEN;
+        /* `(` is a block comment as far as the tokenizer is concerned;
+           signature mode suspends that so the parser sees the tokens. */
+        ff->state |= FF_STATE_SIG_PENDING;
+        ff->tokenizer.state |= FF_TOK_STATE_SIG;
+    }
+    _FF_NEXT();
+
+/** ( -- )  `}` — close a scope: emit FF_OP_SCOPE_EXIT and drop the
+    compile-time signature record. */
+case FF_OP_RBRACE:
+    _FF_COMPILING;
+    if (ff_unlikely(ff->n_csig <= 0))
+    {
+        _FF_SYNC();
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                  "'}' without a matching '{'.");
+        goto done;
+    }
+    {
+        ff_csig_t *cs = &ff->csig[ff->n_csig - 1];
+        ff_heap_t *h  = &ff_dict_top(&ff->dict)->heap;
+
+        ff_heap_compile_op(h, FF_OP_SCOPE_EXIT);
+        ff_heap_compile_int(h, FF_SCOPE_PACK_EXIT(cs->nargs, cs->nouts,
+                                                  cs->var_out));
+        /* A scope boundary is a peephole barrier too: the next op must
+           not fold with the scope's last instruction. */
+        ff_heap_inhibit_peephole(h);
+
+        for (int i = 0; i < cs->nargs; i++)
+            free(cs->names[i]);
+        ff->n_csig--;
+    }
+    _FF_NEXT();
+
 /** ( -- )  `immediate` — flag the most recent definition as immediate. */
 case FF_OP_IMMEDIATE:
     ff_dict_top(&ff->dict)->flags |= FF_WORD_IMMEDIATE;
@@ -80,13 +131,30 @@ case FF_OP_COLON:
 /** ( -- )  `;` — finish a colon-def; emits EXIT or folds to TNEST tail-call. */
 case FF_OP_SEMICOLON:
     _FF_COMPILING;
+    if (ff_unlikely(ff->n_csig != 0))
+    {
+        _FF_SYNC();
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                  "Definition ended with %d scope(s) still open.", ff->n_csig);
+        goto done;
+    }
     {
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
         /* Tail-call peephole: if the body ends with [NEST, word_ptr],
            rewrite NEST → TNEST and skip the EXIT emit. The TNEST opcode
            replaces the current frame so the called word's EXIT pops the
-           older caller's return address directly. */
-        if (h->size >= 2 && h->data[h->size - 2] == FF_OP_NEST)
+           older caller's return address directly.
+
+           data[size - 2] is only an opcode if the trailing instruction
+           carries exactly one operand cell, so ask the metadata table
+           rather than assuming. Without this a body ending in an opcode
+           whose *operand* happens to equal FF_OP_NEST (== 1) would have
+           that operand rewritten to FF_OP_TNEST and its EXIT omitted —
+           which `{ ( a -- b ) … }` hits immediately, since SCOPE_EXIT's
+           packed operand carries nargs == 1 in its low bits. */
+        if (h->size >= 2
+                && h->data[h->size - 2] == FF_OP_NEST
+                && ff_heap_op_starts_at(h, h->size - 2))
             h->data[h->size - 2] = FF_OP_TNEST;
         else
             ff_heap_compile_op(h, FF_OP_EXIT);

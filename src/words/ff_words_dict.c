@@ -296,15 +296,17 @@ typedef enum
     SEE_F_IF,    /* end = position of THEN */
     SEE_F_ELSE,  /* end = position of THEN */
     SEE_F_BEGIN, /* begin_at = BEGIN position; has_while tracked */
-    SEE_F_DO     /* end = position after LOOP+offset */
+    SEE_F_DO,    /* end = position after LOOP+offset */
+    SEE_F_SCOPE  /* sig = signature text; closed by SCOPE_EXIT */
 } see_kind_t;
 
 typedef struct
 {
-    see_kind_t kind;
-    size_t     end;
-    size_t     begin_at;
-    int        has_while;
+    see_kind_t  kind;
+    size_t      end;
+    size_t      begin_at;
+    int         has_while;
+    const char *sig;   /* SEE_F_SCOPE: signature text, for resolving FF_OP_ARG */
 } see_frame_t;
 
 #define SEE_MAX_DEPTH 64
@@ -389,6 +391,60 @@ static size_t see_opcode_len(const ff_int_t *cells, size_t pos, size_t end)
 }
 
 
+/* Resolve an FF_OP_ARG operand back to the name it was written as.
+   `sig` is signature source such as "( a b c -- d )"; `k` is the operand
+   (1 = last-declared input, matching data[floor - k]). Writes the name
+   into `buf` and returns true, or returns false when the signature has
+   no such input — in which case the caller falls back to a synthesized
+   spelling rather than printing something wrong. */
+static bool see_sig_arg_name(const char *sig, int k, char *buf, size_t bufsz)
+{
+    if (!sig || k < 1)
+        return false;
+
+    /* Inputs are the tokens between "(" and "--". Walk them once to
+       count, then again to pick index (nargs - k). */
+    const char *starts[FF_SCOPE_ARGS_MAX];
+    size_t      lens[FF_SCOPE_ARGS_MAX];
+    int         nargs = 0;
+
+    const char *p = sig;
+    while (*p == ' ') p++;
+    if (*p == '(') p++;                 /* skip the opening paren */
+
+    while (*p)
+    {
+        while (*p == ' ') p++;
+        if (!*p) break;
+
+        const char *tok = p;
+        while (*p && *p != ' ') p++;
+        size_t len = (size_t)(p - tok);
+
+        if (len == 2 && tok[0] == '-' && tok[1] == '-')
+            break;                      /* inputs end at `--` */
+        if (len == 1 && tok[0] == ')')
+            break;
+        if (nargs >= FF_SCOPE_ARGS_MAX)
+            break;
+
+        starts[nargs] = tok;
+        lens[nargs]   = len;
+        nargs++;
+    }
+
+    int idx = nargs - k;                /* k counts from the top of stack */
+    if (idx < 0 || idx >= nargs)
+        return false;
+    if (lens[idx] + 1 > bufsz)
+        return false;
+
+    memcpy(buf, starts[idx], lens[idx]);
+    buf[lens[idx]] = '\0';
+    return true;
+}
+
+
 /* Pre-pass: mark each cell index that is the target of a backward
    branch. Caller owns the buffer and frees it. */
 static void see_mark_begins(const ff_int_t *cells, size_t size, char *is_begin)
@@ -415,7 +471,14 @@ static void see_mark_begins(const ff_int_t *cells, size_t size, char *is_begin)
    for colon-def bodies and DOES>-clause bodies. The frame stack and
    indent management are local to this function so nested calls (e.g.
    see-ing a DOES> word from within see itself) don't conflict. */
-static void see_decompile_body(ff_t *ff, const ff_int_t *cells, size_t size,
+/* `sig_owner` / `sig_bias`: scope signatures are keyed by absolute
+   offset within the heap that owns them. For a plain colon-def that is
+   the word itself at bias 0; for a DOES> clause the bytecode lives
+   inside the *parent's* heap, so the owner is the parent and the bias is
+   where the clause starts. */
+static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
+                               size_t sig_bias,
+                               const ff_int_t *cells, size_t size,
                                see_printer_t *pr, int stop_on_exit)
 {
     if (size == 0)
@@ -461,6 +524,65 @@ static void see_decompile_body(ff_t *ff, const ff_int_t *cells, size_t size,
 
         switch (op)
         {
+            case FF_OP_SCOPE_ENTER:
+            {
+                /* The signature lives in a side table on the word, keyed
+                   by this cell's offset — the bytecode itself carries
+                   only the packed operand. */
+                const char *sig = sig_owner
+                                      ? ff_word_sig_at(sig_owner, sig_bias + pos)
+                                      : NULL;
+                if (top >= SEE_MAX_DEPTH) goto out;
+                stack[top].kind = SEE_F_SCOPE;
+                stack[top].sig  = sig;
+                stack[top].end  = 0;
+                top++;
+                if (sig)
+                    see_text(pr, "{ %s", sig);
+                else
+                    see_text(pr, "{ ( ... -- ... )");
+                see_newline(pr, pr->indent + 1);
+                pos += 2;
+                break;
+            }
+
+            case FF_OP_SCOPE_EXIT:
+                if (top > 0 && stack[top - 1].kind == SEE_F_SCOPE)
+                {
+                    see_close(pr, "}");
+                    top--;
+                }
+                else
+                    see_text(pr, "<}?>");
+                pos += 2;
+                break;
+
+            case FF_OP_ARG:
+            {
+                /* Render the named input back. Search down for the
+                   nearest enclosing SEE_F_SCOPE rather than reading the
+                   top frame: IF / ELSE / DO / BEGIN share this stack, so
+                   an arg used inside a control structure sits under
+                   those frames. Only the innermost *scope* is consulted
+                   — an enclosing scope's names aren't visible inside a
+                   nested one, by design. */
+                char name[64];
+                const char *sig = NULL;
+                for (int f = top - 1; f >= 0; --f)
+                    if (stack[f].kind == SEE_F_SCOPE)
+                    {
+                        sig = stack[f].sig;
+                        break;
+                    }
+                if (see_sig_arg_name(sig, (int)cells[pos + 1],
+                                     name, sizeof(name)))
+                    see_text(pr, "%s", name);
+                else
+                    see_text(pr, "<arg%ld>", (long)cells[pos + 1]);
+                pos += 2;
+                break;
+            }
+
             case FF_OP_LIT:
                 see_text(pr, "%ld", (long)cells[pos + 1]);
                 pos += 2;
@@ -792,7 +914,7 @@ void ff_w_see_impl(ff_t *ff)
                                    : 0;
             see_text(&pr2, "does>");
             see_newline(&pr2, 1);
-            see_decompile_body(ff, w->does, remaining, &pr2,
+            see_decompile_body(ff, parent, off, w->does, remaining, &pr2,
                                /*stop_on_exit=*/1);
             see_newline(&pr2, 0);
             ff_printf(ff, ";\n");
@@ -811,7 +933,7 @@ void ff_w_see_impl(ff_t *ff)
     see_printer_t pr = { .ff = ff, .indent = 0, .at_line_start = 1 };
     see_text(&pr, ": %s", w->name);
     see_newline(&pr, 1);
-    see_decompile_body(ff, w->heap.data, w->heap.size, &pr,
+    see_decompile_body(ff, w, 0, w->heap.data, w->heap.size, &pr,
                        /*stop_on_exit=*/0);
     see_newline(&pr, 0);
     ff_printf(ff, ";%s\n",

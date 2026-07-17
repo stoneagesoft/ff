@@ -1,0 +1,14 @@
+\ `see` round-trips a scope.
+\
+\ The signature is stored as source text in a side table on the word,
+\ keyed by the bytecode offset of its FF_OP_SCOPE_ENTER, so it prints
+\ back exactly as written. Named inputs compile to indexed reads below
+\ the barrier and carry no name at run time, so `see` resolves each one
+\ from the signature of its enclosing scope — including from inside a
+\ control structure, which pushes its own frames in between.
+\
+\ This is the other half of the bargain: a signature is only worth
+\ trusting if the tool that reads the code can show it.
+
+: max2 { ( a b -- m ) a b > if a else b then } ;
+see max2

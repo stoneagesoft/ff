@@ -35,6 +35,10 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_BRANCH]            = { "branch",    FF_OP_LAYOUT_INT  },
     [FF_OP_QBRANCH]           = { "?branch",   FF_OP_LAYOUT_INT  },
 
+    [FF_OP_SCOPE_ENTER]       = { NULL,        FF_OP_LAYOUT_INT  },
+    [FF_OP_SCOPE_EXIT]        = { NULL,        FF_OP_LAYOUT_INT  },
+    [FF_OP_ARG]               = { NULL,        FF_OP_LAYOUT_INT  },
+
     [FF_OP_DOES_RUNTIME]      = { NULL,        FF_OP_LAYOUT_WORD },
     [FF_OP_CREATE_RUNTIME]    = { NULL,        FF_OP_LAYOUT_WORD },
     [FF_OP_CONSTANT_RUNTIME]  = { NULL,        FF_OP_LAYOUT_WORD },
@@ -151,6 +155,8 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
 
     [FF_OP_COLON]             = { ":",         FF_OP_LAYOUT_NONE },
     [FF_OP_SEMICOLON]         = { ";",         FF_OP_LAYOUT_NONE },
+    [FF_OP_LBRACE]            = { "{",         FF_OP_LAYOUT_NONE },
+    [FF_OP_RBRACE]            = { "}",         FF_OP_LAYOUT_NONE },
     [FF_OP_IMMEDIATE]         = { "immediate", FF_OP_LAYOUT_NONE },
     [FF_OP_LBRACKET]          = { "[",         FF_OP_LAYOUT_NONE },
     [FF_OP_RBRACKET]          = { "]",         FF_OP_LAYOUT_NONE },

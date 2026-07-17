@@ -99,6 +99,224 @@ void ff_free(ff_t *ff)
     free(ff);
 }
 
+/**
+ * Finish a `{` signature at its closing `)`: emit FF_OP_SCOPE_ENTER and
+ * hand the token stream back to the evaluator.
+ *
+ * @param ff Engine.
+ * @param cs Signature record being closed.
+ * @param ec Set to the raised error on failure.
+ * @return false on a malformed signature.
+ */
+static bool ff_sig_finish(ff_t *ff, ff_csig_t *cs, ff_error_t *ec)
+{
+    /* `( ... -- c )` is rejected rather than silently unchecked: once an
+       unknown number of cells has been consumed from below, there is no
+       reference point left to verify an output count against, so the
+       declaration could only ever be a comment — and a stack comment
+       that lies is exactly what this construct exists to eliminate. */
+    if (cs->var_in && !cs->var_out)
+    {
+        *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                        "'( ... -- )' with a counted output: an output count "
+                        "can't be verified once inputs are variadic. "
+                        "Declare '-- ...' instead.");
+        return false;
+    }
+    if (cs->nouts > 255)
+    {
+        *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                        "Scope declares too many outputs (max 255).");
+        return false;
+    }
+
+    ff_word_t *w = ff_dict_top(&ff->dict);
+    ff_heap_t *h = &w->heap;
+
+    /* Record the signature against the offset of the SCOPE_ENTER cell
+       before emitting it, so `see` can render the scope back with its
+       names. Failure to record is not fatal — the word still runs, it
+       just decompiles without names. */
+    ff_word_add_sig(w, h->size, cs->text);
+
+    ff_heap_compile_op(h, FF_OP_SCOPE_ENTER);
+    ff_heap_compile_int(h, FF_SCOPE_PACK_ENTER(cs->nargs, cs->var_in));
+    ff_heap_inhibit_peephole(h);
+
+    ff->state &= ~FF_STATE_SIG_PENDING;
+    ff->tokenizer.state &= ~FF_TOK_STATE_SIG;
+    return true;
+}
+
+/**
+ * Abandon the signature being parsed and leave signature mode.
+ *
+ * Both flags are engine state that outlives a single ff_eval call, so a
+ * signature error that skipped this would leave the parser claiming the
+ * *next* line's tokens as signature names.
+ *
+ * @param ff Engine.
+ */
+static void ff_sig_abort(ff_t *ff)
+{
+    while (ff->n_csig > 0)
+    {
+        ff_csig_t *cs = &ff->csig[--ff->n_csig];
+        for (int i = 0; i < cs->nargs; i++)
+            free(cs->names[i]);
+    }
+    /* Drop out of compile state too, the same way an undefined word
+       mid-definition does: the definition is unsalvageable, and leaving
+       COMPILING set would silently compile the user's next line into the
+       wreck instead of running it. */
+    ff->state &= ~(FF_STATE_SIG_PENDING | FF_STATE_COMPILING);
+    ff->tokenizer.state &= ~FF_TOK_STATE_SIG;
+}
+
+/**
+ * Consume one token of a `{ ( a b -- c )` signature.
+ *
+ * @param ff Engine.
+ * @param tk Token text.
+ * @param ec Set to the raised error on failure.
+ * @return false on a malformed signature.
+ */
+static bool ff_sig_token(ff_t *ff, const char *tk, ff_error_t *ec)
+{
+    ff_csig_t *cs = &ff->csig[ff->n_csig - 1];
+
+    /* Rebuild the signature source as it streams past, for `see`. A
+       token too long to fit just truncates the recorded text; it must
+       not fail the compile, since this is documentation, not semantics. */
+    {
+        size_t n = strlen(tk);
+        if ((size_t)cs->text_len + n + 2 <= sizeof(cs->text))
+        {
+            if (cs->text_len)
+                cs->text[cs->text_len++] = ' ';
+            memcpy(cs->text + cs->text_len, tk, n);
+            cs->text_len += (int)n;
+            cs->text[cs->text_len] = '\0';
+        }
+    }
+
+    switch (cs->phase)
+    {
+        case FF_CSIG_EXPECT_OPEN:
+            if (strcmp(tk, "(") != 0)
+            {
+                *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                                "'{' must be followed by '( … -- … )'; got '%s'.",
+                                tk);
+                return false;
+            }
+            cs->phase = FF_CSIG_INPUTS;
+            return true;
+
+        case FF_CSIG_INPUTS:
+            if (strcmp(tk, "--") == 0)
+            {
+                cs->phase = FF_CSIG_OUTPUTS;
+                return true;
+            }
+            if (strcmp(tk, ")") == 0)
+            {
+                *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                                "Scope signature needs a '--'.");
+                return false;
+            }
+            if (strcmp(tk, "...") == 0)
+            {
+                /* Named inputs compile to a fixed offset below the
+                   barrier. '...' is permission to pop below it, which
+                   would leave those names dangling — so the two can't
+                   be combined. */
+                if (cs->nargs > 0)
+                {
+                    *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                                    "'...' can't be combined with named inputs.");
+                    return false;
+                }
+                cs->var_in = true;
+                return true;
+            }
+            if (cs->var_in)
+            {
+                *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                                "Named input '%s' can't follow '...'.", tk);
+                return false;
+            }
+            if (cs->nargs >= FF_SCOPE_ARGS_MAX)
+            {
+                *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                                "Scope declares more than %d inputs.",
+                                FF_SCOPE_ARGS_MAX);
+                return false;
+            }
+            cs->names[cs->nargs] = ff_strdup(tk);
+            if (!cs->names[cs->nargs])
+            {
+                *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
+                                "Out of memory.");
+                return false;
+            }
+            cs->nargs++;
+            return true;
+
+        case FF_CSIG_OUTPUTS:
+        default:
+            if (strcmp(tk, ")") == 0)
+                return ff_sig_finish(ff, cs, ec);
+            if (strcmp(tk, "--") == 0)
+            {
+                *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                                "Scope signature has more than one '--'.");
+                return false;
+            }
+            if (strcmp(tk, "...") == 0)
+            {
+                cs->var_out = true;
+                return true;
+            }
+            if (cs->var_out)
+            {
+                *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                                "Named output '%s' can't follow '...'.", tk);
+                return false;
+            }
+            /* Output names are documentation; only the count is enforced. */
+            cs->nouts++;
+            return true;
+    }
+}
+
+/**
+ * Resolve @p name against the innermost open scope's named inputs.
+ *
+ * Only the innermost scope is consulted, by design: a scope's whole
+ * contract is that the only way past its barrier is through the names it
+ * declares. An enclosing scope's names would compile to an offset from
+ * the *enclosing* floor, which isn't reachable from the inner one — and
+ * making them visible would mean a signature no longer describes
+ * everything the scope touches. Pass what an inner scope needs into it.
+ *
+ * @param ff   Engine.
+ * @param name Token to resolve.
+ * @return FF_OP_ARG operand (1 = last-declared input), or 0 if not a scope input.
+ */
+static int ff_scope_arg(const ff_t *ff, const char *name)
+{
+    if (ff->n_csig <= 0)
+        return 0;
+
+    const ff_csig_t *cs = &ff->csig[ff->n_csig - 1];
+    for (int i = 0; i < cs->nargs; i++)
+        if (strcmp(cs->names[i], name) == 0)
+            return cs->nargs - i;
+
+    return 0;
+}
+
 /** @copydoc ff_eval */
 ff_error_t ff_eval(ff_t *ff, const char *src)
 {
@@ -131,6 +349,33 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     for (;;)
     {
         ff_token_t tok = ff_tokenizer_next(t, src, &pos);
+
+        /* Signature mode: `{` owns the token stream until its `)`. Handled
+           ahead of the kind dispatch because a signature is a list of
+           names, not code — a name that happens to lex as a number
+           (`( a 2 -- b )`) has to be rejected, not compiled as a literal. */
+        /* FF_TOKEN_NULL falls through to the switch below, leaving
+           FF_STATE_SIG_PENDING set: a signature may span ff_eval calls,
+           exactly as a `:` name or an open `(` comment may. ffsh feeds
+           one line per call, so anything else would make a multi-line
+           signature work in a loaded file but not at the prompt. */
+        if ((ff->state & FF_STATE_SIG_PENDING) && tok != FF_TOKEN_NULL)
+        {
+            if (tok != FF_TOKEN_WORD)
+            {
+                ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
+                               "'%s' is not a name a scope signature can bind.",
+                               t->token);
+                ff_sig_abort(ff);
+                goto out;
+            }
+            if (!ff_sig_token(ff, t->token, &ec))
+            {
+                ff_sig_abort(ff);
+                goto out;
+            }
+            continue;
+        }
 
         switch (tok)
         {
@@ -199,6 +444,19 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                         ff_tracef(ff, FF_SEV_WARNING | FF_ERR_NON_UNIQUE,
                                   "'%s' isn't unique.", t->token);
                     ff_dict_rename(d, ff_dict_top(d), t->token);
+                }
+                else if (ff_scope_arg(ff, t->token) > 0)
+                {
+                    /* A named scope input. Resolved here, ahead of the
+                       dictionary, so the name is bound lexically and
+                       shadows any word of the same spelling for the
+                       body of the scope. Compiles to an indexed read
+                       below the barrier — no dictionary entry is ever
+                       created, so nothing can collide and nothing needs
+                       cleaning up at `}`. */
+                    ff_heap_t *h = &ff_dict_top(d)->heap;
+                    ff_heap_compile_op(h, FF_OP_ARG);
+                    ff_heap_compile_int(h, ff_scope_arg(ff, t->token));
                 }
                 else
                 {
@@ -332,6 +590,15 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     }
 
 out:
+    /* Any error abandons the definition being compiled, so open scope
+       records go with it. Catches the paths that raise from inside a
+       case body (`;` with a scope still open, `}` without `{`) and so
+       never reach ff_sig_abort. Harmless on the clean-exit path, where
+       an open `{` simply means the definition continues in the next
+       ff_eval call and ec is FF_OK. */
+    if (ec != FF_OK)
+        ff_sig_abort(ff);
+
     /* Single restore-and-return point: every clean exit (FF_TOKEN_NULL)
        and every error path lands here so the input/input_pos snapshot
        is rolled back exactly once. */
@@ -425,11 +692,16 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                         ? S->data[S->top - 1]
                         : 0;
 
+    /* Scope-barrier register cache. Mirrors S->floor for the duration of
+       dispatch so _FF_SL costs a register subtract rather than a second
+       memory load. Written only by SCOPE_ENTER / SCOPE_EXIT. */
+    size_t floor = S->floor;
+
     #define _FF_SYNC_TOS()   do { if (S->top) S->data[S->top - 1] = tos; } while (0)
     #define _FF_LOAD_TOS()   do { if (S->top) tos = S->data[S->top - 1]; } while (0)
 
-    #define _FF_SYNC()    do { ff->ip = ip; _FF_SYNC_TOS(); } while (0)
-    #define _FF_RESTORE() do { ip = ff->ip; _FF_LOAD_TOS(); } while (0)
+    #define _FF_SYNC()    do { ff->ip = ip; S->floor = floor; _FF_SYNC_TOS(); } while (0)
+    #define _FF_RESTORE() do { ip = ff->ip; floor = S->floor; _FF_LOAD_TOS(); } while (0)
 
     /* In-register convenience accessors used by case bodies. _FF_TOS is the
        cached TOS value (lvalue), _FF_NOS / _FF_SAT(i) reach into memory below
@@ -469,7 +741,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
        returns bool and must restore state before returning. */
     #define _FF_SL(n) \
         do { \
-            if (ff_unlikely((int)S->top < (int)(n))) \
+            if (ff_unlikely((int)(S->top - floor) < (int)(n))) \
             { \
                 _FF_SYNC(); \
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER, \
@@ -643,6 +915,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             #include "ff_words_file_p.h"
             #include "ff_words_var_p.h"
             #include "ff_words_comp_p.h"
+            #include "ff_words_scope_p.h"
             #include "ff_words_array_p.h"
             #include "ff_words_dict_p.h"
 

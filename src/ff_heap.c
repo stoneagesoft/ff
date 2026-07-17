@@ -7,6 +7,7 @@
 
 #include "ff_heap_p.h"
 
+#include "ff_opcode_meta_p.h"
 #include "ff_word_p.h"
 
 #include <assert.h>
@@ -15,6 +16,28 @@
 
 
 // Public
+
+/** @copydoc ff_heap_op_starts_at */
+bool ff_heap_op_starts_at(const ff_heap_t *h, size_t idx)
+{
+    size_t pos = 0;
+
+    while (pos < h->size)
+    {
+        if (pos == idx)
+            return true;
+        if (pos > idx)
+            return false;   /* idx lands inside an operand */
+
+        size_t n = ff_opcode_encoded_cells((ff_opcode_t)h->data[pos],
+                                           h->data, pos, h->size);
+        if (n == 0)
+            return false;   /* unknown width — refuse to answer */
+        pos += n;
+    }
+
+    return false;
+}
 
 /** @copydoc ff_heap_init */
 

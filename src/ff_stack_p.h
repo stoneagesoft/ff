@@ -48,6 +48,7 @@ struct ff_stack
 {
     ff_int_t data[FF_STACK_SIZE]; /**< Inline storage. */
     size_t top;                   /**< Count of valid entries. */
+    size_t floor;                 /**< Scope barrier: FF_SL sees only entries above it. 0 = outermost. */
 };
 
 
