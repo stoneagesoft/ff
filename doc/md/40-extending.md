@@ -106,6 +106,14 @@ A word that pops `p` items and pushes `q` items has stack effect
 All five macros early-return on failure. Put them before any stack
 manipulation — once you have written to a cell, rolling back is on you.
 
+`FF_SL` measures depth against the current **stack scope** barrier, not
+absolute stack bottom. When your native word is invoked from inside a
+`{ … }` scope, `FF_SL(ff, p)` requires `p` cells *above the barrier* —
+the caller's cells below it are out of reach, exactly as for a built-in.
+You do not opt in to this; requesting the arguments you actually
+consume is all it takes, and the check does the right thing in and out
+of a scope.
+
 
 ## Pointer and xt validation
 

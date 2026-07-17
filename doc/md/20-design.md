@@ -257,6 +257,7 @@ interpreter mode:
 | `FF_STATE_CTICK_PENDING` | Compile-time `[']` pending |
 | `FF_STATE_CBRACK_PENDING` | Inside `[…]` — temporary interpret mode |
 | `FF_STATE_STRLIT_ANTIC` | Next string token is a literal (for `."`, `.(`) |
+| `FF_STATE_SIG_PENDING` | Collecting a scope signature — the evaluator routes tokens to the signature parser, not the kind dispatch |
 | `FF_STATE_TRACE` | Print each word name before executing it |
 | `FF_STATE_BACKTRACE` | Maintain a call-chain for debugging |
 | `FF_STATE_BROKEN` | Execution halted; propagates through `ff_exec` callers |
@@ -328,6 +329,8 @@ struct ff_word
     ff_word_flags_t   flags;       /* IMMEDIATE, USED, HIDDEN, STATIC, NATIVE */
     ff_int_t         *does;        /* DOES> clause start (NULL if none) */
     ff_heap_t         heap;        /* compiled body, or [fn_ptr] for natives */
+    ff_sig_t         *sigs;        /* scope signatures by bytecode offset (see); NULL if none */
+    size_t            sigs_len;    /* count of sigs */
     const char       *manual;      /* help text string (may be NULL) */
     const char       *man_desc;    /* pointer past first '\n' in manual */
     struct ff_word   *next_bucket; /* dict hash chain (newest first) */
@@ -510,6 +513,7 @@ entries (the canonical list is `FF_OP_*` in
 | Counted loops | `FF_OP_XDO`, `FF_OP_XQDO`, `FF_OP_XLOOP`, `FF_OP_PXLOOP`, `FF_OP_LOOP_I`, `FF_OP_LOOP_J`, `FF_OP_LEAVE`, `FF_OP_I_ADD` (peephole `i +`), `FF_OP_I_ADD_LOOP` (peephole `i + loop`) |
 | Compiler / immediate | `FF_OP_COLON`, `FF_OP_SEMICOLON`, `FF_OP_IMMEDIATE`, `FF_OP_LBRACKET`, `FF_OP_RBRACKET`, `FF_OP_TICK`, `FF_OP_BRACKET_TICK`, `FF_OP_EXECUTE`, `FF_OP_STATE`, `FF_OP_BRACKET_COMPILE`, `FF_OP_LITERAL`, `FF_OP_COMPILE`, `FF_OP_DOES` |
 | Control flow | `FF_OP_QDUP`, `FF_OP_IF`/`ELSE`/`THEN`, `FF_OP_BEGIN`/`UNTIL`/`AGAIN`, `FF_OP_WHILE`/`REPEAT`, `FF_OP_DO`/`QDO`/`LOOP`/`PLOOP`, `FF_OP_QUIT`, `FF_OP_ABORT`, `FF_OP_ABORTQ`, `FF_OP_THROW`, `FF_OP_CATCH` |
+| Stack scopes | `FF_OP_LBRACE`/`RBRACE` (immediate `{`/`}`), `FF_OP_SCOPE_ENTER`, `FF_OP_SCOPE_EXIT`, `FF_OP_ARG` |
 | Definitions | `FF_OP_CREATE`, `FF_OP_FORGET`, `FF_OP_VARIABLE`, `FF_OP_CONSTANT`, `FF_OP_ARRAY`, `FF_OP_DEFER`, `FF_OP_IS` |
 | Heap | `FF_OP_HERE`, `FF_OP_STORE`/`FETCH`/`PLUS_STORE`, `FF_OP_ALLOT`/`COMMA`, `FF_OP_C_STORE`/`C_FETCH`/`C_COMMA`/`C_ALIGN` |
 | Strings | `FF_OP_STRING`, `FF_OP_S_STORE`, `FF_OP_S_CAT`, `FF_OP_STRLEN`, `FF_OP_STRCMP` |
@@ -612,6 +616,125 @@ the cached top-of-stack) and shared locals (`S`, `R`, `BT`, `ip`,
 GCC, Clang and MSVC while still giving the compiler enough visibility
 to compile the switch to a jump table — one indirect branch per
 opcode, branch-target predicted per case.
+
+
+## Stack scopes
+
+A *scope* is an opt-in `{ ( a b -- c ) … }` construct that names a
+definition's inputs and walls off the data stack for the enclosed code.
+It exists to make the stack comment every Forth programmer already
+writes into something the engine checks and the decompiler can show,
+without giving up the RPN model underneath — a scoped word compiles to
+the same token-threaded bytecode as any other and unscoped code is
+untouched.
+
+### The barrier
+
+The data stack (`ff_stack_t`) carries a `floor` alongside `top`. The
+underflow check that every stack-consuming word already runs measures
+available depth as `top - floor` rather than `top - 0`:
+
+~~~{.c}
+#define _FF_SL(n) \
+    do { if (ff_unlikely((int)(S->top - floor) < (int)(n))) …underflow… } while (0)
+~~~
+
+`floor` starts at 0, so outside any scope the check is unchanged.
+`FF_OP_SCOPE_ENTER` raises it to the current `top` (saving the old value
+on a per-engine record stack, `ff->scopes`); `FF_OP_SCOPE_EXIT` restores
+it. While a scope is open, the enclosed code sees an empty stack: it may
+push and pop freely, but a word that reaches below what it pushed hits
+the floor and faults with `FF_ERR_STACK_UNDER` — the caller's cells are
+unreachable, so a stray `drop` can no longer silently corrupt them.
+
+`floor` is register-cached in `ff_exec` next to `tos` and `ip`, since
+`_FF_SL` reads it on every stack word; `SCOPE_ENTER`/`EXIT` write both
+the register and the memory copy so they stay coherent across the
+`_FF_SYNC`/`_FF_RESTORE` that bracket every native call. The barrier
+also governs external native words: they validate through the public
+`FF_SL` (in `ff_p.h`), which checks the same `floor`, so a native word
+invoked inside a scope cannot reach past it either.
+
+Because the record stack is indexed by *call* depth (a recursive scoped
+word holds one record per active invocation), it is sized like the
+back-trace stack, `FF_SCOPE_DEPTH = 256`. `catch` snapshots `floor` and
+the record count and rolls them back if a `throw` unwinds out of an open
+scope, so the barrier never leaks.
+
+### Named inputs
+
+The signature `( a b -- c )` is parsed by the evaluator, not a case
+body — the tokenizer sits a level above the dispatch switch. `{` sets
+`FF_STATE_SIG_PENDING` and `FF_TOK_STATE_SIG` (the latter suspends
+`( … )` comment handling so the signature arrives as ordinary tokens),
+and the evaluator routes the following tokens to a small state machine
+until the closing `)`. Names left of `--` are collected; the count right
+of `--` is the declared output arity; `--` and `)` delimit the regions.
+
+Inside the body a name resolves *before* the dictionary and compiles to
+`FF_OP_ARG k`, an indexed read of `data[floor - k]` (rightmost input =
+`k` 1, next `k` 2, and so on). No dictionary entry is ever created, so a name cannot collide,
+needs no cleanup at `}`, and shadows any word of the same spelling for
+the body of its scope — a purely lexical binding. Only the innermost
+scope's names are visible: an enclosing name would address the enclosing
+floor, which the inner scope cannot reach, so nesting is a compile-time
+stack of name→index maps with no cross-talk.
+
+At `}`, `FF_OP_SCOPE_EXIT` checks that the scope produced exactly its
+declared number of cells (`FF_ERR_SCOPE_ARITY` otherwise), asserts the
+return stack is back to its entry depth (`FF_ERR_SCOPE_RSTACK`), then
+slides the produced cells down over the consumed inputs with a single
+`memmove` and restores the floor.
+
+### Operand packing and the peephole
+
+`SCOPE_ENTER` and `SCOPE_EXIT` each carry exactly one inline operand
+cell, with their fields bit-packed (`FF_SCOPE_PACK_ENTER` /
+`FF_SCOPE_PACK_EXIT`). This is not incidental: the tail-call peephole in
+`;` reads `data[size - 2]` expecting an opcode, and a two-cell operand
+encoding would leave a small integer there that aliases `FF_OP_NEST`
+(== 1) for a one-input scope. The peephole was made operand-aware to
+match — it now consults `ff_opcode_meta` (via `ff_heap_op_starts_at`) to
+confirm `data[size - 2]` actually begins an instruction before rewriting
+it, rather than assuming a fixed stride.
+
+A trailing scope therefore cannot fold to `FF_OP_TNEST`: `SCOPE_EXIT`
+must run after the final call to slide the outputs, and "somewhere to
+return to after the call" is exactly what a tail call gives up. This is
+inherent, not a defect; scoped tail recursion is left to a possible
+future `SCOPE_TNEST` and is not implemented.
+
+### Signatures and `see`
+
+The signature *source text* is stored on the owning word in a side table
+(`ff_sig`), keyed by the bytecode offset of its `SCOPE_ENTER` — kept off
+the execution path entirely, so the run time pays nothing for it. It is
+keyed by offset because one word may open several nested scopes, and
+stored as text (not a parsed array) so `...` and any future notation
+round-trip without a schema change. `see` walks the body, opens a scope
+frame when it meets `SCOPE_ENTER`, prints the stored signature, and
+resolves each `FF_OP_ARG` back to the name it was written as by
+re-splitting that text — including for arguments used inside an
+`if`/`do`/`begin`, where the decompiler searches down its frame stack
+past the control-flow frames to the enclosing scope.
+
+### `...` escape hatches
+
+Two forms trade a check for flexibility. `( a -- ... )` names its inputs
+and installs a fresh barrier but skips the output-arity check at `}`
+(`var_out`). `( ... -- ... )` takes no names and *inherits* the
+enclosing floor rather than installing a new one (`var_in`), so a
+variadic helper can still reach the caller's cells — but only as far as
+the scope that contains it, one level of degradation rather than a full
+opt-out. `...` on the input side is rejected alongside named inputs
+(names would dangle once the code is permitted to pop below the floor)
+and forces `...` on the output side (with the inputs consumed from
+below, there is no reference point left to verify an output count
+against — a checked output there could only ever be a comment, which is
+the thing scopes exist to eliminate).
+
+Scopes are compile-mode only: `{` uses the same `_FF_COMPILING` guard as
+`if`/`do`/`begin` and reports cleanly at the top-level prompt.
 
 
 ## Performance optimisations

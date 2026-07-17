@@ -45,6 +45,14 @@ host-supplied native words.
 - **Per-word heaps.** Each definition owns its compiled body — there
   is no global heap or `HERE` pointer. Words can grow in place
   without invalidating any other word's compiled-in addresses.
+- **Checked stack scopes.** An optional `{ ( a b -- c ) … }` syntax
+  names a word's inputs and walls off the data stack: code inside the
+  scope reads its arguments by name, cannot reach past them (a stray
+  `drop` faults instead of eating the caller's cell), and is checked at
+  the closing `}` for leaving exactly the declared number of outputs.
+  The signature is stored with the word, so `see` prints it back.
+  Ordinary RPN still works unchanged — scopes are opt-in, per
+  definition.
 - **Optional memory safety.** A `FF_SAFE_MEM` build flag turns every
   `@`/`!`/`+!`/`c@`/`c!`/`s!`/`s+`/`strlen`/`strcmp`/`execute` into a
   bounds-checked operation against the engine's tracked regions. Off
@@ -122,6 +130,73 @@ Or pick *ff* up via CMake:
 find_package(ff 1.0 REQUIRED)
 target_link_libraries(my_app PRIVATE ff::ff)
 ```
+
+
+## Stack scopes
+
+A scope wraps part of a definition in a barrier and a signature:
+
+```
+▶ : dist { ( x1 y1 x2 y2 -- d )
+      x2 x1 f- dup f*
+      y2 y1 f- dup f*
+      f+ sqrt } ;
+▶ 1.0 2.0 4.0 6.0 dist f.
+5
+```
+
+The names left of `--` bind the caller's topmost cells (rightmost = top
+of stack); the names right of `--` declare how many cells the scope
+leaves. Inside the braces the stack starts empty — the body pushes and
+pops freely but reaches its inputs only through their names, so the
+formula reads left to right instead of as a sequence of `rot`/`swap`
+gymnastics.
+
+Three things are enforced at run time, turning the signature from a
+comment into a contract:
+
+- **The barrier.** A word inside the scope that pops below what it
+  pushed faults with a stack underflow rather than silently consuming
+  one of the caller's cells.
+- **The output count.** The closing `}` checks the scope left exactly
+  the number of cells its signature declared; `{ ( a b -- m ) a b > if
+  a then }` is rejected because the missing `else` leaves zero on one
+  path.
+- **The return stack.** A scope that runs `>r` without a matching `r>`
+  is caught at `}`.
+
+Scopes nest — inner scopes may reuse names freely, since a name is
+bound only between its own `{` and `}`:
+
+```
+: quad { ( x1 y1 x2 y2 -- q )
+    x2 x1 { ( p q -- s ) p q f- dup f* }
+    y2 y1 { ( p q -- s ) p q f- dup f* }
+    f+ } ;
+```
+
+`...` opts out of a check where you need the flexibility: `( a -- ... )`
+leaves an unchecked number of cells, and `( ... -- ... )` inherits the
+enclosing barrier instead of installing a fresh one (so a variadic
+helper can still reach the caller's stack). `...` on the input side
+cannot be combined with named inputs.
+
+`see` renders a scoped word back with its signature and resolves each
+named input, so a definition round-trips through the decompiler:
+
+```
+▶ see dist
+  : dist
+    { ( x1 y1 x2 y2 -- d )
+        x2 x1 f- dup f* y2 y1 f- dup f* f+ sqrt
+    }
+;
+```
+
+The whole construct is opt-in and per definition: where a word is a
+four-argument formula, name the arguments; where `dup *` says it
+plainly, keep juggling. Both compile to the same token-threaded
+bytecode, and unscoped code is unaffected.
 
 
 ## Building from source

@@ -9,6 +9,32 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Checked stack scopes: `{ ( a b -- c ) … }`. A scope names a
+  definition's inputs and walls off the data stack — code between `{`
+  and `}` starts from an empty stack, reads its arguments only by name,
+  and is checked at `}` for leaving exactly the declared number of
+  outputs. Enforcement is at run time and cheap: the underflow check
+  every stack word already runs (`FF_SL`) now measures against a
+  movable floor rather than zero, so a stray `drop` inside a scope
+  faults instead of consuming the caller's cell. The return stack is
+  likewise asserted balanced at `}`, and `catch` restores the barrier
+  when a `throw` unwinds out of an open scope.
+  - `...` opts out of a check: `( a -- ... )` leaves an unchecked cell
+    count; `( ... -- ... )` inherits the enclosing barrier instead of
+    installing a new one. `...` on the input side cannot be combined
+    with named inputs and forces `...` on the output side.
+  - Named inputs compile to indexed reads below the barrier
+    (`FF_OP_ARG`), never dictionary entries, so a name shadows any word
+    of the same spelling for the body of its scope and needs no cleanup.
+  - The signature source is stored with the word (keyed by bytecode
+    offset), so `see` renders a scoped word back with its signature and
+    resolves each named input to the name it was written as.
+  - New opcodes `FF_OP_SCOPE_ENTER` / `FF_OP_SCOPE_EXIT` / `FF_OP_ARG`
+    and immediate words `{` / `}`; new state flag `FF_STATE_SIG_PENDING`
+    and tokenizer flag `FF_TOK_STATE_SIG` (which suspends `( … )`
+    comment handling for the duration of a signature); new error codes
+    `FF_ERR_SCOPE_ARITY` / `_OVER` / `_RSTACK` / `_SIG`. Scopes are
+    compile-mode only, matching `if` / `do` / `begin`.
 - Markdown renderer for terminal output. Two snprintf-shaped
   entry points in `<ff_md.h>`:
   - `ff_md_snprintf` — plain UTF-8 (no ANSI codes).
@@ -86,6 +112,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **ABI break** (public `ff_error.h`): the scope error codes were
+  inserted in alphabetical position, so the numeric values of
+  `FF_ERR_STACK_OVER` and everything after it shifted. Rebuild
+  consumers against the new headers; do not mix a new `libff.so` with
+  objects compiled against the old enum.
 - Source layout reorganised: each subsystem in one `.c`, every
   built-in word category split into a registration `.c` plus a
   dispatch-include `_p.h`.
