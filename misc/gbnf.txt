@@ -1,0 +1,165 @@
+# ============================================================================
+# Fortissimo (ff) — GBNF grammar for its Forth dialect
+# ----------------------------------------------------------------------------
+# "ff" is the musical dynamics marking for fortissimo (very loud); the engine
+# is a Forth-derived language, but the name is Fortissimo, not "Fortissimo
+# Forth".
+# ============================================================================
+#
+# GBNF is the grammar format used by llama.cpp (`--grammar-file`) and
+# compatible runtimes to constrain an LLM's token sampling so its output stays
+# inside a formal language. This grammar constrains generation to
+# syntactically well-formed *ff* source.
+#
+# WHAT IT ENFORCES
+#   - Lexical structure: integers, reals, strings, `\` and `( )` comments.
+#   - Definition structure: `: name ... ;` (with optional `immediate`).
+#   - Control flow nesting: if/else/then, begin/until|again|while/repeat,
+#     do|?do/loop|+loop.
+#   - Stack scopes: `{ ( a b -- c ) ... }`, including the `--` and `...`.
+#   - Words that consume following text: `'`, `postpone`, `char`, `see`,
+#     `variable`, `." ..."`, `.( ... )`, `abort" ..."`, etc.
+#   - A snapshot of the built-in vocabulary, to steer toward real words while
+#     still allowing user-defined names.
+#
+# WHAT IT CANNOT ENFORCE (context-free grammars can't express these)
+#   - Stack effects / arity — nothing checks that a word gets its inputs.
+#   - Use-before-definition — a body may name words not yet defined.
+#   - That a scope leaves exactly its declared number of outputs.
+#   - That `char (` / `char "` fail (they are lexically special); the grammar
+#     accepts them, the engine rejects them.
+# Treat this as a generation guide, not a validating parser.
+#
+# The `builtin` rule is a snapshot of the engine's registered words. Rebuild it
+# from source with:
+#   grep -rhoE '_FF_WI?\("[^"]+"' src/words/*.c | sed -E 's/_FF_WI?\("//;s/"$//' \
+#     | sort -u
+# (dropping the internal `(lit)`-style opcodes and the words already handled by
+#  dedicated rules below).
+# ============================================================================
+
+
+# --- entry point ------------------------------------------------------------
+# A program is a whitespace/comment-separated sequence of top-level items.
+root ::= ws-opt ( item ( ws item )* ws-opt )?
+
+
+# --- separators: whitespace and comments ------------------------------------
+ws      ::= sep+
+ws-opt  ::= sep*
+sep     ::= [ \t\r\n] | line-comment | block-comment
+line-comment  ::= "\\" [^\n]*
+block-comment ::= "(" [^)]* ")"
+
+
+# --- top-level items --------------------------------------------------------
+# Control flow and scopes are compile-only in ff, so at top level only
+# definitions, defining/naming words, string words, and plain atoms appear.
+item ::= definition
+       | defining-word
+       | naming-word
+       | char-word
+       | string-word
+       | atom
+
+
+# --- colon definitions ------------------------------------------------------
+definition ::= ":" ws name ( ws body-element )* ws ";" ( ws "immediate" )?
+
+# Anything valid inside a definition body.
+body-element ::= control
+               | scope
+               | defining-word
+               | naming-word
+               | char-word
+               | string-word
+               | atom
+
+
+# --- control flow -----------------------------------------------------------
+control ::= conditional | begin-loop | counted-loop
+
+conditional ::= "if" ( ws body-element )*
+                ( ws "else" ( ws body-element )* )?
+                ws "then"
+
+begin-loop ::= "begin" ( ws body-element )*
+               ( ws "until"
+               | ws "again"
+               | ws "while" ( ws body-element )* ws "repeat" )
+
+counted-loop ::= ( "do" | "?do" ) ( ws body-element )* ws ( "loop" | "+loop" )
+
+
+# --- stack scopes:  { ( a b -- c ) ... } ------------------------------------
+scope ::= "{" ws-opt signature ( ws body-element )* ws-opt "}"
+
+# Names before `--` bind stack inputs; names after are formal outputs. Either
+# side may be `...` (variadic / inherit-barrier).
+signature ::= "(" sig-side "--" sig-side ")"
+sig-side  ::= ( ws-opt ( name | "..." ) )* ws-opt
+
+
+# --- words that consume the next word as a name -----------------------------
+naming-word ::= naming-op ws name
+naming-op   ::= "'" | "[']" | "[compile]" | "compile" | "postpone" | "is"
+              | "see" | "man" | "dump-word" | "forget"
+
+# --- defining words: introduce a new name -----------------------------------
+defining-word ::= defining-op ws name
+defining-op   ::= "variable" | "constant" | "create" | "defer"
+                | "array" | "string"
+
+# --- char / [char]: consume the next token, use its first character ---------
+char-word ::= ( "char" | "[char]" ) ws char-arg
+char-arg  ::= [^ \t\r\n]+
+
+
+# --- words that consume an inline string ------------------------------------
+string-word ::= dot-quote | abort-quote | dot-paren
+dot-quote   ::= ".\"" [^"]* "\""
+abort-quote ::= "abort\"" [^"]* "\""
+dot-paren   ::= ".(" [^)]* ")"
+
+
+# --- atoms ------------------------------------------------------------------
+# `real` is listed before `int` so a token with a decimal point is taken whole.
+atom ::= real | int | string | builtin | word
+
+int    ::= "-"? ( "0" [xX] [0-9a-fA-F]+ | [0-9]+ )
+real   ::= "-"? [0-9]+ "." [0-9]* ( [eE] "-"? [0-9]+ )?
+string ::= "\"" ( [^"\\] | "\\" [^\n] )* "\""
+
+# A name / generic word: a run of non-whitespace, excluding the characters that
+# stand alone as structure — `( ) { } " \ ;`. Brackets are allowed so names
+# like `[char]` are expressible.
+name ::= word
+word ::= [^ \t\r\n(){}";\\]+
+
+
+# --- built-in vocabulary (snapshot; steers toward real words) ---------------
+# Plain words only — structural, defining, naming, char, string, and internal
+# `(lit)`-style words are handled by the rules above and deliberately omitted.
+builtin ::= "!" | "*" | "+" | "+!" | "," | "-" | "." | "/" | "<" | "<=" | "<>"
+    | "=" | ">" | ">=" | "?" | "@" | "0<" | "0<>" | "0=" | "0>"
+    | "1+" | "1-" | "2*" | "2+" | "2-" | "2/"
+    | "2drop" | "2dup" | "2over" | "2swap"
+    | "dup" | "?dup" | "drop" | "swap" | "over" | "nip" | "tuck" | "rot"
+    | "-rot" | "pick" | "roll" | "depth" | "clear" | ">r" | "r>" | "r@"
+    | "abs" | "negate" | "min" | "max" | "mod" | "/mod" | "and" | "or" | "xor"
+    | "not" | "shift"
+    | "f+" | "f-" | "f*" | "f/" | "f." | "f<" | "f<=" | "f<>" | "f=" | "f>"
+    | "f>=" | "fabs" | "fnegate" | "sqrt" | "sin" | "cos" | "tan" | "asin"
+    | "acos" | "atan" | "atan2" | "exp" | "log" | "pow" | "pi" | "e"
+    | "float" | "fix"
+    | ".s" | "cr" | "emit" | "type"
+    | "c@" | "c!" | "c," | "c=" | "here" | "allot"
+    | "s!" | "s+" | "strlen" | "strcmp" | "strerror"
+    | "i" | "j" | "leave" | "exit" | "quit" | "abort"
+    | "catch" | "throw" | "execute" | "evaluate" | "load"
+    | "parse" | "parse-word" | "literal" | "state" | "base"
+    | ">body" | ">name" | "find" | "words" | "wordsused" | "wordsunused"
+    | "backtrace" | "trace" | "memstat" | "dump" | "ERRNO"
+    | "fopen" | "fclose" | "fgetc" | "fgets" | "fputc" | "fputs"
+    | "fseek" | "ftell" | "seek_set" | "seek_cur" | "seek_end"
+    | "stdin" | "stdout" | "stderr" | "system"
