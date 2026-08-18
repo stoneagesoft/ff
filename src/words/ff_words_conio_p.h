@@ -13,7 +13,10 @@
 case FF_OP_DOT:
     _FF_SL(1);
     _FF_SYNC();
-    ff_printf(ff, ff->base == FF_BASE_HEX ? "0x%lX" : "%ld", (long)tos);
+    if (ff->base == FF_BASE_HEX)
+        ff_printf(ff, "0x%" FF_PRIXCELL, (ff_uint_t)tos);
+    else
+        ff_printf(ff, "%" FF_PRIdCELL, tos);
     _FF_DROP();
     _FF_NEXT();
 
@@ -21,8 +24,13 @@ case FF_OP_DOT:
 case FF_OP_QUESTION:
     _FF_SL(1);
     _FF_SYNC();
-    ff_printf(ff, ff->base == FF_BASE_HEX ? "0x%lX" : "%ld",
-              (long)*(ff_int_t *)(intptr_t)tos);
+    {
+        ff_int_t v = *(ff_int_t *)(intptr_t)tos;
+        if (ff->base == FF_BASE_HEX)
+            ff_printf(ff, "0x%" FF_PRIXCELL, (ff_uint_t)v);
+        else
+            ff_printf(ff, "%" FF_PRIdCELL, v);
+    }
     _FF_DROP();
     _FF_NEXT();
 
@@ -69,8 +77,8 @@ case FF_OP_DOT_S:
             ff_real_t r;
             memcpy(&r, &v, sizeof(r));
             char c = (v > 0 && v < 0xFF && isprint((int)v)) ? (char)v : ' ';
-            ft_u8printf_ln(tbl, "%zu|%ld|%lX|%g|%c|%p",
-                           n, (long)v, (long)v, r, c, (void *)(intptr_t)v);
+            ft_u8printf_ln(tbl, "%zu|%" FF_PRIdCELL "|%" FF_PRIXCELL "|%g|%c|%p",
+                           n, v, (ff_uint_t)v, r, c, (void *)(intptr_t)v);
         }
         ff_printf(ff, "\n%s", (const char *)ft_to_u8string(tbl));
         ft_destroy_table(tbl);

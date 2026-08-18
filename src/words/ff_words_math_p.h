@@ -288,7 +288,7 @@ case FF_OP_SET_BASE:
         default:
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_APPLICATION,
-                      "Unsupported base %ld.", (long)tos);
+                      "Unsupported base %" FF_PRIdCELL ".", tos);
             goto done;
     }
     _FF_DROP();

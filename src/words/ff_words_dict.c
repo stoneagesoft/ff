@@ -578,13 +578,13 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                                      name, sizeof(name)))
                     see_text(pr, "%s", name);
                 else
-                    see_text(pr, "<arg%ld>", (long)cells[pos + 1]);
+                    see_text(pr, "<arg%" FF_PRIdCELL ">", cells[pos + 1]);
                 pos += 2;
                 break;
             }
 
             case FF_OP_LIT:
-                see_text(pr, "%ld", (long)cells[pos + 1]);
+                see_text(pr, "%" FF_PRIdCELL, cells[pos + 1]);
                 pos += 2;
                 break;
 
@@ -593,12 +593,12 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
             case FF_OP_LITM1:   see_text(pr, "-1");     pos += 1; break;
 
             case FF_OP_LITADD:
-                see_text(pr, "%ld +", (long)cells[pos + 1]);
+                see_text(pr, "%" FF_PRIdCELL " +", cells[pos + 1]);
                 pos += 2;
                 break;
 
             case FF_OP_LITSUB:
-                see_text(pr, "%ld -", (long)cells[pos + 1]);
+                see_text(pr, "%" FF_PRIdCELL " -", cells[pos + 1]);
                 pos += 2;
                 break;
 
@@ -860,8 +860,8 @@ void ff_w_see_impl(ff_t *ff)
        makes sense for colon-defs (opcode = FF_OP_NEST / _TNEST). */
     if (w->opcode == FF_OP_CONSTANT_RUNTIME)
     {
-        ff_printf(ff, "%ld constant %s\n",
-                  (long)(w->heap.size ? w->heap.data[0] : 0), w->name);
+        ff_printf(ff, "%" FF_PRIdCELL " constant %s\n",
+                  w->heap.size ? w->heap.data[0] : 0, w->name);
         return;
     }
     if (w->opcode == FF_OP_CREATE_RUNTIME)
@@ -903,7 +903,7 @@ void ff_w_see_impl(ff_t *ff)
                   parent ? "`" : "");
         ff_printf(ff, "%s  \\ parameter field:", w->name);
         for (size_t i = 0; i < w->heap.size; ++i)
-            ff_printf(ff, " %ld", (long)w->heap.data[i]);
+            ff_printf(ff, " %" FF_PRIdCELL, w->heap.data[i]);
         ff_printf(ff, "\n");
         if (w->does && parent)
         {
