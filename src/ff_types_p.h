@@ -15,10 +15,18 @@
 
 #ifdef FF_32BIT
 typedef int32_t  ff_int_t;      /**< Signed cell-sized integer (32-bit build). */
+typedef uint32_t ff_uint_t;     /**< Unsigned cell (for logical shifts / bit ops). */
 typedef float    ff_real_t;     /**< Floating cell value (32-bit build). */
+#define FF_INT_MIN   INT32_MIN  /**< Most-negative cell value. */
+#define FF_INT_MAX   INT32_MAX  /**< Most-positive cell value. */
+#define FF_CELL_BITS 32         /**< Width of a cell in bits. */
 #else
 typedef int64_t  ff_int_t;      /**< Signed cell-sized integer (64-bit build, default). */
+typedef uint64_t ff_uint_t;     /**< Unsigned cell (for logical shifts / bit ops). */
 typedef double   ff_real_t;     /**< Floating cell value (64-bit build, default). */
+#define FF_INT_MIN   INT64_MIN  /**< Most-negative cell value. */
+#define FF_INT_MAX   INT64_MAX  /**< Most-positive cell value. */
+#define FF_CELL_BITS 64         /**< Width of a cell in bits. */
 #endif
 
 /**

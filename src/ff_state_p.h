@@ -34,3 +34,18 @@ typedef enum ff_state
     FF_STATE_SIG_PENDING    = 1 << 14,  /**< `{` is collecting its `( a b -- c )` signature tokens. */
     FF_STATE_POSTPONE_PENDING = 1 << 15 /**< `postpone`: next token names the word whose compilation to defer. */
 } ff_state_t;
+
+/**
+ * @brief One-shot flags whose trigger word consumes the *next token as a
+ *        name* (a WORD). Grouped so the evaluator can (a) reject a
+ *        wrong-kind following token before the kind switch and (b) clear
+ *        them all on any error path.
+ */
+#define FF_STATE_NAME_PENDING \
+    (FF_STATE_DEF_PENDING | FF_STATE_FORGET_PENDING | FF_STATE_IS_PENDING \
+     | FF_STATE_TICK_PENDING | FF_STATE_CTICK_PENDING | FF_STATE_CBRACK_PENDING \
+     | FF_STATE_POSTPONE_PENDING)
+
+/** @brief Every one-shot next-token flag (name-consumers, string, signature). */
+#define FF_STATE_PENDING_ALL \
+    (FF_STATE_NAME_PENDING | FF_STATE_STRLIT_ANTIC | FF_STATE_SIG_PENDING)

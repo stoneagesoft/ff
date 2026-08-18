@@ -72,6 +72,7 @@ struct ff_tokenizer
     size_t token_len;                /**< Length of @ref token, excluding the NUL. */
     ff_int_t integer_val;            /**< Decoded integer when token kind is FF_TOKEN_INTEGER. */
     ff_real_t real_val;              /**< Decoded real when token kind is FF_TOKEN_REAL. */
+    bool truncated;                  /**< The just-scanned token/string overran FF_TOKEN_SIZE and was cut. */
 };
 
 /**

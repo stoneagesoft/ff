@@ -1,0 +1,5 @@
+\ A negative pick index used to index above the stack top (OOB read,
+\ garbage pushed). Now it errors and halts the eval.
+42 .
+1 2 3 -5 pick
+99 .

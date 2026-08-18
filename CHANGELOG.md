@@ -9,6 +9,63 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Public embedding API so hosts can register C words and marshal data
+  using only `<ff.h>` — no internal headers:
+  - `ff_register(ff_t*, const ff_native_word_t*)` with the
+    `FF_NATIVE` / `FF_NATIVE_I` / `FF_NATIVE_END` table macros.
+  - Data-stack marshaling: `ff_depth`, `ff_push_int` / `ff_pop_int`,
+    `ff_push_real` / `ff_pop_real`.
+  - `ff_version()` (and `<ff.h>` now pulls in the `FF_VERSION*` macros),
+    plus `ff_warmup()` to initialise the shared built-in table up front
+    for multi-threaded hosts.
+  - `FF_ERR_CODE()` / `FF_ERR_SEV()` for splitting a packed `ff_error_t`.
+- Build now uses `-fwrapv`: signed overflow wraps two's-complement, as
+  Forth arithmetic expects, and the optimizer can't assume it away.
+
+### Fixed
+
+- **Crashes on ordinary input:** `INT_MIN / -1` (and `mod`/`/mod`) no
+  longer raise `SIGFPE`; a negative `pick`/`roll` index no longer reads
+  past the stack top; `allot` with a negative count no longer truncates
+  into a huge allocation. All now raise a clean error.
+- **String-pointer stability:** the transient string arena is a list of
+  non-moving slabs instead of a single `realloc`'d buffer, so `char*`
+  values handed out by string literals and `parse-word` / `parse` stay
+  valid as more strings are interned — the documented contract was
+  previously broken by the growth `realloc`.
+- **Native words:** a leaf native word left `ff->ip` stale (dispatch ran
+  garbage) and an early `goto done` used an uninitialised TOS register
+  (clobbered the pushed result). Both are fixed — the fn-based native
+  path is now exercised by the public API.
+- **Error codes are usable again:** `ff_eval` / `ff_exec` / `ff_errno`
+  return the bare `FF_ERR_*` code, so `ff_errno(ff) == FF_ERR_DIV_ZERO`
+  works (they previously carried the severity bit and never matched).
+- **State-machine leaks:** a wrong-kind token after `:` / `'` / `["]` /
+  `."` / `postpone` now errors instead of leaking the pending flag onto
+  a later token and silently miscompiling; all pending flags are cleared
+  on any error; `abort` inside a scope no longer leaves stale scope
+  records that could hijack later interpretation.
+- **Diagnostics instead of silence:** an unterminated string literal, a
+  token longer than `FF_TOKEN_SIZE`, and an over-range integer literal
+  are now reported rather than silently dropped, truncated, or clamped.
+- Size-overflow guards on the heap/dict/arena growth paths;
+  `ff_heap_compile_str` uses `size_t` (was a truncating `int`);
+  `ff_new` returns `NULL` on allocation failure; `ff_heap_trim` bumps
+  the safe-mem interval counter; `ff_dict_rename` tolerates a failed
+  `strdup`; the watchdog now ticks through `does>`-built words.
+
+### Changed
+
+- `abort` / `abort"` now discard the rest of the input line and return
+  `FF_ERR_ABORTED` (ANS `ABORT` semantics) instead of running on.
+- Integer literals are base 10 by default with explicit `0x` hex; C's
+  implicit octal is gone (`010` is ten, `009` is nine).
+- `.(`, `."`, and `abort"` are correctly tagged `FF_OP_LAYOUT_STR` in the
+  opcode metadata, so `see` / `dump-word` no longer mis-decode a word's
+  body after an inline string.
+
+### Added (language)
+
 - Input-stream words `parse-word`, `parse`, and `postpone`, which let
   new notation be defined from inside Forth instead of only in C.
   - `parse-word ( -- c-addr )` returns the next whitespace-delimited

@@ -168,7 +168,17 @@ struct ff_arena
     size_t           default_slab_size; /**< Default `cap` for new slabs. */
 };
 
-/** @brief Allocate @p bytes from the arena. Never returns NULL. */
+/**
+ * @brief Allocate @p bytes from the arena.
+ *
+ * Follows the engine's fail-fast allocation policy: on host allocator
+ * failure it does not return a clean error — the process faults. Deep
+ * compile-time allocation paths (this, the per-word heaps, the dict
+ * table) cannot be unwound mid-definition, so the library assumes they
+ * succeed. Hosts that must survive OOM should cap input size up front;
+ * the one recoverable allocation, engine creation, is reported by
+ * ff_new() returning NULL.
+ */
 void *ff_arena_alloc(ff_arena_t *a, size_t bytes);
 
 /** @brief Free every slab. The arena is left zeroed. */

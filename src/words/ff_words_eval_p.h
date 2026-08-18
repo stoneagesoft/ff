@@ -1,3 +1,7 @@
+#ifndef FF_IN_EXEC
+#error "This is a dispatch fragment #included inside ff_exec(); do not include it directly."
+#endif
+
 /*
  * ff --- eval word dispatch cases.
  *

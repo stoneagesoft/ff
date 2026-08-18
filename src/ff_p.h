@@ -70,6 +70,22 @@
 
 
 /**
+ * @struct ff_pad_slab
+ * @brief One non-moving slab of the transient-string arena.
+ *
+ * Slabs are malloc'd with @ref data sized to @ref size and never
+ * reallocated, so any pointer into a slab stays valid until ff_abort
+ * or ff_free. The engine holds a singly-linked list newest-first.
+ */
+typedef struct ff_pad_slab
+{
+    struct ff_pad_slab *next;   /**< Next-older slab, or NULL. */
+    size_t used;                /**< Bytes consumed from @ref data. */
+    size_t size;                /**< Capacity of @ref data in bytes. */
+    char   data[];              /**< Interned NUL-terminated strings. */
+} ff_pad_slab_t;
+
+/**
  * @struct ff
  * @brief The interpreter instance.
  *
@@ -94,13 +110,14 @@ struct ff
     ff_bt_stack_t bt_stack;             /**< Back-trace stack (when FF_STATE_BACKTRACE is on). */
     ff_int_t *ip;                       /**< Current instruction pointer (NULL when not running). */
 
-    /* Bump arena for transient interpret-time strings. Strings are
-       appended forward; the arena grows on demand and is reset only
-       by ff_abort. See FF_PAD_INIT_SIZE in ff_config_p.h for the
-       lifetime contract. */
-    char  *pad_buf;                     /**< Heap-allocated arena base; NULL until first use. */
-    size_t pad_used;                    /**< Bytes consumed from @ref pad_buf. */
-    size_t pad_size;                    /**< Allocated capacity of @ref pad_buf. */
+    /* Transient interpret-time string arena. A singly-linked list of
+       non-moving slabs: bytes are bump-allocated within the head slab,
+       and a full head is never realloc'd — a fresh slab is prepended
+       instead. This is what makes handed-out c-addrs (string literals,
+       parse-word / parse results) stable for the engine's lifetime, as
+       ff_config_p.h promises: growth never moves an existing slab.
+       Reset only by ff_abort. See FF_PAD_INIT_SIZE in ff_config_p.h. */
+    ff_pad_slab_t *pad;                 /**< Head of the arena slab list; NULL until first use. */
 
     ff_tokenizer_t tokenizer;           /**< Persistent lexer state. */
     const char *input;                  /**< Currently-tokenizing source buffer. */
@@ -168,6 +185,16 @@ struct ff
 
 /**
  * @brief Stack-underflow check; returns from the calling function on miss.
+ *
+ * This is the *native-word* family (FF_SL/FF_SO/FF_RSL/FF_RSO): it
+ * `return;`s on a miss and reads the barrier from `e->stack.floor` in
+ * memory. It has a hot-path twin, `_FF_SL` in ff.c, used inside
+ * ff_exec's dispatch loop, which instead `goto done`s and reads the
+ * register-cached `floor`. The two MUST stay behaviourally identical
+ * (same depth semantics, same `top - floor` barrier); the only sanctioned
+ * difference is return vs goto and memory vs register floor. Edit both
+ * together. The register/memory split is safe only because FF_OP_CALL
+ * `_FF_SYNC()`s (writing floor to memory) before invoking a native word.
  * @param e Engine pointer.
  * @param n Required minimum stack depth.
  */
@@ -308,11 +335,11 @@ static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
             return true;
     }
 
-    /* Pad bump arena (live prefix only). */
-    if (ff->pad_buf && ff->pad_used > 0)
+    /* Pad arena — the live prefix of any slab. */
+    for (const ff_pad_slab_t *sl = ff->pad; sl; sl = sl->next)
     {
-        const char *lo = ff->pad_buf;
-        const char *hi = lo + ff->pad_used;
+        const char *lo = sl->data;
+        const char *hi = lo + sl->used;
         if (a >= lo && end <= hi)
             return true;
     }

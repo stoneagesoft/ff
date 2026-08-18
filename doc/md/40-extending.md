@@ -12,6 +12,30 @@ This chapter walks through adding a new native C word end-to-end.
 Everything you need is in the installed header set — no patching of the
 library is required.
 
+> **Two ways in.** There is now a **stable public API** in `<ff.h>` that
+> covers the common case with no internal headers at all:
+>
+> ~~~{.c}
+> #include <ff.h>
+> static void square(ff_t *ff) {
+>     int64_t n;
+>     if (ff_pop_int(ff, &n)) ff_push_int(ff, n * n);
+> }
+> /* ... after ff_new(): */
+> ff_native_word_t words[] = {
+>     FF_NATIVE("square", square, "( n -- n^2 )"),
+>     FF_NATIVE_END,
+> };
+> ff_register(ff, words);
+> ~~~
+>
+> Use `ff_depth`, `ff_push_int` / `ff_pop_int`, and
+> `ff_push_real` / `ff_pop_real` to move values across the boundary. The
+> rest of this chapter uses the lower-level `<ff_p.h>` API, which exposes
+> the raw data stack, stack-effect assertion macros, and pointer
+> validators — reach for it when you need direct stack access, custom
+> address checking, or the `FF_SAFE_MEM` hooks.
+
 
 ## A minimal custom word
 

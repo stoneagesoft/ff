@@ -33,6 +33,19 @@ typedef enum ff_error_severity
 } ff_error_severity_t;
 
 /**
+ * @brief Extract the bare FF_ERR_* code from a packed ff_error_t.
+ *
+ * `ff_eval`/`ff_exec`/`ff_errno` report bare codes so that
+ * `ff_errno(ff) == FF_ERR_DIV_ZERO` works; use this on any value that
+ * may still carry a severity bit (e.g. one captured inside a `vtracef`
+ * callback).
+ */
+#define FF_ERR_CODE(e)  ((ff_error_t)(e) & (((ff_error_t)1 << FF_ERROR_SEVERITY_SHIFT) - 1u))
+
+/** @brief Extract just the FF_SEV_* severity bits from a packed ff_error_t. */
+#define FF_ERR_SEV(e)   ((ff_error_t)(e) & ~(((ff_error_t)1 << FF_ERROR_SEVERITY_SHIFT) - 1u))
+
+/**
  * @enum ff_error_code
  * @brief Concrete error identifiers; OR with an FF_SEV_* severity to
  *        form a full ff_error_t.

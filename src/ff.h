@@ -12,9 +12,12 @@
 #pragma once
 
 #include <ff_error.h>
+#include <ff_version.h>
 
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 
 /**
@@ -49,8 +52,10 @@ typedef struct ff_word ff_word_t;
  * temporary at the call site.
  *
  * @param p Platform callbacks (printf, optional trace). Must not be NULL.
- * @return Newly allocated engine, owned by the caller. Release with
- *         ff_free().
+ * @return Newly allocated engine, owned by the caller (release with
+ *         ff_free()), or NULL if the initial allocation fails. This is
+ *         the one allocation the library reports rather than faulting on;
+ *         deeper compile-time allocations follow a fail-fast policy.
  */
 ff_t *ff_new(const ff_platform_t *p);
 
@@ -73,8 +78,11 @@ void ff_free(ff_t *ff);
  * @param ff  Engine instance.
  * @param src Source text. NULL or empty input returns FF_OK without
  *            touching engine state.
- * @return FF_OK on success, otherwise one of the FF_ERR_* codes
- *         declared in ff_error.h.
+ * @return FF_OK on success, otherwise one of the bare FF_ERR_* codes
+ *         declared in ff_error.h — directly comparable, e.g.
+ *         `if (ff_eval(ff, s) == FF_ERR_DIV_ZERO)`. The severity bit is
+ *         masked off the return; recover it, if ever needed, from the
+ *         value passed to a `vtracef` callback via FF_ERR_SEV().
  */
 ff_error_t ff_eval(ff_t *ff, const char *src);
 
@@ -157,6 +165,9 @@ const char *ff_prompt(const ff_t *ff);
 
 /**
  * Last error code recorded by the engine (FF_OK if none).
+ *
+ * Returns the bare FF_ERR_* code, directly comparable against the
+ * constants in ff_error.h (the severity bit is masked off).
  * @param ff Engine instance.
  */
 ff_error_t ff_errno(const ff_t *ff);
@@ -208,3 +219,95 @@ int ff_printf(ff_t *ff, const char *fmt, ...) FF_PRINTF_FMT(2, 3);
  *         `return ff_tracef(...)` in word implementations.
  */
 ff_error_t ff_tracef(ff_t *ff, ff_error_t e, const char *fmt, ...) FF_PRINTF_FMT(3, 4);
+
+
+/* ===================================================================
+ * Version
+ * =================================================================== */
+
+/**
+ * @return The library version string (e.g. "1.0.0"). The matching
+ *         compile-time macros FF_VERSION / FF_VERSION_MAJOR / … come
+ *         from <ff_version.h>, included above; compare them to detect a
+ *         header/runtime mismatch.
+ */
+const char *ff_version(void);
+
+
+/* ===================================================================
+ * Thread-safety warm-up
+ * =================================================================== */
+
+/**
+ * Initialize the process-wide shared built-in table up front.
+ *
+ * ff_new() builds this table lazily on the first call, and that lazy
+ * initialization is not thread-safe. A host that creates engines from
+ * multiple threads must call ff_warmup() once from a single thread
+ * before spawning them; afterwards any number of threads may call
+ * ff_new() concurrently, since the shared table is then read-only.
+ * Idempotent.
+ */
+void ff_warmup(void);
+
+
+/* ===================================================================
+ * Native word registration
+ *
+ * Lets a host expose C functions as Forth words using only this public
+ * header — no internal headers required. Inside a word function, use the
+ * data-stack accessors below (or the advanced <ff_p.h> API) to read
+ * arguments and push results.
+ * =================================================================== */
+
+/** @brief A native word: receives the engine, works on its data stack. */
+typedef void (*ff_word_fn)(ff_t *ff);
+
+/**
+ * @struct ff_native_word
+ * @brief One row of a NULL-terminated native-word registration table.
+ */
+typedef struct ff_native_word
+{
+    const char *name;       /**< Forth name; NULL terminates the table. */
+    bool        immediate;  /**< true = compile-time (immediate) word. */
+    ff_word_fn  fn;         /**< Implementation. */
+    const char *manual;     /**< Optional help text (first line = prototype); may be NULL. */
+} ff_native_word_t;
+
+/** @brief Table row for an ordinary native word. */
+#define FF_NATIVE(name, fn, man)    { (name), false, (fn), (man) }
+/** @brief Table row for an immediate native word. */
+#define FF_NATIVE_I(name, fn, man)  { (name), true,  (fn), (man) }
+/** @brief Sentinel terminating a native-word table. */
+#define FF_NATIVE_END               { NULL, false, NULL, NULL }
+
+/**
+ * Register a NULL-terminated table of native words into @p ff.
+ * @param ff    Engine instance.
+ * @param words Table terminated by FF_NATIVE_END.
+ * @return FF_OK.
+ */
+ff_error_t ff_register(ff_t *ff, const ff_native_word_t *words);
+
+
+/* ===================================================================
+ * Data-stack marshaling
+ *
+ * For hosts that drive Forth words from C — push arguments, run a word
+ * via ff_eval()/ff_exec(), pop results. Values are exchanged as int64_t
+ * / double; on a 32-bit-cell build (FF_32BIT) integer values are
+ * narrowed to the cell width.
+ * =================================================================== */
+
+/** @return Number of cells currently on the data stack. */
+size_t ff_depth(const ff_t *ff);
+
+/** Push an integer. @return false if the stack is full (nothing pushed). */
+bool ff_push_int(ff_t *ff, int64_t v);
+/** Pop an integer into @p out. @return false if the stack is empty. */
+bool ff_pop_int(ff_t *ff, int64_t *out);
+/** Push a real. @return false if the stack is full (nothing pushed). */
+bool ff_push_real(ff_t *ff, double v);
+/** Pop a real into @p out. @return false if the stack is empty. */
+bool ff_pop_real(ff_t *ff, double *out);

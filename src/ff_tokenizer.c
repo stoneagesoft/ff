@@ -9,6 +9,7 @@
 #include <utf8/utf8.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -84,6 +85,7 @@ void ff_tokenizer_destroy(ff_tokenizer_t *t)
 ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
 {
     t->token_len = 0;
+    t->truncated = false;
 
     for (;;)
     {
@@ -178,10 +180,18 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
                 }
                 if (t->token_len < sizeof(t->token) - 1)
                     t->token[t->token_len++] = (char)c;
+                else
+                    t->truncated = true;
             }
             t->token[t->token_len] = '\0';
             if (rstring)
+            {
+                /* Unterminated string: flag it so the evaluator can raise
+                   FF_ERR_RUN_STRING rather than silently treating this as
+                   clean end-of-input. */
+                t->state |= FF_TOK_STATE_STRING;
                 return FF_TOKEN_NULL;
+            }
             return FF_TOKEN_STRING;
         }
 
@@ -190,6 +200,8 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
         {
             if (t->token_len < (int)sizeof(t->token) - 1)
                 t->token[t->token_len++] = (char)c;
+            else
+                t->truncated = true;
             if (ff_tok_eof(src, *pos))
                 break;
             c = ff_tok_get(src, pos);
@@ -224,25 +236,37 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
             continue;
         }
 
-        /* Try to parse as number. */
+        /* Try to parse as number. Integers are base 10 unless prefixed
+           with 0x/0X (hex). This deliberately drops C's implicit octal:
+           `010` is ten, not eight, and `009` is nine, not a fall-through
+           to real. An out-of-range integer (ERANGE) is not clamped — it
+           falls through to the real parse, and if that also overflows the
+           token is left as an ordinary (likely undefined) word rather
+           than silently becoming a wrong value. */
         if (isdigit((unsigned char)t->token[0])
                 || t->token[0] == '-')
         {
             char *end;
+            const char *digits = t->token + (t->token[0] == '-' ? 1 : 0);
+            int base = (digits[0] == '0'
+                        && (digits[1] == 'x' || digits[1] == 'X'))
+                           ? 16 : 10;
+            errno = 0;
 #ifdef FF_32BIT
-            t->integer_val = strtol(t->token, &end, 0);
+            t->integer_val = strtol(t->token, &end, base);
 #else
-            t->integer_val = strtoll(t->token, &end, 0);
+            t->integer_val = strtoll(t->token, &end, base);
 #endif
-            if (*end == '\0')
+            if (*end == '\0' && errno != ERANGE)
                 return FF_TOKEN_INTEGER;
 
+            errno = 0;
 #ifdef FF_32BIT
             t->real_val = strtof(t->token, &end);
 #else
             t->real_val = strtod(t->token, &end);
 #endif
-            if (*end == '\0')
+            if (*end == '\0' && errno != ERANGE)
                 return FF_TOKEN_REAL;
         }
 

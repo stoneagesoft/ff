@@ -333,9 +333,15 @@ void ff_dict_rename(ff_dict_t *d, ff_word_t *w, const char *new_name)
     if (*link == w)
         *link = w->next_bucket;
 
-    /* Replace name and reinsert into the bucket of the new name. */
-    free(w->name);
-    w->name = strdup(new_name);
+    /* Replace name and reinsert into the bucket of the new name. A failed
+       strdup would leave a NULL name that the hash walk dereferences, so
+       keep the old name on OOM rather than corrupting the bucket. */
+    char *dup = strdup(new_name);
+    if (dup)
+    {
+        free(w->name);
+        w->name = dup;
+    }
     ff_dict_bucket_insert(d, w);
 }
 
@@ -436,9 +442,17 @@ void ff_dict_ensure(ff_dict_t *d, size_t extra)
 {
     if (d->count + extra > d->capacity)
     {
-        size_t nc = d->capacity ? d->capacity * 2 : 128;
+        size_t nc = d->capacity ? d->capacity : 128;
         while (nc < d->count + extra)
-            nc *= 2;
+        {
+            size_t doubled = nc * 2;
+            if (doubled <= nc)          /* doubling wrapped */
+            {
+                nc = d->count + extra;
+                break;
+            }
+            nc = doubled;
+        }
         d->words = (ff_word_t **)realloc(d->words, nc * sizeof(ff_word_t *));
         d->capacity = nc;
     }

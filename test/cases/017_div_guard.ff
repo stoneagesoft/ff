@@ -1,0 +1,10 @@
+\ Division overflow: most-negative-cell / -1 used to raise SIGFPE and kill
+\ the process. Now it errors cleanly, which halts this eval — so only the
+\ sentinel prints.
+\
+\ The most-negative cell is computed portably (independent of cell width):
+\ -1 is all-bits-set; a logical right shift by 1 gives the largest positive
+\ value, and adding 1 wraps to the most-negative one.
+42 .
+-1 -1 shift 1 +   -1 /
+99 .

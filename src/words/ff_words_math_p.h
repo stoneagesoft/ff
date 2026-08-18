@@ -1,3 +1,7 @@
+#ifndef FF_IN_EXEC
+#error "This is a dispatch fragment #included inside ff_exec(); do not include it directly."
+#endif
+
 /*
  * ff --- math word dispatch cases.
  *
@@ -56,10 +60,12 @@ case FF_OP_MUL:
 /** ( n1 n2 -- n3 )  `/` — n3 = n1 / n2; raises FF_ERR_DIV_ZERO if n2 is 0. */
 case FF_OP_DIV:
     _FF_SL(2);
-    if (tos == 0)
+    if (tos == 0 || (tos == -1 && _FF_NOS == FF_INT_MIN))
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO, "Division by zero.");
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO,
+                  tos == 0 ? "Division by zero."
+                           : "Division overflow (most-negative / -1).");
         goto done;
     }
     tos = _FF_NOS / tos;
@@ -69,10 +75,12 @@ case FF_OP_DIV:
 /** ( n1 n2 -- n3 )  `mod` — n3 = n1 % n2; raises FF_ERR_DIV_ZERO if n2 is 0. */
 case FF_OP_MOD:
     _FF_SL(2);
-    if (tos == 0)
+    if (tos == 0 || (tos == -1 && _FF_NOS == FF_INT_MIN))
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO, "Division by zero.");
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO,
+                  tos == 0 ? "Division by zero."
+                           : "Division overflow (most-negative / -1).");
         goto done;
     }
     tos = _FF_NOS % tos;
@@ -175,10 +183,12 @@ case FF_OP_DEC:
 /** ( n1 n2 -- rem quot )  `/mod` — Euclidean div+mod in one shot. */
 case FF_OP_DIVMOD:
     _FF_SL(2);
-    if (tos == 0)
+    if (tos == 0 || (tos == -1 && _FF_NOS == FF_INT_MIN))
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO, "Division by zero.");
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO,
+                  tos == 0 ? "Division by zero."
+                           : "Division overflow (most-negative / -1).");
         goto done;
     }
     {
@@ -232,9 +242,15 @@ case FF_OP_ZERO_GT:
 /** ( n1 n2 -- n3 )  `shift` — n2 > 0 left-shifts, n2 < 0 right-shifts. */
 case FF_OP_SHIFT:
     _FF_SL(2);
-    tos = tos < 0
-                ? (_FF_NOS >> (-tos))
-                : (_FF_NOS << tos);
+    /* Logical shift on the unsigned cell — avoids the UB of shifting a
+       negative value or by a count >= the cell width. The count is
+       masked to [0, FF_CELL_BITS); Forth `shift` is not defined for
+       counts at or beyond the cell width. */
+    {
+        ff_uint_t v = (ff_uint_t)_FF_NOS;
+        unsigned n  = (unsigned)(tos < 0 ? -tos : tos) & (FF_CELL_BITS - 1);
+        tos = (ff_int_t)(tos < 0 ? (v >> n) : (v << n));
+    }
     --S->top;
     _FF_NEXT();
 

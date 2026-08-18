@@ -16,7 +16,9 @@
 typedef enum ff_tok_state
 {
     FF_TOK_STATE_COMMENT = 1 << 0,  /**< Currently inside an open `(` comment that started on a previous line. */
-    FF_TOK_STATE_SIG     = 1 << 1   /**< Signature mode: `(` and `)` are returned as ordinary word tokens
+    FF_TOK_STATE_SIG     = 1 << 1,  /**< Signature mode: `(` and `)` are returned as ordinary word tokens
                                          instead of opening a block comment. Set by `{` for the duration of
                                          its `( a b -- c )` signature; cleared by the evaluator at `)`. */
+    FF_TOK_STATE_STRING  = 1 << 2   /**< Input ended inside an unterminated string literal; the evaluator
+                                         raises FF_ERR_RUN_STRING and clears this. */
 } ff_tok_state_t;

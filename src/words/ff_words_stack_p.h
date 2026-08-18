@@ -1,3 +1,7 @@
+#ifndef FF_IN_EXEC
+#error "This is a dispatch fragment #included inside ff_exec(); do not include it directly."
+#endif
+
 /*
  * ff --- stack word dispatch cases.
  *
@@ -70,6 +74,13 @@ case FF_OP_ROLL:
     _FF_SL(1);
     {
         int idx = (int)tos;
+        if (ff_unlikely(idx < 0))
+        {
+            _FF_SYNC();
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                      "Negative roll index.");
+            goto done;
+        }
         --S->top;
         _FF_SL(idx + 1);
         /* The selected item becomes the new TOS; items above it shift
@@ -154,6 +165,13 @@ case FF_OP_PICK:
     _FF_SL(1);
     {
         int idx = (int)tos;
+        if (ff_unlikely(idx < 0))
+        {
+            _FF_SYNC();
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                      "Negative pick index.");
+            goto done;
+        }
         _FF_SL(idx + 2);
         tos = _FF_SAT(idx + 1);
     }

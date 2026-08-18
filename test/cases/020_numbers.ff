@@ -1,0 +1,8 @@
+\ Number literals: base-10 default (no implicit octal), explicit hex,
+\ signed forms.  Each value verified by hand.
+010 .          \ 10   (not octal 8)
+009 .          \ 9    (not real 9.0)
+0xff .         \ 255
+0x10 .         \ 16
+-0x20 .        \ -32
+-42 .          \ -42

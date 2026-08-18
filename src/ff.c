@@ -65,6 +65,8 @@ ff_t *ff_new(const ff_platform_t *p)
     assert(p);
 
     ff_t *ff = (ff_t *)calloc(1, sizeof(ff_t));
+    if (!ff)
+        return NULL;
 
     ff->platform = *p;
 
@@ -94,9 +96,85 @@ void ff_free(ff_t *ff)
     ff_stack_destroy(&ff->r_stack);
     ff_stack_destroy(&ff->stack);
     ff_dict_destroy(&ff->dict);
-    free(ff->pad_buf);
+    for (ff_pad_slab_t *sl = ff->pad; sl; )
+    {
+        ff_pad_slab_t *next = sl->next;
+        free(sl);
+        sl = next;
+    }
 
     free(ff);
+}
+
+/** @copydoc ff_version */
+const char *ff_version(void)
+{
+    return FF_VERSION;
+}
+
+/** @copydoc ff_warmup */
+void ff_warmup(void)
+{
+    (void)ff_builtins_default();
+}
+
+/** @copydoc ff_register */
+ff_error_t ff_register(ff_t *ff, const ff_native_word_t *words)
+{
+    for (const ff_native_word_t *w = words; w && w->name; ++w)
+        ff_dict_append(&ff->dict,
+                       w->immediate
+                           ? ff_im_word_new(w->name, w->fn, FF_OP_NONE, w->manual)
+                           : ff_word_new(w->name, w->fn, FF_OP_NONE, w->manual));
+    return FF_OK;
+}
+
+/** @copydoc ff_depth */
+size_t ff_depth(const ff_t *ff)
+{
+    return ff->stack.top;
+}
+
+/** @copydoc ff_push_int */
+bool ff_push_int(ff_t *ff, int64_t v)
+{
+    if (ff->stack.top >= FF_STACK_SIZE)
+        return false;
+    ff_stack_push(&ff->stack, (ff_int_t)v);
+    return true;
+}
+
+/** @copydoc ff_pop_int */
+bool ff_pop_int(ff_t *ff, int64_t *out)
+{
+    if (ff->stack.top == 0)
+        return false;
+    ff_int_t v = ff_stack_pop(&ff->stack);
+    if (out)
+        *out = (int64_t)v;
+    return true;
+}
+
+/** @copydoc ff_push_real */
+bool ff_push_real(ff_t *ff, double v)
+{
+    if (ff->stack.top >= FF_STACK_SIZE)
+        return false;
+    ff_stack_push_real(&ff->stack, (ff_real_t)v);
+    return true;
+}
+
+/** @copydoc ff_pop_real */
+bool ff_pop_real(ff_t *ff, double *out)
+{
+    if (ff->stack.top == 0)
+        return false;
+    ff_int_t bits = ff_stack_pop(&ff->stack);
+    ff_real_t r;
+    memcpy(&r, &bits, sizeof(r));
+    if (out)
+        *out = (double)r;
+    return true;
 }
 
 /**
@@ -116,22 +194,31 @@ void ff_free(ff_t *ff)
 static char *ff_pad_intern(ff_t *ff, const char *s, size_t len)
 {
     size_t need = len + 1;
-    if (ff->pad_used + need > ff->pad_size)
+    ff_pad_slab_t *sl = ff->pad;
+
+    /* Allocate a fresh slab when the head can't fit the request. Existing
+       slabs are never touched, so every pointer previously returned stays
+       valid. A request larger than the default slab gets a dedicated slab
+       sized to fit. */
+    if (!sl || sl->used + need > sl->size)
     {
-        size_t nc = ff->pad_size ? ff->pad_size : (size_t)FF_PAD_INIT_SIZE;
-        while (nc < ff->pad_used + need)
-            nc *= 2;
-        char *nb = (char *)realloc(ff->pad_buf, nc);
-        if (!nb)
+        size_t cap = need > (size_t)FF_PAD_INIT_SIZE
+                         ? need : (size_t)FF_PAD_INIT_SIZE;
+        ff_pad_slab_t *ns = (ff_pad_slab_t *)malloc(sizeof(*ns) + cap);
+        if (!ns)
             return NULL;
-        ff->pad_buf  = nb;
-        ff->pad_size = nc;
+        ns->next = ff->pad;
+        ns->used = 0;
+        ns->size = cap;
+        ff->pad = ns;
+        sl = ns;
     }
-    char *dst = ff->pad_buf + ff->pad_used;
+
+    char *dst = sl->data + sl->used;
     if (len)
         memcpy(dst, s, len);
     dst[len] = '\0';
-    ff->pad_used += need;
+    sl->used += need;
     return dst;
 }
 
@@ -204,8 +291,10 @@ static void ff_sig_abort(ff_t *ff)
     /* Drop out of compile state too, the same way an undefined word
        mid-definition does: the definition is unsalvageable, and leaving
        COMPILING set would silently compile the user's next line into the
-       wreck instead of running it. */
-    ff->state &= ~(FF_STATE_SIG_PENDING | FF_STATE_COMPILING);
+       wreck instead of running it. Also clear every one-shot pending flag
+       — a [']/[compile]/."/postpone left mid-air would otherwise survive
+       the error and miscompile an unrelated later definition. */
+    ff->state &= ~(FF_STATE_PENDING_ALL | FF_STATE_COMPILING);
     ff->tokenizer.state &= ~FF_TOK_STATE_SIG;
 }
 
@@ -365,7 +454,7 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     ff->input = src;
     ff->input_pos = 0;
 
-    ff->state &= ~(FF_STATE_BROKEN | FF_STATE_ERROR);
+    ff->state &= ~(FF_STATE_BROKEN | FF_STATE_ERROR | FF_STATE_ABORTED);
 
     /* Watchdog state is per-evaluation: a stale abort-request from a
        previous run is dropped, the opcode counter starts at zero,
@@ -385,6 +474,16 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     for (;;)
     {
         ff_token_t tok = ff_tokenizer_next(t, src, &pos);
+
+        /* A token that overran FF_TOKEN_SIZE was silently truncated by the
+           lexer; a truncated name could resolve to a different word and a
+           truncated number mis-parse, so reject it outright. */
+        if (t->truncated)
+        {
+            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                           "Token longer than %d bytes.", FF_TOKEN_SIZE - 1);
+            goto out;
+        }
 
         /* Signature mode: `{` owns the token stream until its `)`. Handled
            ahead of the kind dispatch because a signature is a list of
@@ -411,6 +510,29 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                 goto out;
             }
             continue;
+        }
+
+        /* One-shot pending flags consume the very next token. Validate its
+           kind here, before the kind switch, so a wrong-kind token errors
+           (and the flag is cleared at `out:` via ff_sig_abort) instead of
+           being processed by the INTEGER/REAL/STRING case while the flag
+           silently survives to ambush a later token — e.g. `: 42`, `' 5`,
+           `." 42`. NULL passes through so a flag may span ff_eval calls
+           (ffsh feeds one line per call). */
+        if (tok != FF_TOKEN_NULL)
+        {
+            if ((ff->state & FF_STATE_NAME_PENDING) && tok != FF_TOKEN_WORD)
+            {
+                ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
+                               "Expected a word name, got '%s'.", t->token);
+                goto out;
+            }
+            if ((ff->state & FF_STATE_STRLIT_ANTIC) && tok != FF_TOKEN_STRING)
+            {
+                ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
+                               "Expected a string literal, got '%s'.", t->token);
+                goto out;
+            }
         }
 
         switch (tok)
@@ -570,6 +692,15 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                                 ec = ff->error;
                                 goto out;
                             }
+                            /* `abort` / `abort"` fired: discard the rest of
+                               the input and return to the caller, as ANS
+                               ABORT does, instead of running on. */
+                            if ((ff->state & FF_STATE_ABORTED))
+                            {
+                                ff->state &= ~FF_STATE_ABORTED;
+                                ec = FF_ERR_ABORTED;
+                                goto out;
+                            }
                             /* Restore --- word may have consumed more input. */
                             pos = ff->input_pos;
                         }
@@ -650,9 +781,18 @@ out:
     /* Single restore-and-return point: every clean exit (FF_TOKEN_NULL)
        and every error path lands here so the input/input_pos snapshot
        is rolled back exactly once. */
+    /* An unterminated string literal makes the lexer return NULL like a
+       clean EOF; the flag distinguishes them so it isn't silently dropped. */
+    if (ec == FF_OK && (ff->tokenizer.state & FF_TOK_STATE_STRING))
+    {
+        ff->tokenizer.state &= ~FF_TOK_STATE_STRING;
+        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_STRING,
+                       "Unterminated string literal.");
+    }
+
     ff->input = prev_input;
     ff->input_pos = prev_pos;
-    return ec;
+    return FF_ERR_CODE(ec);
 }
 
 /** @copydoc ff_exec */
@@ -718,6 +858,12 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     }
     else if (w->flags & FF_WORD_NATIVE)
     {
+        /* Default ip to NULL so a plain leaf native word (the common case
+           — pop args, push results, return) falls through to `done`. Only
+           words that deliberately install bytecode (e.g. ff_w_nest) set
+           ff->ip; without this reset a leaf word would inherit a stale ip
+           and the dispatch loop would run garbage. */
+        ff->ip = NULL;
         ff_word_native_fn(w)(ff);
         ip = ff->ip;
     }
@@ -726,19 +872,25 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
         ip = NULL;
     }
 
-    if (!ip)
-        goto done;
-
     /* Top-of-stack register cache. While dispatching, the topmost data
        stack value lives in `tos` (when S->top > 0); the in-memory slot at
        S->data[S->top - 1] is treated as scratch and may be stale until the
        next _FF_SYNC_TOS / _FF_SYNC. This shaves a load+store off every
        arithmetic operation that takes or returns TOS in place. Pure pushes
        still have to write the displaced TOS back, so the optimization
-       targets compute-heavy bytecode rather than push-heavy code. */
+       targets compute-heavy bytecode rather than push-heavy code.
+
+       Initialised *before* the `if (!ip) goto done` early exit: a native
+       word (ip == NULL) may have just pushed a result, and `done` writes
+       `tos` back to S->data[top - 1]. Reading the current top here makes
+       that write-back a harmless no-op; the old order left `tos`
+       uninitialised on that path and clobbered the pushed value. */
     ff_int_t tos = S->top
                         ? S->data[S->top - 1]
                         : 0;
+
+    if (!ip)
+        goto done;
 
     /* Scope-barrier register cache. Mirrors S->floor for the duration of
        dispatch so _FF_SL costs a register subtract rather than a second
@@ -786,7 +938,10 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
 
     /* Dispatch-context validation. Unlike FF_SL/FF_SO/FF_RSL/FF_RSO in
        ff_p.h these `goto done` rather than `return`-ing, because ff_exec
-       returns bool and must restore state before returning. */
+       returns bool and must restore state before returning, and they read
+       the register-cached `floor` rather than ff->stack.floor. These MUST
+       track the ff_p.h twins' depth semantics exactly — edit both together
+       (see the note on FF_SL in ff_p.h). */
     #define _FF_SL(n) \
         do { \
             if (ff_unlikely((int)(S->top - floor) < (int)(n))) \
@@ -949,6 +1104,9 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                reference the macros (_FF_NEXT, _FF_SYNC, _FF_RESTORE, _FF_SO,
                _FF_RSO), labels (done, broken), and local variables
                (S, R, BT, ip, ff, nest_code, bt_size) in this scope. */
+            /* FF_IN_EXEC gates the dispatch fragments: each #error's out
+               if included anywhere but here. */
+            #define FF_IN_EXEC 1
             #include "ff_words_stack_p.h"
             #include "ff_words_stack2_p.h"
             #include "ff_words_math_p.h"
@@ -966,6 +1124,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             #include "ff_words_scope_p.h"
             #include "ff_words_array_p.h"
             #include "ff_words_dict_p.h"
+            #undef FF_IN_EXEC
 
             default:
                 /* Trusted builds keep the unreachable hint so the
@@ -1073,9 +1232,10 @@ ff_error_t ff_load(ff_t *ff, const char *path)
     /* If there were no other errors, check for a runaway comment. */
     if (ec == FF_OK
             && (ff->tokenizer.state & FF_TOK_STATE_COMMENT))
-        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_COMMENT, "Runaway ( comment.");
+        return FF_ERR_CODE(ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_COMMENT,
+                                     "Runaway ( comment."));
 
-    return ec;
+    return FF_ERR_CODE(ec);
 }
 
 /* -------------------------------------------------------------------
@@ -1161,17 +1321,42 @@ bool ff_word_valid(const ff_t *ff, const ff_word_t *w)
 /** @copydoc ff_abort */
 void ff_abort(ff_t *ff)
 {
-    ff->state |= FF_STATE_ABORTED;
     ff->stack.top = 0;
     ff->r_stack.top = 0;
     ff->ip = NULL;
     ff->state = 0;
+    /* Mark ABORTED *after* wiping state, so ff_eval sees it and stops the
+       current line (ANS ABORT returns to the terminal) rather than the old
+       behaviour where `|= ABORTED` was immediately clobbered by `= 0` and
+       evaluation ran on. ff_eval clears this flag on entry. */
+    ff->state |= FF_STATE_ABORTED;
     ff->tokenizer.state = 0;
     ff->cur_word = NULL;
-    /* Reset the transient-string arena. Anything still on the data
-       stack pointing into the pad becomes garbage — but we just
-       cleared the data stack, so there's nothing to dangle. */
-    ff->pad_used = 0;
+
+    /* Tear down any open `{` scope records. Without this, an abort that
+       fires while a signature/scope is open leaves n_csig > 0 with live
+       arg-name strings; ff_scope_arg() is consulted for every subsequent
+       word token, so a later interpreted word matching a leftover name
+       would compile FF_OP_ARG into the top dictionary word. Free the
+       names and reset the compile-time scope stack. */
+    while (ff->n_csig > 0)
+    {
+        ff_csig_t *cs = &ff->csig[--ff->n_csig];
+        for (int i = 0; i < cs->nargs; i++)
+            free(cs->names[i]);
+    }
+    ff->n_scopes = 0;
+    ff->stack.floor = 0;
+    /* Reset the transient-string arena by freeing all slabs. Anything
+       still pointing into the pad becomes garbage — but we just cleared
+       the data and return stacks, so there is nothing to dangle. */
+    for (ff_pad_slab_t *sl = ff->pad; sl; )
+    {
+        ff_pad_slab_t *next = sl->next;
+        free(sl);
+        sl = next;
+    }
+    ff->pad = NULL;
 }
 
 /** @copydoc ff_request_abort */
@@ -1219,7 +1404,10 @@ const char *ff_prompt(const ff_t *ff)
 /** @copydoc ff_errno */
 ff_error_t ff_errno(const ff_t *ff)
 {
-    return ff->error;
+    /* Return the bare code so `ff_errno(ff) == FF_ERR_xxx` works. The
+       severity bit is kept in ff->error for vtracef; recover it with
+       FF_ERR_SEV() if needed. */
+    return FF_ERR_CODE(ff->error);
 }
 
 /** @copydoc ff_strerror */

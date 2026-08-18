@@ -75,16 +75,33 @@ void ff_heap_trim(ff_heap_t *h)
     size_t new_bytes = h->size * sizeof(ff_int_t);
     ff_arena_trim(h->arena, h->data, old_bytes, new_bytes);
     h->capacity = h->size;
+    /* Capacity shrank, so the FF_SAFE_MEM interval index (which keys the
+       upper bound on capacity) is now stale and over-permissive. Bump the
+       mutation counter so it rebuilds before the next address check. */
+    if (h->mutation_seq_p)
+        ++*h->mutation_seq_p;
 }
 
 /** @copydoc ff_heap_grow */
 void ff_heap_grow(ff_heap_t *h, size_t extra)
 {
-    size_t nc = h->capacity
-                    ? h->capacity * 2
-                    : FF_INIT_HEAP_SIZE;
-    while (nc < h->size + extra)
-        nc *= 2;
+    size_t need = h->size + extra;
+    if (need < h->size)                 /* size + extra overflowed */
+        return;
+
+    size_t nc = h->capacity ? h->capacity : (size_t)FF_INIT_HEAP_SIZE;
+    while (nc < need)
+    {
+        size_t doubled = nc * 2;
+        if (doubled <= nc)              /* doubling wrapped — clamp to exact need */
+        {
+            nc = need;
+            break;
+        }
+        nc = doubled;
+    }
+    if (nc > SIZE_MAX / sizeof(ff_int_t))   /* byte size not representable */
+        return;
 
     ff_int_t *old_data = h->data;
     if (h->arena)
@@ -212,8 +229,11 @@ void ff_heap_compile_str(ff_heap_t *h, const char *s, size_t len)
 {
     ff_heap_align(h);
 
-    int cells = (len + 1 + sizeof(ff_int_t)) / sizeof(ff_int_t);
-    ff_heap_push(h, cells + 1); /* skip length */
+    /* size_t throughout: the old `int cells` truncated for large payloads,
+       yielding a negative/garbage count that ff_heap_ensure read as a huge
+       size_t. len is token-capped today, but keep the math honest. */
+    size_t cells = (len + 1 + sizeof(ff_int_t)) / sizeof(ff_int_t);
+    ff_heap_push(h, (ff_int_t)(cells + 1)); /* skip length */
     ff_heap_ensure(h, cells);
     memset(&h->data[h->size], 0, cells * sizeof(ff_int_t));
     memcpy(&h->data[h->size], s, len);

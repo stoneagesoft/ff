@@ -1,3 +1,7 @@
+#ifndef FF_IN_EXEC
+#error "This is a dispatch fragment #included inside ff_exec(); do not include it directly."
+#endif
+
 /*
  * ff --- compile-time word dispatch cases.
  *
@@ -8,6 +12,7 @@
 /** ( -- a )  R: ( -- ret cur )  Runtime entry of a DOES>-built word:
     save caller frame, jump to the does-clause, push the data field. */
 case FF_OP_DOES_RUNTIME:
+    _FF_WATCHDOG_TICK();
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         _FF_RSO_T(2);

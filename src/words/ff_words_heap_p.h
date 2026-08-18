@@ -1,3 +1,7 @@
+#ifndef FF_IN_EXEC
+#error "This is a dispatch fragment #included inside ff_exec(); do not include it directly."
+#endif
+
 /*
  * ff --- heap word dispatch cases.
  *
@@ -43,7 +47,16 @@ case FF_OP_PLUS_STORE:
 /** ( n -- )  `allot` — reserve n cells in the current heap. */
 case FF_OP_ALLOT:
     _FF_SL(1);
-    ff_heap_alloc(&ff_dict_top(&ff->dict)->heap, (int)tos);
+    if (ff_unlikely(tos <= 0))
+    {
+        /* A negative count (or 0) previously truncated through `(int)` into
+           a huge size_t and corrupted the heap. Reject it. */
+        _FF_SYNC();
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                  "allot requires a positive cell count.");
+        goto done;
+    }
+    ff_heap_alloc(&ff_dict_top(&ff->dict)->heap, (size_t)tos);
     _FF_DROP();
     _FF_NEXT();
 

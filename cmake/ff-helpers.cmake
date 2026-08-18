@@ -199,11 +199,15 @@ if(MSVC)
 else()
     set(FF_C_FLAGS
         "${FF_C_FLAGS} \
+        -fwrapv \
         -Wall -Wextra -Werror \
         -Wno-unused-result \
         -Wno-misleading-indentation \
         -Wno-unused-parameter \
         -Wno-unused-function")
+    # -fwrapv: signed integer overflow wraps two's-complement rather than
+    # being UB. Forth arithmetic is defined to wrap, and this stops the
+    # optimizer from assuming overflow can't happen on the hot path.
 
     set(FF_CXX_FLAGS
         "${FF_CXX_FLAGS} \

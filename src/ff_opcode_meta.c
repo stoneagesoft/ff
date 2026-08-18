@@ -135,8 +135,8 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_EMIT]              = { "emit",      FF_OP_LAYOUT_NONE },
     [FF_OP_TYPE]              = { "type",      FF_OP_LAYOUT_NONE },
     [FF_OP_DOT_S]             = { ".s",        FF_OP_LAYOUT_NONE },
-    [FF_OP_DOT_PAREN]         = { ".(",        FF_OP_LAYOUT_NONE },
-    [FF_OP_DOTQUOTE]          = { ".\"",       FF_OP_LAYOUT_NONE },
+    [FF_OP_DOT_PAREN]         = { ".(",        FF_OP_LAYOUT_STR  },
+    [FF_OP_DOTQUOTE]          = { ".\"",       FF_OP_LAYOUT_STR  },
 
     [FF_OP_XDO]               = { NULL,        FF_OP_LAYOUT_INT  },
     [FF_OP_XQDO]              = { NULL,        FF_OP_LAYOUT_INT  },
@@ -188,7 +188,7 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_ABORT]             = { "abort",     FF_OP_LAYOUT_NONE },
     [FF_OP_THROW]             = { "throw",     FF_OP_LAYOUT_NONE },
     [FF_OP_CATCH]             = { "catch",     FF_OP_LAYOUT_NONE },
-    [FF_OP_ABORTQ]            = { "abort\"",   FF_OP_LAYOUT_NONE },
+    [FF_OP_ABORTQ]            = { "abort\"",   FF_OP_LAYOUT_STR  },
 
     [FF_OP_CREATE]            = { "create",    FF_OP_LAYOUT_NONE },
     [FF_OP_FORGET]            = { "forget",    FF_OP_LAYOUT_NONE },
