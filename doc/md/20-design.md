@@ -121,7 +121,7 @@ Alongside these, the following `_p.h` files hold pure type/enum/macro
 definitions (no corresponding struct body):
 
 `ff_types_p.h`, `ff_config_p.h`, `ff_opcode_p.h`, `ff_state_p.h`,
-`ff_throw_p.h`, `ff_cf_p.h`, `ff_base_p.h`, `ff_token_p.h`,
+`ff_throw_p.h`, `ff_cf_p.h`, `ff_mem_p.h`, `ff_base_p.h`, `ff_token_p.h`,
 `ff_tok_state_p.h`, `ff_word_flags_p.h`, `ff_word_def_p.h`.
 
 **Implementation files** in `src/` (one `.c` per subsystem):
@@ -414,14 +414,16 @@ This decision shapes several other parts of the engine:
   could not grow without invalidating every cross-reference baked
   during earlier compilations.
 
-- **`forget` releases memory cleanly.** When `forget name` cascades
-  through everything defined after `name`, each removed word's heap
-  is `free()`d as a single allocation — there is no compaction step,
-  no global high-water mark to roll back. Forget cascades for the
-  same reason it does in standard Forth (later words may have baked
-  in addresses pointing at earlier words' bytecode entry points), but
-  the implementation is straight pointer-and-free arithmetic rather
-  than heap surgery.
+- **`forget` releases memory cleanly.** Word heaps are carved from a
+  slab arena, and each word records the arena position it started at.
+  When `forget name` cascades through everything defined after
+  `name`, the arena rolls back to where `name` began — slabs made since
+  are freed, and the one it started in is rewound — so a define/forget
+  cycle holds memory steady. Forget cascades for the same reason it
+  does in standard Forth (later words may have baked in addresses
+  pointing at earlier words' bytecode entry points). A definition that
+  fails to compile is removed the same way (see *Compiling a
+  definition*).
 
 - **Variables, constants, and arrays each carry their own storage.**
   A `variable v` next to `: foo … ;` doesn't fragment a shared data
@@ -1143,7 +1145,10 @@ one with the same name. On a hit the word's `FF_WORD_USED` flag is set
 links it at the head of its hash bucket.
 
 **Forget** removes the named word and every word defined after it,
-truncating `words` and rebuilding `buckets` from scratch.
+truncating `words` and rebuilding `buckets` from scratch. It then hands
+the arena back from where the forgotten word began, stopping short of
+any remaining word's heap: a definition that went on growing after a
+word was created between its `[` and `]` has its heap past that point.
 
 **Remove** (`ff_dict_remove`) takes out one word and leaves the words
 after it in place. The compiler uses it to drop a definition that failed:
@@ -1249,7 +1254,9 @@ into the new word's `does` field. The defining word's compiled
 sequence then ends with an early `EXIT` so the defining word's caller
 sees a normal return. Because of that exit, `does>` may not be compiled
 inside a `do` loop or a `{ }` scope, whose run-time state it would leave
-behind.
+behind. And the word it rewrites must be one `create` made: a colon
+definition goes on being entered by the code that already calls it, so
+its bytecode can't become data.
 
 At runtime, when a word produced by `does>` is invoked, the dispatch
 arm is just a few inline instructions:
@@ -1378,31 +1385,37 @@ report after a failing call.
 
 ## Configuration
 
-All buffer sizes are defined in `ff_config.h`:
+All buffer sizes are defined in `ff_config_p.h`:
 
 | Constant | Default | Purpose |
 |---|---|---|
 | `FF_STACK_SIZE` | 512 | Data and return stack depth (cells) |
 | `FF_BT_STACK_SIZE` | 256 | Backtrace stack depth (frames) |
 | `FF_INIT_HEAP_SIZE` | 64 | Initial heap allocation for a new word (cells) |
-| `FF_PAD_COUNT` | 128 | Temporary string ring slots |
-| `FF_PAD_SIZE` | 256 | Bytes per pad slot |
+| `FF_PAD_INIT_SIZE` | 32 KiB | Slab size of the transient string arena |
+| `FF_CF_DEPTH` | 64 | Nesting of open control structures in one definition |
+| `FF_OPEN_FILES_MAX` | 32 | Streams one engine's Forth code can have open at once |
 | `FF_TOKEN_SIZE` | 256 | Tokenizer token buffer (bytes) |
 | `FF_ERROR_MSG_SIZE` | 512 | Error message buffer (bytes) |
-| `FF_LOAD_LINE_SIZE` | 4096 | Line buffer for `ff_load` (bytes) |
+| `FF_LOAD_LINE_SIZE` | 4096 | Initial line buffer for `ff_load` (bytes; longer lines grow it) |
 
 Define `FF_32BIT` at compile time to select 32-bit cell and single-
 precision float modes for constrained targets. Define
-`FF_SAFE_MEM=1` to enable the address-validation pass — see the next
-section.
+`FF_SAFE_MEM=1` to enable the address-validation pass — see *Memory
+safety*. How much memory Forth code may use, and whether it may run
+commands or touch files, the host sets per engine at run time — see
+*Memory limits* and *Sandboxing*.
 
 ### Build-time tuning options
 
-Beyond the buffer sizes above, three CMake options affect how the
+Beyond the buffer sizes above, these CMake options affect how the
 engine is compiled:
 
 | Option | Effect |
 |---|---|
+| `FF_SAFE_MEM` | Validates every address, string, execution token and file stream a word takes from the stack; see *Memory safety*. |
+| `FF_WITH_SYSTEM` | ON by default. OFF leaves out the `system` word, for a build that can't run commands whatever the host allows (or a C library without `system()`). |
+| `FF_WITH_FILES` | ON by default. OFF leaves out the file words (`fopen` … `stderr`) and `load`; the host's `ff_load()` stays. |
 | `FF_R_TRUSTED` | Drops the `_FF_RSL` underflow checks inside opcodes the compiler emits in matched pairs (`EXIT`, `XLOOP`, `PXLOOP`, `LEAVE`, `UNLOOP`, `LOOP_I`, `LOOP_J`, and the `i +` / `r@ +` superinstructions). Well-formed code can't fail them; the compiler rejects `leave` outside a loop, but `i` or `j` misused outside one then go unchecked. Overflow checks are never dropped, since recursion depth is up to the program. The embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. |
 | `FF_LTO` | Enables link-time optimisation (`-flto` / `/GL` via CMake's `INTERPROCEDURAL_OPTIMIZATION`). Lets the compiler inline across translation-unit boundaries — particularly `ff_exec` ↔ `ff_dict_lookup` ↔ `ff_word_native_fn`. Typically 2-5 %. |
 | `FF_PGO=GENERATE` / `USE` | Profile-guided optimisation. Two-pass build: first an instrumented build that writes `*.profraw` when run against a representative workload, then `llvm-profdata merge`, then a second build with `FF_PGO=USE -DFF_PGO_DATA=path/to/merged.profdata`. Typical gain on dispatch-bound code: 5-15 %. |
@@ -1414,17 +1427,18 @@ the Performance section.
 
 ## Memory safety
 
-The default build trusts addresses on the data stack: `@`, `!`, `+!`,
-`c@`, `c!`, `s!`, `s+`, `strlen`, `strcmp`, `execute`, `evaluate`, and
-`load` cast the relevant TOS cell to a pointer and dereference it
-without validation. A bare `0 @` segfaults the host process — this
-matches classical Forth semantics, where the language deliberately
-exposes raw memory.
+The default build trusts what is on the data stack: `@`, `!`, `type`,
+`execute`, `fclose` and the other words that take an address, a
+string, an execution token or a file stream cast the cell to a pointer
+and use it without validation. A bare `0 @` segfaults the host process
+— this matches classical Forth semantics, where the language
+deliberately exposes raw memory.
 
 For embeddings that take untrusted Forth input — REPLs exposed over
 the network, scripting hooks in long-lived servers, untrusted plugin
 sources — that contract is wrong. *ff* offers an opt-in safe mode
-controlled by a single compile-time flag.
+controlled by a single compile-time flag. For untrusted code it goes
+with the run-time limits of the next two sections and the watchdog.
 
 ### Enabling
 
@@ -1438,65 +1452,126 @@ size and zero runtime cost.
 
 ### What gets checked
 
-Each of the address-consuming primitives wraps its dereferences in
-`FF_CHECK_ADDR(ff, addr, bytes)` or `FF_CHECK_XT(ff, w)`. Both return
-`FF_ERR_BAD_PTR` via `ff_tracef` and unwind cleanly back to the
-interpreter loop on a miss; the engine state remains consistent and
-subsequent `ff_eval` calls work normally.
+A failed check raises `FF_ERR_BAD_PTR` (-9) and unwinds like any other
+error; the engine state stays consistent and later calls work
+normally.
 
-| Primitive | Check |
+| Words | Check |
 |---|---|
-| `@`, `!`, `+!` | `FF_CHECK_ADDR(ff, addr, sizeof(ff_int_t))` |
-| `c@`, `c!` | `FF_CHECK_ADDR(ff, addr, 1)` |
-| `s!`, `s+` | `FF_CHECK_ADDR` on both source and destination, sized to the source string length |
-| `strlen`, `strcmp` | `FF_CHECK_ADDR` on each argument (1 byte — `strlen` walks until NUL inside the verified region) |
-| `execute` | `FF_CHECK_XT(ff, w)` — verifies the xt is a live `ff_word_t*` in the dictionary |
-| `evaluate`, `load` | `FF_CHECK_ADDR(ff, addr, 1)` on the source / path string |
+| `@`, `c@`, `?`, `dump` | the range read lies in a tracked region |
+| `!`, `+!`, `c!`, `fgets` (its buffer) | the range written lies in a *writable* region |
+| `type`, `strlen`, `strcmp`, `find`, `evaluate`, `load`, `system`, `fopen`, `fputs` | a string: its NUL comes before the end of its region |
+| `s!`, `s+` | the source is a string; the destination is writable for its length |
+| `,`, `c,`, `allot` | the newest word, which they extend, is a data word |
+| `execute`, `catch`, deferred words, `>name`, `>body` | the xt is a word in the dictionary |
+| file words | a stream the program opened itself, or `stdin` / `stdout` / `stderr` (not for `fclose`) |
 
-The validator predicate `ff_addr_valid(ff, addr, bytes)` accepts the
-range only if `[addr, addr + bytes)` fits inside one of:
+The tracked regions are the data and return stacks, the live part of
+each string-arena slab, and every word's heap. Of the heaps, only data
+words' — `create`, `variable`, `constant`, `array`, `string`, `defer`,
+`does>` words (`ff_word_holds_data`) — are writable. A colon
+definition's heap is its bytecode, the definition being compiled is
+bytecode in the making, and a native word's holds its function
+pointer: a program that could write there could forge a word pointer
+for `NEST` or a function for `CALL`, and take control of the host.
+They can be read — `see`-style inspection and string literals compiled
+into a definition both need that — but not written or extended.
 
-- the data stack (`ff->stack.data`)
-- the return stack (`ff->r_stack.data`)
-- the pad ring (`ff->pad`)
-- any dictionary word's heap (`word->heap.data`, sized to capacity).
+`>name` and `strerror` hand out a copy of the name or message in the
+string arena, so the checks recognise it; the original is memory they
+don't track (and a built-in's name may be read-only).
 
-The dictionary is walked linearly per check — O(N\_words). For typical
-embedded dictionaries (~150 builtins plus a handful of user words) the
-per-call cost is negligible. Hot interpretive loops slow by roughly
-10-20 % under the flag; tight `@`/`!`-heavy loops slow more.
+Word heaps are found by binary search over a sorted interval index,
+rebuilt after the dictionary changes; `ff_word_valid` scans the
+dictionary. Hot interpretive loops slow by roughly 10-20 % under the
+flag; tight `@`/`!`-heavy loops slow more.
 
 ### What is NOT covered
-
-Safe mode is crash-resistance, not full memory safety. It defends
-against accidental address corruption from buggy Forth code. It does
-NOT defend against:
-
-- **Crafted bytecode written via `,`.** A user can `compile`-time emit
-  arbitrary opcode sequences into the current word's heap. If the
-  sequence contains a `FF_OP_NEST` followed by a forged `word_ptr`,
-  the inner interpreter dereferences that pointer without validation.
-  Closing this hole would require either disabling `,` and `compile,`
-  in safe mode, or tagging cells (the level-2 design).
 
 - **Bugs in C code embedded inside *ff*.** A miswritten native word
   that segfaults takes the host with it. Sandbox the process if that
   matters.
 
-- **Use-after-`forget`.** If a Forth program saves an xt or a buffer
-  address into a variable, then `forget`s the word that owned it,
-  reading from the variable still finds an address that was once
-  valid. Currently the check sees the old address as no-longer-valid
-  (the dict no longer contains the word, so its heap is no longer
-  tracked) — so this is detected, not exploited. Confirmed by the
-  validator's linear scan.
+- **Stale pointers into live memory.** A program that keeps a pointer
+  into a string it later overwrites, or an xt of a word that was
+  forgotten and whose address a new word reuses, reads whatever lives
+  there now. That is a logic error, not a memory-safety one: the
+  address is still inside tracked memory, so nothing outside the
+  engine's own regions is ever touched.
 
 ### Custom native words
 
-When you write your own native words against `<ff_p.h>`, both the
-`FF_CHECK_ADDR` and `FF_CHECK_XT` macros are visible. Use them at the
-top of any word body that consumes a pointer or xt from the data
-stack — see the *Extending* chapter for examples.
+When you write your own native words against `<ff_p.h>`, the check
+macros are visible: `FF_CHECK_ADDR` for memory the word reads,
+`FF_CHECK_WRITE` for memory it writes, `FF_CHECK_STR` for strings and
+`FF_CHECK_XT` for execution tokens. Use them at the top of any word
+body that consumes one from the data stack — see the *Extending*
+chapter for examples.
+
+
+## Memory limits
+
+The memory Forth code makes the engine hold is counted per engine in an
+`ff_mem_t` account (`ff_mem_p.h`): the slabs word storage is carved
+from, the words themselves with their names, and the slabs of the
+transient string arena. A host bounds it with `ff_platform::mem_limit`
+(bytes; 0, the default, means no limit). Fixed-size state — the stacks
+and tables — is not counted.
+
+An allocation beyond the limit, or one the host allocator refuses,
+does not crash the process. It fails softly — the heap operation that
+needed it writes nothing and records the refusal in the account — and
+the engine turns the record into an exception at its next check, before
+anything relies on the missing memory: every word that allocates
+checks right after doing so, and the outer interpreter checks before
+each token. Over the limit raises -8 (`FF_ERR_HEAP_OVER`); a refusal by
+the allocator raises -59 (`FF_ERR_OOM`). A definition that was being
+compiled is abandoned with it, and a word that was being created is
+removed. Near the limit, new slabs are cut down to what's left, so a
+request that fits still succeeds.
+
+Sizes are checked before anything is allocated: a negative count to
+`allot`, `array`, `string` or `dump` (and a zero one to `allot`) raises
+-24, "invalid numeric argument".
+
+Memory comes back as well: `forget`, and a failed definition, return
+their share of the word-storage arena (see *Heap and compilation*), so
+code that defines and forgets words in a loop holds steady. The
+transient string arena is different: its strings stay valid for the
+engine's lifetime, as documented, so it only grows — until the limit,
+or until `ff_abort()` or an uncaught `abort` resets the engine and
+frees it.
+
+
+## Sandboxing
+
+Beyond memory, Forth code reaches outside the engine in three ways:
+`system` runs a command, the file words (`fopen` and the rest, and
+`stdin` / `stdout` / `stderr`) read and write files, and `load`
+evaluates one. The host decides which of them a given engine allows.
+
+- **At run time**, `ff_platform::deny` withholds any of
+  `FF_CAP_SYSTEM`, `FF_CAP_FILES` and `FF_CAP_LOAD` (`FF_CAP_ALL` for
+  all three). A withheld word still compiles, and raises -21
+  (`FF_ERR_UNSUPPORTED`) when it runs. The host's own `ff_load()` is
+  not affected: the host is trusted.
+- **In between**, `ff_platform::open_file` and
+  `ff_platform::run_command` replace `fopen()` and `system()`: the
+  host can confine files to a directory or a list of names, serve them
+  from memory (`fmemopen`, `fopencookie`), and vet or log commands.
+  `fopen`, `load` and `ff_load()` all open files through the hook.
+- **At build time**, `FF_WITH_SYSTEM=OFF` and `FF_WITH_FILES=OFF`
+  leave the words out altogether, so the build doesn't reference
+  `system()` and the file words don't exist.
+
+Streams opened by `fopen` are tracked per engine: at most
+`FF_OPEN_FILES_MAX` at once, the only ones `fclose` accepts under
+`FF_SAFE_MEM`, and closed by `ff_free()` if the program left them open.
+
+For code it doesn't trust, a host combines all of this: an
+`FF_SAFE_MEM` build, `deny = FF_CAP_ALL` (or hooks that confine what is
+allowed), a `mem_limit`, and a watchdog. The fuzzing harness
+(`fuzz/ff_eval_fuzz.c`) runs the engine exactly so.
 
 
 ## Watchdog

@@ -38,6 +38,9 @@ case FF_OP_ERRNO:
 /** ( a n -- )  `dump` — hex+ASCII print of n bytes starting at a. */
 case FF_OP_DUMP:
     _FF_SL(2);
+    _FF_BAD_SIZE(tos < 0, "dump", tos);
+    if (tos > 0)
+        _FF_CHECK_ADDR((const void *)(intptr_t)_FF_NOS, (size_t)tos);
     _FF_SYNC();
     ff_dump_bytes(ff, (const char *)(intptr_t)_FF_NOS, (size_t)tos);
     _FF_DROPN(2);

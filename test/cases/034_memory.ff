@@ -1,0 +1,53 @@
+\ ff-test: lines mem=200000
+\ Memory that Forth code asks for is checked: a size has to make sense,
+\ and the engine stays within the host's limit (ff_platform::mem_limit),
+\ here 200000 bytes.
+\
+\ `-1 array`, `-100 string` and a huge `allot` crashed the host: sizes
+\ weren't validated, failed allocations weren't noticed, and memory given
+\ to words was never handed back, not even by `forget`.
+
+: p 32 emit . ;
+
+\ A size a word can't use is an error (-24).
+-1 array a
+-100 string s
+create x
+0 allot
+-5 allot
+5 -1 dump
+clear
+
+\ More than the limit allows is refused (-8), and nothing is left
+\ half-made.
+x 1000000000000 allot
+100000 array big
+big
+1000000 string huge
+huge
+clear
+
+\ What fits still works.
+10 array ok-arr
+42 3 ok-arr ! 3 ok-arr @ p cr
+20 string ok-str
+"hello" ok-str s! ok-str type cr
+
+\ `forget` gives the memory back: defining and forgetting a word three
+\ thousand times stays within the limit.
+: cycle 0 do ": tmp 1 2 3 4 5 6 7 8 + + + + + + + ; forget tmp" evaluate drop loop ;
+3000 cycle
+tmp
+7 p cr
+
+\ So does a definition that fails.
+: failing 0 do ": broken 1 2 3 4 5 6 7 8 zork ;" evaluate drop loop ;
+1000 failing
+broken
+8 p cr
+
+\ One word can't make two new words at once: only the newest could ever
+\ get the name that comes next, so the others used to pile up nameless.
+: two-creates create create ;
+two-creates
+9 p cr

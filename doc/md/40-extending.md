@@ -147,22 +147,23 @@ of a scope.
 
 ## Pointer and xt validation
 
-Beyond the stack checks, *ff* exposes two macros for native words that
-take an *address* or an *execution token* off the stack and dereference
-it. Use them whenever the value originated from Forth code, since a
-buggy or hostile script can put any integer into that slot:
+Beyond the stack checks, *ff* exposes macros for native words that
+take an *address*, a *string* or an *execution token* off the stack
+and use it. Use them whenever the value originated from Forth code,
+since a buggy or hostile script can put any integer into that slot:
 
 | Macro | Use when |
 |---|---|
-| `FF_CHECK_ADDR(ff, addr, bytes)` | The word reads or writes `bytes` of memory at `addr`. Confirms the range falls inside one of the engine's tracked regions (any word's heap, the data / return stacks, the pad ring). |
+| `FF_CHECK_ADDR(ff, addr, bytes)` | The word reads `bytes` of memory at `addr`. Confirms the range falls inside one of the engine's tracked regions (any word's heap, the data / return stacks, the string arena). |
+| `FF_CHECK_WRITE(ff, addr, bytes)` | The word writes `bytes` of memory at `addr`. As above, but excluding bytecode and native fn pointers, which a program must never be able to overwrite. |
+| `FF_CHECK_STR(ff, s)` | The word reads the NUL-terminated string at `s`. Confirms the terminator comes before the end of its region, so reading can't run off it. |
 | `FF_CHECK_XT(ff, w)` | The word receives an `ff_word_t *` from Forth code (e.g. as the target of a custom `execute`-like primitive) and is about to dispatch through it. Confirms the pointer is a live dictionary entry. |
 
-Both expand to a runtime check + `FF_ERR_BAD_PTR` raise + `return`
+Each expands to a runtime check + `FF_ERR_BAD_PTR` raise + `return`
 when the engine was built with `-DFF_SAFE_MEM=ON`, and to `((void)0)`
 otherwise. So the same source ships in both build modes — the costed
-checks materialise only where needed. The cost is one function call
-plus an O(N) walk over the dictionary; the dispatch primitives in the
-engine's own opcode set use exactly the same macros, so a custom
+checks materialise only where needed. The dispatch primitives in the
+engine's own opcode set use exactly the same checks, so a custom
 native word incurs the same per-call overhead as a built-in.
 
 A pointer-consuming word looks like this:
@@ -199,16 +200,18 @@ Two practical guidelines:
   stack pop.** If the check fails it `return`s immediately, leaving the
   arguments on the stack. The host loop then prints the error and the
   user can inspect the stack. Popping first would discard them.
-- **`FF_CHECK_ADDR` validates the entire `[addr, addr + bytes)` range
-  in one call** — pass the actual size you intend to dereference
-  (`sizeof(ff_int_t)`, `1` for a byte, the source `strlen+1` for a
-  string copy). One macro call covers the whole span.
+- **`FF_CHECK_ADDR` / `FF_CHECK_WRITE` validate the entire
+  `[addr, addr + bytes)` range in one call** — pass the actual size you
+  intend to dereference (`sizeof(ff_int_t)`, `1` for a byte, the source
+  `strlen+1` for a string copy). One macro call covers the whole span.
+  Check a string with `FF_CHECK_STR` *before* taking its `strlen`.
 
 If your embedder always builds with `FF_SAFE_MEM=ON`, you can also
-call `ff_addr_valid(ff, addr, bytes)` and `ff_word_valid(ff, w)`
-directly — they're public helpers regardless of build mode and let
-you implement custom error-reporting paths (e.g., raising a domain
-error instead of `FF_ERR_BAD_PTR`).
+call `ff_addr_valid(ff, addr, bytes)`, `ff_addr_writable(ff, addr,
+bytes)`, `ff_str_valid(ff, s)` and `ff_word_valid(ff, w)` directly —
+they're public helpers regardless of build mode and let you implement
+custom error-reporting paths (e.g., raising a domain error instead of
+`FF_ERR_BAD_PTR`).
 
 
 ## Stack access

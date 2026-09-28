@@ -1,0 +1,24 @@
+\ ff-test: lines deny=7
+\ The host can withhold what reaches outside the engine
+\ (ff_platform::deny). Here it withholds everything, FF_CAP_ALL: `system`,
+\ the file words and `load`. Each raises -21 when it runs.
+
+: p 32 emit . ;
+
+"echo hello" system
+"r" "missing.txt" fopen
+stdin
+stdout
+stderr
+"missing.ff" load
+clear
+
+\ Compiled code is refused when it runs, not when it compiles.
+: shell "echo x" system ;
+shell
+clear
+
+\ Everything else still works.
+2 3 + p cr
+seek_set p cr
+2 strerror strlen 0> p cr

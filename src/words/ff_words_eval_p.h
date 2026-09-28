@@ -15,7 +15,7 @@
     ran to the end). Only the host's abort and `quit` keep unwinding. */
 case FF_OP_EVALUATE:
     _FF_SL(1);
-    _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
+    _FF_CHECK_STR(tos);
     {
         const char *src = (const char *)(intptr_t)tos;
         _FF_DROP();
@@ -49,8 +49,7 @@ case FF_OP_PARSE_WORD:
         _FF_RESTORE();
         if (!s)
         {
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
-                      "Out of memory in parse-word.");
+            ff_mem_check(ff);
             goto done;
         }
         _FF_SO(1);
@@ -80,7 +79,7 @@ case FF_OP_PARSE:
         _FF_RESTORE();
         if (!s)
         {
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM, "Out of memory in parse.");
+            ff_mem_check(ff);
             goto done;
         }
         _FF_SO(1);
@@ -88,12 +87,14 @@ case FF_OP_PARSE:
     }
     _FF_NEXT();
 
+#if FF_WITH_FILES
 /** ( s -- n )  `load` — ff_load() the file at TOS, push the THROW code
     of whatever ended it early (0 when it loaded completely), as
     `evaluate` does. */
 case FF_OP_LOAD:
+    _FF_NEED_CAP(FF_CAP_LOAD, "load");
     _FF_SL(1);
-    _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
+    _FF_CHECK_STR(tos);
     {
         const char *path = (const char *)(intptr_t)tos;
         _FF_DROP();
@@ -105,3 +106,4 @@ case FF_OP_LOAD:
         _FF_PUSH(ec == FF_OK ? 0 : ff->throw_code);
     }
     _FF_NEXT();
+#endif

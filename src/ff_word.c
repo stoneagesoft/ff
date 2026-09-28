@@ -96,7 +96,8 @@ static void ff_word_init_common(ff_word_t *w, ff_word_fn code,
     if (code)
     {
         ff_heap_compile_int(&w->heap, (ff_int_t)(intptr_t)code);
-        w->flags |= FF_WORD_NATIVE;
+        if (w->heap.size)
+            w->flags |= FF_WORD_NATIVE;
     }
 
     ff_word_build_stub(w);
@@ -123,8 +124,21 @@ ff_word_t *ff_word_new(const char *name, ff_word_fn code,
                        ff_opcode_t opcode, const char *manual)
 {
     ff_word_t *w = (ff_word_t *)calloc(1, sizeof(ff_word_t));
+    if (!w)
+        return NULL;
     w->name = ff_strdup(name);
+    if (!w->name)
+    {
+        free(w);
+        return NULL;
+    }
     ff_word_init_common(w, code, opcode, manual);
+    if (code && !(w->flags & FF_WORD_NATIVE))
+    {
+        /* No room for the fn pointer. */
+        ff_word_free(w);
+        return NULL;
+    }
     return w;
 }
 
@@ -150,7 +164,8 @@ ff_word_t *ff_im_word_new(const char *name, ff_word_fn code,
                           ff_opcode_t opcode, const char *manual)
 {
     ff_word_t *w = ff_word_new(name, code, opcode, manual);
-    w->flags |= FF_WORD_IMMEDIATE;
+    if (w)
+        w->flags |= FF_WORD_IMMEDIATE;
 
     return w;
 }
@@ -223,6 +238,22 @@ bool ff_word_is_native(const ff_word_t *w)
        pointer at heap.data[0] and carry FF_WORD_NATIVE. Colon-defs and
        DOES>/CREATE-runtime words have non-empty heaps without the flag. */
     return w->heap.size == 0 || (w->flags & FF_WORD_NATIVE);
+}
+
+/** @copydoc ff_word_holds_data */
+bool ff_word_holds_data(const ff_word_t *w)
+{
+    switch (w->opcode)
+    {
+        case FF_OP_CREATE_RUNTIME:
+        case FF_OP_CONSTANT_RUNTIME:
+        case FF_OP_ARRAY_RUNTIME:
+        case FF_OP_DEFER_RUNTIME:
+        case FF_OP_DOES_RUNTIME:
+            return true;
+        default:
+            return false;
+    }
 }
 
 /**

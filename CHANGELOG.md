@@ -23,6 +23,21 @@ the project follows [Semantic Versioning](https://semver.org/).
   Forth arithmetic expects, and the optimizer can't assume it away.
 - `recurse`, the standard spelling of a definition's call to itself
   (calling it by name keeps working).
+- **Limits for untrusted code**, set per engine in `ff_platform_t`:
+  - `mem_limit` caps the memory Forth code can make the engine hold —
+    word storage, words, and the transient string arena. Beyond it an
+    allocation raises -8 (`FF_ERR_HEAP_OVER`).
+  - `deny` withholds `system` (`FF_CAP_SYSTEM`), the file words and
+    `stdin` / `stdout` / `stderr` (`FF_CAP_FILES`) and `load`
+    (`FF_CAP_LOAD`); a withheld word raises -21 when it runs.
+  - `open_file` and `run_command` replace `fopen()` and `system()`, so
+    the host can confine or virtualise file access and vet commands.
+    `ff_load()` opens files through the hook too.
+- CMake options `FF_WITH_SYSTEM` and `FF_WITH_FILES` (both ON) leave the
+  `system` word, or the file words and `load`, out of the build.
+- `FF_CHECK_WRITE` / `ff_addr_writable()` and `FF_CHECK_STR` /
+  `ff_str_valid()` for native words that write through, or read a
+  string from, a pointer off the stack.
 
 ### Fixed
 
@@ -157,6 +172,34 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `compile` copied a single cell of compiled code — half of the two-cell
   call of a colon definition — and the cell after it then ran as an
   opcode.
+- **Sizes and allocation failures:** `-1 array`, `-100 string` and a
+  huge `allot` crashed the host. Negative sizes (and `0 allot`) now
+  raise -24, and an allocation that fails — over the new memory limit,
+  too large to represent, or refused by `malloc` — raises -8 or -59
+  instead of writing through a NULL or undersized buffer. That covers
+  heap growth, new words and the string arena.
+- **Memory is given back:** `forget`, and a definition that fails,
+  return their words' storage to the arena, so defining and forgetting
+  in a loop holds steady; it used to grow without bound. `ff_free()`
+  closes files the program left open, and frees the input names of a
+  `{` scope in a definition the input left unfinished (both leaked).
+- **`FF_SAFE_MEM` gaps:** `?`, `type`, `dump`, `find`, `>name`, `>body`
+  and the file words used a pointer, string, xt or stream from the stack
+  unchecked, and the string words and `evaluate` checked one byte of a
+  string and then read past its end. All are checked now, file streams
+  against the ones the program opened.
+- **Bytecode could be forged under `FF_SAFE_MEM`:** `!` into a colon
+  definition, `,` inside `[ ]`, or `s!` over a compiled string literal
+  could plant a word pointer for the interpreter to follow. Bytecode and
+  native fn pointers are now read-only to Forth code.
+- A word that ran `create` (or `variable` …) twice made a second word
+  before the first got its name; the first could never be named and
+  piled up. The second now raises an error.
+- `s!` and `s+` with overlapping strings (`s dup s+`) no longer use
+  `memcpy` on overlapping ranges.
+- The fuzzing harness ran with `system` and the file words live, so a
+  generated input could run commands on the fuzzing machine. It now
+  denies them, caps memory and time, and evaluates line by line.
 
 ### Changed
 
@@ -201,6 +244,18 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `]` needs an open definition (`FF_ERR_NOT_IN_DEF` otherwise) instead
   of any word to compile into, and scope input names are recognised only
   while compiling.
+- `allot` with a count below 1 raises -24 (invalid numeric argument)
+  rather than a stack-underflow error.
+- Under `FF_SAFE_MEM`, `>name` and `strerror` return a copy in the
+  string arena (so `type` accepts it), `fclose` accepts only streams the
+  program opened, and `,` / `c,` / `allot` only extend data words.
+- A program can have at most `FF_OPEN_FILES_MAX` (32) streams open.
+- `does>` applies only to a word made by `create`, as in ANS; run on a
+  colon definition it raises `FF_ERR_NOT_IN_DEF` instead of turning the
+  definition's bytecode into data.
+- A failed allocation no longer crashes on the spot (the old "fail-fast"
+  policy): the operation that needed it does nothing and the engine
+  raises the error at its next check.
 
 - `abort` / `abort"` now discard the rest of the input line and return
   `FF_ERR_ABORTED` (ANS `ABORT` semantics) instead of running on.

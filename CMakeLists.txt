@@ -15,12 +15,12 @@ set(CMAKE_INCLUDE_CURRENT_DIR_IN_INTERFACE ON)
 # used below.
 include("${CMAKE_SOURCE_DIR}/cmake/ff-helpers.cmake")
 
-# Memory-safety mode. When ON, every address-consuming primitive
-# (`@`, `!`, `+!`, `c@`, `c!`, `s!`, `s+`, `strlen`, `strcmp`,
-# `execute`, `evaluate`, `load`) validates its pointer / xt against
-# the engine's tracked regions and raises FF_ERR_BAD_PTR on a miss.
-# Enable for embeddings that take untrusted Forth input. See
-# doc/md/20-design.md `## Memory safety`.
+# Memory-safety mode. When ON, every word that takes an address, a
+# string, an xt or a file stream (`@`, `!`, `type`, `s!`, `find`,
+# `execute`, `>name`, `fgets`, …) validates it against the engine's
+# tracked regions, dictionary and open streams, and raises
+# FF_ERR_BAD_PTR on a miss. Enable for embeddings that take untrusted
+# Forth input. See doc/md/20-design.md `## Memory safety`.
 option(FF_SAFE_MEM "Validate every fetch/store/execute pointer." OFF)
 if(FF_SAFE_MEM)
     add_compile_definitions(FF_SAFE_MEM=1)
@@ -35,6 +35,19 @@ endif()
 option(FF_R_TRUSTED "Drop redundant return-stack underflow checks in matched-pair opcodes." OFF)
 if(FF_R_TRUSTED)
     add_compile_definitions(FF_R_TRUSTED=1)
+endif()
+
+# What Forth code can reach outside the engine. With FF_WITH_SYSTEM OFF
+# the `system` word is left out; with FF_WITH_FILES OFF the file words
+# (`fopen` … `stderr`) and `load` are (the host's ff_load() stays). A host
+# can also withhold them at run time through ff_platform::deny.
+option(FF_WITH_SYSTEM "Include the system word." ON)
+option(FF_WITH_FILES "Include the file words and load." ON)
+if(NOT FF_WITH_SYSTEM)
+    add_compile_definitions(FF_WITH_SYSTEM=0)
+endif()
+if(NOT FF_WITH_FILES)
+    add_compile_definitions(FF_WITH_FILES=0)
 endif()
 
 # Link-time optimisation. Lets the compiler optimise across

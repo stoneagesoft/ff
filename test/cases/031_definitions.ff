@@ -63,3 +63,10 @@ again-word
 \ `recurse` is the standard spelling.
 : fact dup 1 > if dup 1 - recurse * then ;
 5 fact p cr
+
+\ `does>` changes a word `create` made, never a colon definition: code
+\ that already calls the definition would go on running bytecode that
+\ now counted as the word's data.
+: mk does> 1 ;
+: victim mk ;
+victim

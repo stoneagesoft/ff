@@ -62,6 +62,14 @@ foreach(case_file ${TEST_CASES})
     if(case_name MATCHES "memsafe" AND NOT FF_SAFE_MEM)
         continue()
     endif()
+    # The "sandbox" case denies words it expects to exist; "files" cases
+    # use the file words.
+    if(case_name MATCHES "sandbox" AND NOT (FF_WITH_SYSTEM AND FF_WITH_FILES))
+        continue()
+    endif()
+    if(case_name MATCHES "files" AND NOT FF_WITH_FILES)
+        continue()
+    endif()
     if(EXISTS "${out}")
         add_test(NAME ${case_name}
                  COMMAND ff_test_driver "${in}" "${out}")

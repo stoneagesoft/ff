@@ -1,0 +1,53 @@
+\ ff-test: lines
+\ With FF_SAFE_MEM, every word that takes an address, a string or an
+\ execution token checks it first. These words used to read or call
+\ through whatever number was on the stack: `?`, `type`, `dump`, `find`,
+\ `>name` and `>body`, and `evaluate` and `strlen` read on past the end
+\ of a string without a terminator. And a program could write into
+\ bytecode. Runs only in FF_SAFE_MEM builds; the file words are checked
+\ in 037_memsafe_files.
+
+: p 32 emit . ;
+
+0 ?
+12345 >name
+12345 >body
+0 type
+0 find
+0 100 dump
+0 evaluate
+0 strlen
+clear
+
+\ A cell with no NUL in it isn't a string, however it is reached.
+variable v 0x4141414141414141 v !
+v type
+v strlen
+"abc" v strcmp
+v evaluate
+clear
+
+\ Bytecode can be read but not written: storing into a colon definition,
+\ appending to one with `,` - the word being compiled included - or
+\ copying over a string compiled into one could forge what the inner
+\ interpreter follows.
+: code-word 1 2 + ;
+' code-word >body @ 0<> p cr
+' code-word >body 0 swap !
+: forged [ 5 , ] 1 ;
+forged
+7 ,
+: literal-word "abc" ;
+literal-word "xyz" swap s!
+literal-word "x" swap s+
+literal-word type cr
+clear
+create data-word 3 allot
+7 data-word ! data-word @ p cr
+
+\ Valid arguments pass. `>name` and `strerror` hand out copies that the
+\ checks know about.
+' dup >name type cr
+"dup" find ' dup = p cr
+"abc" v s! v type cr
+2 strerror strlen 0> p cr

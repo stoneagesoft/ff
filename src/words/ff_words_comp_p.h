@@ -76,6 +76,7 @@ case FF_OP_RBRACE:
         ff_heap_compile_op(h, FF_OP_SCOPE_EXIT);
         ff_heap_compile_int(h, FF_SCOPE_PACK_EXIT(cs->nargs, cs->nouts,
                                                   cs->var_out));
+        _FF_CHECK_MEM();
         /* A scope boundary is a peephole barrier too: the next op must
            not fold with the scope's last instruction. */
         ff_heap_inhibit_peephole(h);
@@ -133,6 +134,7 @@ case FF_OP_LITERAL:
     _FF_COMPILING;
     _FF_SL(1);
     ff_heap_compile_lit(&ff->compiling->heap, tos);
+    _FF_CHECK_MEM();
     _FF_DROP();
     _FF_NEXT();
 
@@ -178,6 +180,7 @@ case FF_OP_POSTPONE_RUNTIME:
 case FF_OP_RECURSE:
     _FF_COMPILING;
     ff_heap_compile_word(&ff->compiling->heap, ff->compiling);
+    _FF_CHECK_MEM();
     _FF_NEXT();
 
 /** ( -- )  `:` — begin a colon definition, named by the next token. */
@@ -189,7 +192,9 @@ case FF_OP_COLON:
                  "':' inside the definition of '%s'.", ff->compiling->name);
         goto done;
     }
-    ff_def_begin(ff);
+    _FF_SYNC();
+    if (!ff_def_begin(ff))
+        goto done;
     _FF_NEXT();
 
 /** ( -- )  `;` — finish a colon-def; emits EXIT or folds to TNEST tail-call. */
@@ -229,6 +234,7 @@ case FF_OP_SEMICOLON:
             h->data[h->size - 2] = FF_OP_TNEST;
         else
             ff_heap_compile_op(h, FF_OP_EXIT);
+        _FF_CHECK_MEM();
         /* Definition is closed — return the unused tail of this
            heap's allocation to the arena. */
         ff_heap_trim(h);
@@ -322,6 +328,19 @@ case FF_OP_DOES:
         _FF_SYNC();
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
                   "does> used outside a defining word.");
+        goto done;
+    }
+    /* Only a word `create` made: the does> clause replaces its run-time
+       action. A colon definition keeps being NESTed into by the code
+       that already calls it, so turning it into a data word would leave
+       live bytecode writable. */
+    if (ff_unlikely(ff_dict_top(&ff->dict)->opcode != FF_OP_CREATE_RUNTIME
+                    && ff_dict_top(&ff->dict)->opcode != FF_OP_DOES_RUNTIME))
+    {
+        _FF_SYNC();
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
+                  "does> needs a word made by create; '%s' isn't one.",
+                  ff_dict_top(&ff->dict)->name);
         goto done;
     }
     _FF_RSL_T(2);

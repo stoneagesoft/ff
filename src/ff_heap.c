@@ -60,6 +60,8 @@ void ff_heap_destroy(ff_heap_t *h)
 /* Forward decls — implementations live in ff_dict.c next to the
    arena struct definition. */
 extern void *ff_arena_alloc(ff_arena_t *a, size_t bytes);
+extern bool  ff_arena_fits(const ff_arena_t *a, size_t bytes);
+extern void  ff_arena_refuse(ff_arena_t *a, size_t bytes);
 extern void  ff_arena_trim(ff_arena_t *a, void *region, size_t old_bytes,
                            size_t new_bytes);
 
@@ -83,11 +85,16 @@ void ff_heap_trim(ff_heap_t *h)
 }
 
 /** @copydoc ff_heap_grow */
-void ff_heap_grow(ff_heap_t *h, size_t extra)
+bool ff_heap_grow(ff_heap_t *h, size_t extra)
 {
     size_t need = h->size + extra;
-    if (need < h->size)                 /* size + extra overflowed */
-        return;
+    if (need < h->size                  /* size + extra overflowed */
+            || need > SIZE_MAX / sizeof(ff_int_t))
+    {
+        if (h->arena)
+            ff_arena_refuse(h->arena, SIZE_MAX);
+        return false;
+    }
 
     size_t nc = h->capacity ? h->capacity : (size_t)FF_INIT_HEAP_SIZE;
     while (nc < need)
@@ -100,26 +107,33 @@ void ff_heap_grow(ff_heap_t *h, size_t extra)
         }
         nc = doubled;
     }
-    if (nc > SIZE_MAX / sizeof(ff_int_t))   /* byte size not representable */
-        return;
+    /* Doubling may overshoot what is representable, or what the memory
+       limit leaves room for, when the exact need would still fit. */
+    if (nc > SIZE_MAX / sizeof(ff_int_t)
+            || (h->arena && !ff_arena_fits(h->arena, nc * sizeof(ff_int_t))))
+        nc = need;
 
     ff_int_t *old_data = h->data;
+    ff_int_t *nd;
     if (h->arena)
     {
         /* Allocate a fresh region from the arena and copy the live
            prefix over. The old region stays in its slab as wasted
            space — acceptable internal fragmentation in exchange for
            the malloc-count win when many small words are defined. */
-        ff_int_t *nd = (ff_int_t *)ff_arena_alloc(h->arena,
-                                                  nc * sizeof(ff_int_t));
+        nd = (ff_int_t *)ff_arena_alloc(h->arena, nc * sizeof(ff_int_t));
+        if (!nd)
+            return false;
         if (h->size && old_data)
             memcpy(nd, old_data, h->size * sizeof(ff_int_t));
-        h->data = nd;
     }
     else
     {
-        h->data = (ff_int_t *)realloc(old_data, nc * sizeof(ff_int_t));
+        nd = (ff_int_t *)realloc(old_data, nc * sizeof(ff_int_t));
+        if (!nd)
+            return false;
     }
+    h->data = nd;
     h->capacity = nc;
 
     /* Realloc / arena-relocation moves the buffer; the dict's sorted
@@ -127,6 +141,7 @@ void ff_heap_grow(ff_heap_t *h, size_t extra)
        counter to force a rebuild on the next ff_addr_valid call. */
     if (h->mutation_seq_p && (h->data != old_data || extra))
         ++*h->mutation_seq_p;
+    return true;
 }
 
 /** @copydoc ff_heap_align */
@@ -138,9 +153,8 @@ void ff_heap_align(ff_heap_t *h)
 /** @copydoc ff_heap_alloc */
 void ff_heap_alloc(ff_heap_t *h, size_t cells)
 {
-    assert(cells);
-
-    ff_heap_ensure(h, cells);
+    if (!cells || !ff_heap_ensure(h, cells))
+        return;
     memset(&h->data[h->size], 0, cells * sizeof(ff_int_t));
     h->size += cells;
     h->byte_off = 0;
@@ -220,7 +234,8 @@ void ff_heap_compile_char(ff_heap_t *h, char c)
 {
     if (!h->byte_off)
     {
-        ff_heap_ensure(h, 1);
+        if (!ff_heap_ensure(h, 1))
+            return;
         h->data[h->size++] = 0;
     }
     *((char *)(&h->data[h->size - 1]) + h->byte_off) = c;
@@ -238,7 +253,8 @@ void ff_heap_compile_str(ff_heap_t *h, const char *s, size_t len)
        size_t. len is token-capped today, but keep the math honest. */
     size_t cells = (len + 1 + sizeof(ff_int_t)) / sizeof(ff_int_t);
     ff_heap_push(h, (ff_int_t)(cells + 1)); /* skip length */
-    ff_heap_ensure(h, cells);
+    if (!ff_heap_ensure(h, cells))
+        return;
     memset(&h->data[h->size], 0, cells * sizeof(ff_int_t));
     memcpy(&h->data[h->size], s, len);
     h->size += cells;

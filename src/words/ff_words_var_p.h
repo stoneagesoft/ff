@@ -72,14 +72,20 @@ case FF_OP_FORGET:
 
 /** ( -- )  `create` — start a new no-data definition; next token names it. */
 case FF_OP_CREATE:
-    ff_def_new(ff, FF_OP_CREATE_RUNTIME);
+    _FF_SYNC();
+    if (!ff_def_new(ff, FF_OP_CREATE_RUNTIME))
+        goto done;
     _FF_NEXT();
 
 /** ( -- )  `variable` — like CREATE but reserves one cell. */
 case FF_OP_VARIABLE:
+    _FF_SYNC();
     {
         ff_word_t *nw = ff_def_new(ff, FF_OP_CREATE_RUNTIME);
+        if (!nw)
+            goto done;
         ff_heap_compile_int(&nw->heap, 0);
+        _FF_CHECK_MEM();
         /* The variable's heap is exactly one cell — trim the doubling
            overhead from the initial allocation. */
         ff_heap_trim(&nw->heap);
@@ -89,9 +95,13 @@ case FF_OP_VARIABLE:
 /** ( v -- )  `constant` — define a word whose runtime pushes v. */
 case FF_OP_CONSTANT:
     _FF_SL(1);
+    _FF_SYNC();
     {
         ff_word_t *nw = ff_def_new(ff, FF_OP_CONSTANT_RUNTIME);
+        if (!nw)
+            goto done;
         ff_heap_compile_int(&nw->heap, tos);
+        _FF_CHECK_MEM();
         ff_heap_trim(&nw->heap);
     }
     _FF_DROP();
@@ -124,12 +134,16 @@ case FF_OP_DEFER_RUNTIME:
 
 /** ( -- )  `defer` — create a deferred word with no action; next token names it. */
 case FF_OP_DEFER:
+    _FF_SYNC();
     {
         ff_word_t *nw = ff_def_new(ff, FF_OP_DEFER_RUNTIME);
+        if (!nw)
+            goto done;
         /* Reserve a single cell holding the target xt; NULL until `is` sets
            it. The xt slot is mutated by `is` later but the cell count is
            fixed, so the trim is safe. */
         ff_heap_compile_int(&nw->heap, 0);
+        _FF_CHECK_MEM();
         ff_heap_trim(&nw->heap);
     }
     _FF_NEXT();

@@ -1,0 +1,23 @@
+\ ff-test: lines
+\ With FF_SAFE_MEM, the file words accept only streams the program
+\ opened itself (and stdin / stdout / stderr, except for `fclose`),
+\ buffers that hold what `fgets` may write, and real strings. They used
+\ to hand any number on the stack to the C library as a FILE pointer.
+\ Runs only in FF_SAFE_MEM builds with the file words compiled in.
+
+: p 32 emit . ;
+
+12345 fclose
+12345 fgetc
+12345 ftell
+0 "text" fputs
+stdout fclose
+stdin 100 0 fgets
+stdin 0 here fgets
+"r" 0 fopen
+clear
+
+\ A missing file is an ordinary I/O error.
+"r" "ff-no-such-file.txt" fopen
+clear
+seek_end p cr

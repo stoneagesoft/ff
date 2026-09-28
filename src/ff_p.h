@@ -176,6 +176,12 @@ struct ff
     uint64_t        opcodes_run;
     uint64_t        next_watchdog_at;
 
+    /* Streams `fopen` opened for Forth code and `fclose` hasn't closed.
+       Bounds how many one engine keeps open, lets FF_SAFE_MEM tell a
+       stream from any other number, and lets ff_free() close leftovers.
+       Unused when the file words are compiled out (FF_WITH_FILES 0). */
+    FILE           *files[FF_OPEN_FILES_MAX];
+
     /* Nesting depth of ff_eval / ff_load, and of ff_exec. Only the
        outermost call resets the watchdog state above: a nested reset
        (`evaluate`, `load`) would let a loop around them run forever and
@@ -307,18 +313,17 @@ struct ff
  *
  * `ff_addr_valid` returns true when [addr, addr + bytes) lies entirely
  * inside one of the engine's tracked regions: the data stack, the
- * return stack, the pad ring, or any dictionary word's heap. Ranges
- * are checked against capacity (not size), so a `here`-derived
- * pointer into freshly-allotted but as-yet-unwritten cells is
- * accepted.
+ * return stack, the string arena, or a word's heap. Ranges are checked
+ * against capacity (not size), so a `here`-derived pointer into
+ * freshly-allotted but as-yet-unwritten cells is accepted.
+ * `ff_addr_writable` leaves out bytecode and native fn pointers, which a
+ * program could otherwise forge (see ff_word_holds_data()), and
+ * `ff_str_valid` requires the string's terminator inside the region.
  *
  * `ff_word_valid` returns true when @p w is currently in the
- * dictionary — the relevant question for `execute`.
- *
- * Both run in O(dict.count) — the data plane uses a linear scan
- * rather than a sorted-interval index, on the theory that the check
- * fires only when FF_SAFE_MEM is on and dictionaries are small in
- * the embedded use cases that flip it on.
+ * dictionary — the relevant question for `execute`. It scans the
+ * dictionary linearly; heap ranges are found by binary search over a
+ * sorted index that is rebuilt after the dictionary changes.
  * =================================================================== */
 
 /**
@@ -333,8 +338,29 @@ bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes);
 bool ff_word_valid(const ff_t *ff, const ff_word_t *w);
 
 /**
+ * @brief End of the tracked region that contains @p addr — a stack, the
+ *        live part of a string-arena slab, a word's heap — or NULL if no
+ *        tracked region does.
+ */
+const char *ff_addr_extent(const ff_t *ff, const void *addr);
+
+/**
+ * @brief Like ff_addr_valid(), for a write: the range must also be
+ *        writable, which a colon definition's bytecode and a native
+ *        word's fn pointer are not (see ff_word_holds_data()).
+ */
+bool ff_addr_writable(const ff_t *ff, const void *addr, size_t bytes);
+
+/**
+ * @brief Range-validate a NUL-terminated string: true when @p s lies in
+ *        a tracked region (see ff_addr_valid()) and its terminator comes
+ *        before the region ends, so reading it can't run off the end.
+ */
+bool ff_str_valid(const ff_t *ff, const char *s);
+
+/**
  * @brief Range-validate @p addr / @p bytes against this engine's
- *        tracked regions: stacks, pad, dictionary heaps.
+ *        tracked regions: stacks, string arena, data word heaps.
  *
  * Inline because the stack and pad cases dominate hot-path checks
  * under FF_SAFE_MEM — folding the range comparisons into the
@@ -394,7 +420,37 @@ static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
  * @brief Verify @p w is a live dictionary entry; raise FF_ERR_BAD_PTR
  *        and return from the calling word fn on miss.
  */
+/**
+ * @def FF_CHECK_STR
+ * @brief Verify @p s is a NUL-terminated string in a tracked region
+ *        (@ref ff_str_valid); raise FF_ERR_BAD_PTR and return from the
+ *        calling word fn on miss.
+ */
+/**
+ * @def FF_CHECK_WRITE
+ * @brief Like FF_CHECK_ADDR, for memory the word is about to write
+ *        (@ref ff_addr_writable).
+ */
 #if FF_SAFE_MEM
+#  define FF_CHECK_WRITE(e, addr, bytes) \
+       do { \
+           if (ff_unlikely(!ff_addr_writable((e), (addr), (size_t)(bytes)))) \
+           { \
+               ff_tracef(e, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
+                         "Bad pointer for a write: %p (size %zu).", \
+                         (const void *)(addr), (size_t)(bytes)); \
+               return; \
+           } \
+       } while (0)
+#  define FF_CHECK_STR(e, s) \
+       do { \
+           if (ff_unlikely(!ff_str_valid((e), (const char *)(s)))) \
+           { \
+               ff_tracef(e, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
+                         "Bad string: %p.", (const void *)(s)); \
+               return; \
+           } \
+       } while (0)
 #  define FF_CHECK_ADDR(e, addr, bytes) \
        do { \
            if (ff_unlikely(!ff_addr_valid((e), (addr), (size_t)(bytes)))) \
@@ -415,6 +471,8 @@ static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
            } \
        } while (0)
 #else
+#  define FF_CHECK_WRITE(e, addr, bytes) ((void)0)
+#  define FF_CHECK_STR(e, s)            ((void)0)
 #  define FF_CHECK_ADDR(e, addr, bytes) ((void)0)
 #  define FF_CHECK_XT(e, w)             ((void)0)
 #endif

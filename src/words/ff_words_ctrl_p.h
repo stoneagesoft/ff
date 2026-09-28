@@ -317,6 +317,7 @@ case FF_OP_IF:
         ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
         ff_heap_compile_int(h, 0);
+        _FF_CHECK_MEM();
         if (!ff_cf_push(ff, FF_CF_ORIG, "if", h->size - 1))
             goto done;
     }
@@ -333,6 +334,7 @@ case FF_OP_ELSE:
         ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_BRANCH);
         ff_heap_compile_int(h, 0);
+        _FF_CHECK_MEM();
         h->data[c->pos] = h->size - c->pos;
         c->opener = "else";
         c->pos    = h->size - 1;
@@ -384,6 +386,7 @@ case FF_OP_UNTIL:
         ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
         ff_heap_compile_int(h, -(ff_int_t)(h->size - c->pos));
+        _FF_CHECK_MEM();
     }
     _FF_NEXT();
 
@@ -398,6 +401,7 @@ case FF_OP_AGAIN:
         ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_BRANCH);
         ff_heap_compile_int(h, -(ff_int_t)(h->size - c->pos));
+        _FF_CHECK_MEM();
     }
     _FF_NEXT();
 
@@ -413,6 +417,7 @@ case FF_OP_WHILE:
         ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
         ff_heap_compile_int(h, 0);
+        _FF_CHECK_MEM();
         if (!ff_cf_push(ff, FF_CF_ORIG, "while", h->size - 1))
             goto done;
         /* The orig goes *under* the dest, as in ANS: `repeat` finds the
@@ -438,6 +443,7 @@ case FF_OP_REPEAT:
         ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_BRANCH);
         ff_heap_compile_int(h, -(ff_int_t)(h->size - target));
+        _FF_CHECK_MEM();
         h->data[c->pos] = h->size - c->pos;
         /* Position after REPEAT is the WHILE forward target. */
         ff_heap_inhibit_peephole(h);
@@ -452,6 +458,7 @@ case FF_OP_DO:
         ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_XDO);
         ff_heap_compile_int(h, 0);
+        _FF_CHECK_MEM();
         if (!ff_cf_push(ff, FF_CF_DO, "do", h->size))
             goto done;
     }
@@ -465,6 +472,7 @@ case FF_OP_QDO:
         ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_XQDO);
         ff_heap_compile_int(h, 0);
+        _FF_CHECK_MEM();
         if (!ff_cf_push(ff, FF_CF_DO, "?do", h->size))
             goto done;
     }
@@ -482,6 +490,7 @@ case FF_OP_LOOP:
         size_t bp = c->pos;
         ff_heap_compile_op(h, FF_OP_XLOOP);
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
+        _FF_CHECK_MEM();
         h->data[bp - 1] = h->size - bp + 1;
         /* DO leave-target lands here. */
         ff_heap_inhibit_peephole(h);
@@ -500,6 +509,7 @@ case FF_OP_PLOOP:
         size_t bp = c->pos;
         ff_heap_compile_op(h, FF_OP_PXLOOP);
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
+        _FF_CHECK_MEM();
         h->data[bp - 1] = h->size - bp + 1;
         /* DO leave-target lands here. */
         ff_heap_inhibit_peephole(h);

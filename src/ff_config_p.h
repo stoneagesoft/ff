@@ -66,12 +66,13 @@
  * @brief Compile-time switch: validate every address before fetch /
  *        store / execute.
  *
- * When defined (`-DFF_SAFE_MEM=1` or CMake `-DFF_SAFE_MEM=ON`), the
- * `@`, `!`, `+!`, `c@`, `c!`, `s@`, `s+`, `strlen`, `strcmp`, and
- * `execute` primitives consult @ref ff_addr_valid (or @ref
- * ff_word_valid for `execute`) on every invocation. An out-of-range
- * pointer raises FF_ERR_BAD_PTR via @ref ff_tracef and unwinds the
- * interpreter cleanly instead of segfaulting.
+ * When defined (`-DFF_SAFE_MEM=1` or CMake `-DFF_SAFE_MEM=ON`), every
+ * word that takes an address, a string, an execution token or a file
+ * stream from the stack checks it first: against the engine's tracked
+ * memory (@ref ff_addr_valid, @ref ff_str_valid), its dictionary
+ * (@ref ff_word_valid) or the streams it opened. An invalid one raises
+ * FF_ERR_BAD_PTR via @ref ff_tracef and unwinds the interpreter cleanly
+ * instead of segfaulting.
  *
  * When undefined (the default), the checks compile away to nothing —
  * zero runtime cost. Enable for embeddings that take untrusted Forth
@@ -81,6 +82,38 @@
 #if !defined(FF_SAFE_MEM)
 #  define FF_SAFE_MEM 0
 #endif
+
+/**
+ * @def FF_WITH_SYSTEM
+ * @brief Compile-time switch: include the `system` word.
+ *
+ * On by default. Set to 0 (CMake `-DFF_WITH_SYSTEM=OFF`) for a build
+ * that can't run commands whatever the host allows at run time — or
+ * for a C library without system(). See also ff_platform::deny.
+ */
+#if !defined(FF_WITH_SYSTEM)
+#  define FF_WITH_SYSTEM 1
+#endif
+
+/**
+ * @def FF_WITH_FILES
+ * @brief Compile-time switch: include the file words (`fopen`,
+ *        `fclose`, `fgets`, …, `stdin` / `stdout` / `stderr`) and `load`.
+ *
+ * On by default. Set to 0 (CMake `-DFF_WITH_FILES=OFF`) for a build
+ * whose Forth code can't touch the file system; the host's own
+ * ff_load() still works. See also ff_platform::deny.
+ */
+#if !defined(FF_WITH_FILES)
+#  define FF_WITH_FILES 1
+#endif
+
+/**
+ * @brief Most streams one engine's Forth code can have open at once
+ *        (`fopen` without `fclose`). Those still open are closed by
+ *        ff_free().
+ */
+#define FF_OPEN_FILES_MAX   32
 
 /**
  * @def FF_R_TRUSTED

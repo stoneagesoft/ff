@@ -20,6 +20,9 @@
  *             own, NAME being its FF_ERR_* code without the prefix, and
  *             evaluation carries on with the next line.
  *   budget=N  Watchdog opcode budget (default 10 M).
+ *   mem=N     Memory limit in bytes (ff_platform::mem_limit; default 256 MiB,
+ *             so a runaway allocation fails the test instead of the machine).
+ *   deny=N    Capabilities to withhold (ff_platform::deny, FF_CAP_* bits).
  */
 
 #include <ff.h>
@@ -38,6 +41,10 @@
 /* 10 M opcodes — well above any normal test, low enough to catch an
    infinite-loop bug in well under a second of wall-clock time. */
 #define FF_TEST_OPCODE_BUDGET  (10ULL * 1000ULL * 1000ULL)
+
+/* 256 MiB — far above any test's needs; a runaway allocation fails the
+   test rather than exhausting the machine. */
+#define FF_TEST_MEM_LIMIT      ((size_t)256 * 1024 * 1024)
 
 
 typedef struct test_ctx
@@ -160,7 +167,8 @@ static char *read_file(const char *path, size_t *out_size)
 }
 
 /* Parse the optional `\ ff-test:` directive on the first line. */
-static void parse_directive(const char *src, bool *per_line, uint64_t *budget)
+static void parse_directive(const char *src, bool *per_line, uint64_t *budget,
+                            size_t *mem, uint32_t *deny)
 {
     static const char tag[] = "\\ ff-test:";
     if (strncmp(src, tag, sizeof(tag) - 1) != 0)
@@ -184,6 +192,10 @@ static void parse_directive(const char *src, bool *per_line, uint64_t *budget)
             *per_line = true;
         else if (len > 7 && strncmp(w, "budget=", 7) == 0)
             *budget = strtoull(w + 7, NULL, 10);
+        else if (len > 4 && strncmp(w, "mem=", 4) == 0)
+            *mem = (size_t)strtoull(w + 4, NULL, 10);
+        else if (len > 5 && strncmp(w, "deny=", 5) == 0)
+            *deny = (uint32_t)strtoul(w + 5, NULL, 0);
     }
 }
 
@@ -240,7 +252,9 @@ int main(int argc, char **argv)
 
     bool per_line = false;
     uint64_t budget = FF_TEST_OPCODE_BUDGET;
-    parse_directive(src, &per_line, &budget);
+    size_t mem = FF_TEST_MEM_LIMIT;
+    uint32_t deny = 0;
+    parse_directive(src, &per_line, &budget, &mem, &deny);
 
     test_ctx_t ctx =
     {
@@ -260,6 +274,8 @@ int main(int argc, char **argv)
         .vtracef           = NULL,
         .watchdog          = test_watchdog,
         .watchdog_interval = 65536,
+        .deny              = deny,
+        .mem_limit         = mem,
     };
 
     ff_t *ff = ff_new(&p);

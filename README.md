@@ -62,11 +62,16 @@ host-supplied native words.
   compilation, enum blocks, small DSLs — from inside Forth rather than
   by patching the engine in C, keeping the "library, not a language"
   stance.
-- **Optional memory safety.** A `FF_SAFE_MEM` build flag turns every
-  `@`/`!`/`+!`/`c@`/`c!`/`s!`/`s+`/`strlen`/`strcmp`/`execute` into a
-  bounds-checked operation against the engine's tracked regions. Off
-  by default — when on, the cost is roughly 10-20 % on dispatch-bound
-  code.
+- **Optional memory safety.** A `FF_SAFE_MEM` build flag makes every
+  word that takes an address, a string, an execution token or a file
+  stream validate it against the engine's tracked memory, dictionary
+  and open files — and keeps bytecode read-only, so a program can't
+  forge what the interpreter follows. Off by default — when on, the
+  cost is roughly 10-20 % on dispatch-bound code.
+- **Limits for untrusted code.** Per engine, the host caps the memory
+  Forth code can use, withholds `system`, file access and `load` (or
+  routes them through its own callbacks), and bounds run time with a
+  watchdog. Allocation failures raise errors instead of crashing.
 - **Strings are C strings.** No counted-string convention; every
   string-valued word returns or accepts a single `char *` to a NUL-
   terminated sequence. `s!`, `s+`, `strlen`, `strcmp` are one-line

@@ -49,10 +49,11 @@ void ff_heap_destroy(ff_heap_t *h);
 void ff_heap_align(ff_heap_t *h);
 
 /**
- * Append @p cells zeroed cells to the heap (Forth `allot`).
+ * Append @p cells zeroed cells to the heap (Forth `allot`). If the heap
+ * can't grow that far, nothing is appended and the refusal is recorded
+ * in the arena's account (see ff_mem_p.h).
  * @param h     Heap.
- * @param cells Number of @ref ff_int_t-sized cells to reserve. Must
- *              be > 0.
+ * @param cells Number of @ref ff_int_t-sized cells to reserve.
  */
 void ff_heap_alloc(ff_heap_t *h, size_t cells);
 
@@ -121,6 +122,17 @@ void ff_heap_compile_lit(ff_heap_t *h, ff_int_t v);
 typedef struct ff_arena ff_arena_t;
 
 /**
+ * @brief A position in the dictionary's word-storage arena. Everything
+ *        allocated after it can be handed back at once (see
+ *        ff_dict_forget()).
+ */
+typedef struct ff_arena_mark
+{
+    unsigned long seq;  /**< Slab the position is in; slabs are numbered from 1, 0 is before the first. */
+    size_t        used; /**< Offset into that slab. */
+} ff_arena_mark_t;
+
+/**
  * @struct ff_heap
  * @brief Growable cell array backing one word.
  */
@@ -156,14 +168,26 @@ struct ff_heap
      * pre-arena allocation isn't orphaned.
      */
     ff_arena_t *arena;
+
+    /**
+     * Arena position when the word joined the dictionary: all it has
+     * allocated since lies after it. Removing the word can give the
+     * arena back from here.
+     */
+    ff_arena_mark_t mark;
 };
 
 /**
  * Slow-path heap growth: handles both the malloc-realloc and the
  * arena-allocate-new-region modes. The fast path is inlined in
  * @ref ff_heap_ensure below.
+ *
+ * @return false, leaving the heap as it was, if the memory limit, the
+ *         allocator or the size of the request refused it. For an
+ *         arena-backed heap the refusal is recorded in the arena's
+ *         account, for the engine to raise.
  */
-void ff_heap_grow(ff_heap_t *h, size_t extra);
+bool ff_heap_grow(ff_heap_t *h, size_t extra);
 
 /**
  * Shrink an arena-bound heap's reservation to its actual used size,
@@ -212,22 +236,24 @@ static inline void ff_heap_inhibit_peephole(ff_heap_t *h)
  * capacity as needed.
  * @param h     Heap.
  * @param extra Cells beyond @ref ff_heap::size.
+ * @return false if the heap couldn't grow (see ff_heap_grow()); callers
+ *         then write nothing.
  */
-static inline void ff_heap_ensure(ff_heap_t *h, size_t extra)
+static inline bool ff_heap_ensure(ff_heap_t *h, size_t extra)
 {
-    if (h->size + extra > h->capacity)
-        ff_heap_grow(h, extra);
+    return extra <= h->capacity - h->size || ff_heap_grow(h, extra);
 }
 
 /**
- * Push a single ff_int_t cell, growing the buffer as needed. Does
- * NOT touch the peephole's last-op tracker — callers that emit
- * meaningful opcodes should go through @ref ff_heap_compile_op.
+ * Push a single ff_int_t cell, growing the buffer as needed; a push the
+ * heap has no room for is dropped (see ff_heap_grow()). Does NOT touch
+ * the peephole's last-op tracker — callers that emit meaningful opcodes
+ * should go through @ref ff_heap_compile_op.
  * @param h Heap.
  * @param v Cell value.
  */
 static inline void ff_heap_push(ff_heap_t *h, ff_int_t v)
 {
-    ff_heap_ensure(h, 1);
-    h->data[h->size++] = v;
+    if (ff_heap_ensure(h, 1))
+        h->data[h->size++] = v;
 }

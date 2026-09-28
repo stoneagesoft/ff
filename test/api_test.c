@@ -5,8 +5,9 @@
  * the return stack and the scope barrier, the location reported for an
  * error, ff_load()'s line handling, the watchdog / abort flag across
  * nested evaluations, errors raised by native words, ff_exec() called
- * directly by a host, and what a definition that fails leaves in the
- * dictionary. It includes <ff_p.h> the way a native-word author
+ * directly by a host, what a definition that fails leaves in the
+ * dictionary, the memory limit and the host's control over file and
+ * command access. It includes <ff_p.h> the way a native-word author
  * does, and is built with strict warnings, so it also checks that the
  * private headers compile cleanly.
  *
@@ -17,6 +18,7 @@
 
 #include <ff_p.h>
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -138,6 +140,7 @@ static void test_error_location(void)
     CHECK(ff_err_line(ff) == 1);
     CHECK(ff_err_pos(ff) == 6);
 
+#if FF_WITH_FILES
     /* Files count lines from 1, and a nested `load` hands its caller's
        line count back intact for an error later on the same line. */
     write_file("api_inner.ff", "3 drop\n");
@@ -150,6 +153,7 @@ static void test_error_location(void)
     CHECK(ff_err_pos(ff) == 25);
     remove("api_inner.ff");
     remove("api_outer.ff");
+#endif
 
     ff_free(ff);
 }
@@ -199,6 +203,7 @@ static void test_load_errors(void)
     ff_free(ff);
 }
 
+#if FF_WITH_FILES
 /* A loop that re-enters the interpreter through `load` is still bounded:
    nested evaluations no longer restart the watchdog's count. */
 static void test_watchdog_across_load(void)
@@ -212,6 +217,7 @@ static void test_watchdog_across_load(void)
 
     ff_free(ff);
 }
+#endif
 
 static void req_abort(ff_t *ff)
 {
@@ -338,9 +344,129 @@ static void test_definitions(void)
     CHECK(ff_eval(ff, "abort\" \"halt here\"") == FF_ERR_ABORTED);
     CHECK(strcmp(ff_strerror(ff), "halt here") == 0);
 
+    /* Freed with a definition and a `{` scope still open: the scope's
+       input names went unfreed (LeakSanitizer reports it). */
+    CHECK(ff_eval(ff, ": still-open { ( a -- b ) a") == FF_OK);
+
     ff_free(ff);
 }
 
+/* A memory limit (ff_platform::mem_limit) caps what Forth code can make
+   the engine hold, and what `forget` or a failed definition drops comes
+   off the account again. Before, sizes weren't checked (`-1 array`
+   crashed) and nothing was ever given back. */
+static void test_memory_limit(void)
+{
+    ff_platform_t p = { .vprintf = capture_vprintf, .mem_limit = 100000 };
+    ff_t *ff = ff_new(&p);
+    size_t base = ff->dict.mem.used;
+
+    CHECK(ff_eval(ff, "create x 20000 allot") == FF_ERR_HEAP_OVER);
+    CHECK(ff->dict.mem.used <= 100000);
+    CHECK(ff_eval(ff, "-1 array a") == FF_ERR_MALFORMED);
+    CHECK(ff_eval(ff, "clear forget x") == FF_OK);
+    CHECK(ff->dict.mem.used == base);
+
+    /* Defining and forgetting, over and over, holds steady. */
+    CHECK(ff_eval(ff, ": w 1 2 3 4 5 6 7 8 9 ; forget w") == FF_OK);
+    size_t steady = ff->dict.mem.used;
+    for (int i = 0; i < 2000; ++i)
+        CHECK(ff_eval(ff, ": w 1 2 3 4 5 6 7 8 9 ; forget w") == FF_OK);
+    CHECK(ff->dict.mem.used == steady);
+
+    /* Interpreted strings are kept for the engine's lifetime, so they
+       count too: the limit stops them, and ff_abort() gives them back. */
+    ff_error_t ec = FF_OK;
+    for (int i = 0; i < 100000 && ec == FF_OK; ++i)
+        ec = ff_eval(ff, "\"0123456789012345678901234567890123456789\" drop");
+    CHECK(ec == FF_ERR_HEAP_OVER);
+    CHECK(ff->dict.mem.used <= 100000);
+    ff_abort(ff);
+    CHECK(ff->dict.mem.used == steady);
+    CHECK(ff_eval(ff, "\"still room\" drop") == FF_OK);
+
+    ff_free(ff);
+}
+
+#if FF_WITH_SYSTEM && FF_WITH_FILES
+static int  g_commands;
+static char g_last_command[64];
+
+static int record_command(void *ctx, const char *cmd)
+{
+    (void)ctx;
+    ++g_commands;
+    snprintf(g_last_command, sizeof(g_last_command), "%s", cmd);
+    return 7;
+}
+
+/* Opens only "virtual.ff", backed by a real file. */
+static FILE *open_virtual(void *ctx, const char *path, const char *mode)
+{
+    (void)ctx;
+    if (strcmp(path, "virtual.ff") == 0)
+        return fopen("api_virtual.ff", mode);
+    errno = EACCES;
+    return NULL;
+}
+
+/* The host decides what Forth code reaches outside the engine: `system`
+   and file access go through ff_platform::run_command / open_file when it
+   sets them, ff_platform::deny withholds them, and streams a program
+   leaves open are closed with the engine. */
+static void test_sandbox(void)
+{
+    write_file("api_virtual.ff", "40 2 +\n");
+
+    ff_platform_t p =
+    {
+        .vprintf     = capture_vprintf,
+        .open_file   = open_virtual,
+        .run_command = record_command,
+    };
+    ff_t *ff = ff_new(&p);
+
+    reset_output();
+    CHECK(ff_eval(ff, "\"echo hi\" system .") == FF_OK);
+    CHECK(strcmp(g_out, "7") == 0);
+    CHECK(g_commands == 1 && strcmp(g_last_command, "echo hi") == 0);
+
+    reset_output();
+    CHECK(ff_eval(ff, "\"virtual.ff\" load . 32 emit .") == FF_OK);
+    CHECK(strcmp(g_out, "0 42") == 0);
+    reset_output();
+    CHECK(ff_eval(ff, "\"api_virtual.ff\" load .") == FF_OK);
+    CHECK(strcmp(g_out, "-37") == 0);
+    CHECK(ff_eval(ff, "\"r\" \"virtual.ff\" fopen fclose drop") == FF_OK);
+    CHECK(ff_load(ff, "virtual.ff") == FF_OK);
+    ff_free(ff);
+
+    /* Denied, the words raise -21 — and the host's own ff_load() works. */
+    ff_platform_t q = { .vprintf = capture_vprintf, .deny = FF_CAP_ALL };
+    ff = ff_new(&q);
+    CHECK(ff_eval(ff, "\"echo hi\" system") == FF_ERR_UNSUPPORTED);
+    CHECK(ff_eval(ff, "clear \"api_virtual.ff\" load") == FF_ERR_UNSUPPORTED);
+    CHECK(ff_eval(ff, "clear \"r\" \"api_virtual.ff\" fopen") == FF_ERR_UNSUPPORTED);
+    CHECK(ff_eval(ff, "clear stdout") == FF_ERR_UNSUPPORTED);
+    CHECK(ff_load(ff, "api_virtual.ff") == FF_OK);
+    ff_free(ff);
+    remove("api_virtual.ff");
+
+    /* A stream left open is closed, and so flushed, when the engine is. */
+    ff_platform_t r = { .vprintf = capture_vprintf };
+    ff = ff_new(&r);
+    CHECK(ff_eval(ff, "\"w\" \"api_unclosed.txt\" fopen \"kept\" fputs drop") == FF_OK);
+    ff_free(ff);
+    FILE *f = fopen("api_unclosed.txt", "r");
+    char buf[16] = { 0 };
+    CHECK(f && fgets(buf, sizeof(buf), f) && strcmp(buf, "kept") == 0);
+    if (f)
+        fclose(f);
+    remove("api_unclosed.txt");
+}
+#endif
+
+#if FF_WITH_FILES
 /* `load` pushes the THROW code that ended it, like `evaluate`, and QUIT
    in a loaded file ends the load without an error. */
 static void test_load_codes(void)
@@ -365,6 +491,7 @@ static void test_load_codes(void)
 
     ff_free(ff);
 }
+#endif
 
 /* An abort requested while nested evaluations run is honoured, not
    cleared by the next nested ff_eval entry. */
@@ -395,12 +522,20 @@ int main(void)
     test_error_location();
     test_load_long_line();
     test_load_errors();
+#if FF_WITH_FILES
     test_watchdog_across_load();
+#endif
     test_abort_request_nested();
     test_native_errors();
     test_host_exec();
+#if FF_WITH_FILES
     test_load_codes();
+#endif
     test_definitions();
+    test_memory_limit();
+#if FF_WITH_SYSTEM && FF_WITH_FILES
+    test_sandbox();
+#endif
 
     if (g_failures)
         fprintf(stderr, "%d check(s) failed.\n", g_failures);

@@ -23,6 +23,7 @@ case FF_OP_DOT:
 /** ( a -- )  `?` — print value at address TOS. */
 case FF_OP_QUESTION:
     _FF_SL(1);
+    _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(ff_int_t));
     _FF_SYNC();
     {
         ff_int_t v = *(ff_int_t *)(intptr_t)tos;
@@ -51,6 +52,7 @@ case FF_OP_EMIT:
 /** ( s -- )  `type` — print NUL-terminated string at TOS. */
 case FF_OP_TYPE:
     _FF_SL(1);
+    _FF_CHECK_STR(tos);
     _FF_SYNC();
     ff_printf(ff, "%s", (const char *)(intptr_t)tos);
     _FF_DROP();

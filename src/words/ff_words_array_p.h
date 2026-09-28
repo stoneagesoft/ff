@@ -12,9 +12,14 @@
 /** ( n -- )  `array` — define a new word that holds n cells of storage. */
 case FF_OP_ARRAY:
     _FF_SL(1);
+    _FF_BAD_SIZE(tos < 0, "array", tos);
+    _FF_SYNC();
     {
         ff_word_t *nw = ff_def_new(ff, FF_OP_ARRAY_RUNTIME);
-        ff_heap_alloc(&nw->heap, (int)tos);
+        if (!nw)
+            goto done;
+        ff_heap_alloc(&nw->heap, (size_t)tos);
+        _FF_CHECK_MEM();
         /* Array size is fixed at definition; trim the doubling slack. */
         ff_heap_trim(&nw->heap);
     }

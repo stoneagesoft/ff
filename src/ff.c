@@ -58,6 +58,9 @@
 #define FF_WD_BATCH 256
 
 
+static void ff_csig_clear(ff_t *ff);
+
+
 // Public
 
 /** @copydoc ff_new */
@@ -78,6 +81,7 @@ ff_t *ff_new(const ff_platform_t *p)
        Embedders that fan out engines across threads should warm the
        singleton from the main thread first; see ff_builtins_default(). */
     ff_dict_init(&ff->dict, ff_builtins_default());
+    ff->dict.mem.limit = p->mem_limit;
     ff_stack_init(&ff->stack);
     ff_stack_init(&ff->r_stack);
     ff_bt_stack_init(&ff->bt_stack);
@@ -91,6 +95,15 @@ void ff_free(ff_t *ff)
 {
     if (!ff)
         return;
+
+    /* Streams the program opened and never closed. */
+    for (int i = 0; i < FF_OPEN_FILES_MAX; ++i)
+        if (ff->files[i])
+            fclose(ff->files[i]);
+
+    /* A definition left open when the input ended keeps the input names
+       of its open `{` scopes. */
+    ff_csig_clear(ff);
 
     ff_tokenizer_destroy(&ff->tokenizer);
     ff_bt_stack_destroy(&ff->bt_stack);
@@ -123,10 +136,11 @@ void ff_warmup(void)
 ff_error_t ff_register(ff_t *ff, const ff_native_word_t *words)
 {
     for (const ff_native_word_t *w = words; w && w->name; ++w)
-        ff_dict_append(&ff->dict,
-                       w->immediate
-                           ? ff_im_word_new(w->name, w->fn, FF_OP_NONE, w->manual)
-                           : ff_word_new(w->name, w->fn, FF_OP_NONE, w->manual));
+        if (!ff_dict_append(&ff->dict,
+                            w->immediate
+                                ? ff_im_word_new(w->name, w->fn, FF_OP_NONE, w->manual)
+                                : ff_word_new(w->name, w->fn, FF_OP_NONE, w->manual)))
+            return FF_ERR_OOM;
     return FF_OK;
 }
 
@@ -203,11 +217,26 @@ static char *ff_pad_intern(ff_t *ff, const char *s, size_t len)
        sized to fit. */
     if (!sl || sl->used + need > sl->size)
     {
+        /* A slab counts against the memory limit; near the limit it is
+           cut down to what's left, so a string that fits still fits. */
+        ff_mem_t *m = &ff->dict.mem;
         size_t cap = need > (size_t)FF_PAD_INIT_SIZE
                          ? need : (size_t)FF_PAD_INIT_SIZE;
+        size_t room = ff_mem_room(m);
+        if (room < sizeof(ff_pad_slab_t) + need)
+        {
+            ff_mem_refuse(m, need, false);
+            return NULL;
+        }
+        if (cap > room - sizeof(ff_pad_slab_t))
+            cap = room - sizeof(ff_pad_slab_t);
         ff_pad_slab_t *ns = (ff_pad_slab_t *)malloc(sizeof(*ns) + cap);
         if (!ns)
+        {
+            ff_mem_refuse(m, need, true);
             return NULL;
+        }
+        ff_mem_charge(m, sizeof(*ns) + cap);
         ns->next = ff->pad;
         ns->used = 0;
         ns->size = cap;
@@ -349,6 +378,7 @@ static ff_error_t ff_error_from_throw(ff_int_t n)
         case FF_THROW_BAD_FORGET:    return FF_ERR_FORGET_PROT;
         case FF_THROW_UNSUPPORTED:   return FF_ERR_UNSUPPORTED;
         case FF_THROW_CS_MISMATCH:
+        case FF_THROW_BAD_ARG:
         case FF_THROW_NESTING:       return FF_ERR_MALFORMED;
         case FF_THROW_RSTACK_IMBAL:  return FF_ERR_SCOPE_RSTACK;
         case FF_THROW_FILE_IO:       return FF_ERR_FILE_IO;
@@ -453,6 +483,86 @@ static void ff_throw(ff_t *ff, ff_int_t code)
                  "Uncaught exception %" FF_PRIdCELL ".", code);
 }
 
+/**
+ * Raise the allocation refusal the dictionary's account recorded, if
+ * any: -8 when the memory limit (or a size too large to represent)
+ * refused it, -59 when the host allocator did. Called wherever code
+ * that allocated would otherwise carry on as if it had succeeded.
+ *
+ * @param ff Engine.
+ * @return true if an exception was raised.
+ */
+static bool ff_mem_check(ff_t *ff)
+{
+    ff_mem_t *m = &ff->dict.mem;
+    if (ff_likely(!m->failed))
+        return false;
+    m->failed = false;
+    if (m->oom)
+        ff_raise(ff, FF_THROW_ALLOCATE, FF_SEV_ERROR | FF_ERR_OOM,
+                 "Out of memory allocating %zu bytes.", m->refused);
+    else if (m->limit && m->refused != SIZE_MAX)
+        ff_raise(ff, FF_THROW_DICT_OVER, FF_SEV_ERROR | FF_ERR_HEAP_OVER,
+                 "Memory limit reached: %zu more bytes wanted, %zu of %zu in use.",
+                 m->refused, m->used, m->limit);
+    else
+        ff_raise(ff, FF_THROW_DICT_OVER, FF_SEV_ERROR | FF_ERR_HEAP_OVER,
+                 "Allocation too large.");
+    return true;
+}
+
+/* ===================================================================
+ * Streams opened for Forth code.
+ * =================================================================== */
+
+/**
+ * Open @p path for `fopen`, `load` or ff_load(), through the host's
+ * ff_platform::open_file when it set one.
+ *
+ * @param ff   Engine.
+ * @param path File name.
+ * @param mode fopen() mode.
+ * @return The stream, or NULL with errno set.
+ */
+static FILE *ff_open_file(ff_t *ff, const char *path, const char *mode)
+{
+    if (ff->platform.open_file)
+        return ff->platform.open_file(ff->platform.context, path, mode);
+    return fopen(path, mode);
+}
+
+#if FF_WITH_FILES
+/**
+ * @param ff Engine.
+ * @param f  Stream, or NULL to look for a free slot.
+ * @return Index of @p f in the engine's table of open streams, or -1.
+ */
+static int ff_file_slot(const ff_t *ff, const FILE *f)
+{
+    for (int i = 0; i < FF_OPEN_FILES_MAX; ++i)
+        if (ff->files[i] == f)
+            return i;
+    return -1;
+}
+
+#if FF_SAFE_MEM
+/**
+ * @param ff       Engine.
+ * @param f        Candidate stream from the data stack.
+ * @param std_too  Accept stdin / stdout / stderr as well.
+ * @return Whether @p f is a stream the program opened (or a standard one).
+ */
+static bool ff_file_valid(const ff_t *ff, const FILE *f, bool std_too)
+{
+    if (!f)
+        return false;
+    if (std_too && (f == stdin || f == stdout || f == stderr))
+        return true;
+    return ff_file_slot(ff, f) >= 0;
+}
+#endif
+#endif
+
 /* ===================================================================
  * Definitions and control structures.
  *
@@ -470,11 +580,30 @@ static void ff_throw(ff_t *ff, ff_int_t code)
  *
  * @param ff Engine.
  * @param op Opcode of the new word.
- * @return The new word, already in the dictionary.
+ * @return The new word, already in the dictionary, or NULL with the
+ *         error raised if the memory limit or the allocator refused it.
  */
 static ff_word_t *ff_def_new(ff_t *ff, ff_opcode_t op)
 {
-    ff_word_t *w = ff_dict_append(&ff->dict, ff_word_new(" ", NULL, op, NULL));
+    /* Only the newest word can get the name the input supplies next, so
+       a second one made before that — `create` run twice by one word —
+       could never be named, only pile up. */
+    if (ff->state & FF_STATE_DEF_PENDING)
+    {
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
+                  "A new word is still waiting for its name.");
+        return NULL;
+    }
+
+    size_t cost = ff_dict_word_cost(" ");
+    if (!ff_mem_fits(&ff->dict.mem, cost))
+        ff_mem_refuse(&ff->dict.mem, cost, false);
+    else if (!ff_dict_append(&ff->dict, ff_word_new(" ", NULL, op, NULL)))
+        ff_mem_refuse(&ff->dict.mem, cost, true);
+    if (ff_mem_check(ff))
+        return NULL;
+
+    ff_word_t *w = ff_dict_top(&ff->dict);
     ff->unnamed = w;
     ff->state |= FF_STATE_DEF_PENDING;
     return w;
@@ -484,13 +613,18 @@ static ff_word_t *ff_def_new(ff_t *ff, ff_opcode_t op)
  * Begin a colon definition (`:`).
  *
  * @param ff Engine.
+ * @return false, with the error raised, if its word couldn't be made.
  */
-static void ff_def_begin(ff_t *ff)
+static bool ff_def_begin(ff_t *ff)
 {
-    ff->compiling = ff_def_new(ff, FF_OP_NONE);
+    ff_word_t *w = ff_def_new(ff, FF_OP_NONE);
+    if (!w)
+        return false;
+    ff->compiling = w;
     ff->def_depth = ff->eval_depth;
     ff->n_cf = 0;
     ff->state |= FF_STATE_COMPILING;
+    return true;
 }
 
 /**
@@ -734,7 +868,7 @@ static bool ff_compile_call(ff_t *ff, const ff_word_t *w)
     }
 
     ff_heap_compile_word(h, w);
-    return true;
+    return !ff_mem_check(ff);
 }
 
 /**
@@ -767,10 +901,13 @@ static void ff_reset(ff_t *ff)
     for (ff_pad_slab_t *sl = ff->pad; sl; )
     {
         ff_pad_slab_t *next = sl->next;
+        ff_mem_release(&ff->dict.mem, sizeof(*sl) + sl->size);
         free(sl);
         sl = next;
     }
     ff->pad = NULL;
+    /* A refusal nobody raised is stale now. */
+    ff->dict.mem.failed = false;
 }
 
 /**
@@ -1032,6 +1169,14 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
 
     for (;;)
     {
+        /* Compiling the previous token may have needed memory it didn't
+           get (see ff_mem_p.h): stop before anything builds on it. */
+        if (ff_unlikely(ff->dict.mem.failed))
+        {
+            ff_mem_check(ff);
+            goto out;
+        }
+
         ff_token_t tok = ff_tokenizer_next(t, src, &pos);
 
         /* A token that overran FF_TOKEN_SIZE was silently truncated by the
@@ -1345,8 +1490,7 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                         char *dst = ff_pad_intern(ff, t->token, t->token_len);
                         if (!dst)
                         {
-                            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
-                                           "Out of memory growing pad arena.");
+                            ff_mem_check(ff);
                             goto out;
                         }
                         ff_stack_push_ptr(&ff->stack, dst);
@@ -1357,6 +1501,10 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     }
 
 out:
+    /* The last token compiled may have been refused memory too. (With
+       an exception already in flight this just clears the record.) */
+    ff_mem_check(ff);
+
     /* An exception discards the rest of this input, and with it whatever
        was being compiled from it: pending next-token flags, a word still
        waiting for its name, and a definition begun at this depth — with
@@ -1597,6 +1745,47 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 goto done; \
         } while (0)
 
+    /* After a case body that appended to a heap or made a word: an
+       allocation the memory limit or the allocator refused (see
+       ff_mem_p.h) ends the run here, before anything relies on what it
+       didn't get. */
+    #define _FF_CHECK_MEM() \
+        do { \
+            if (ff_unlikely(ff->dict.mem.failed)) \
+            { \
+                _FF_SYNC(); \
+                ff_mem_check(ff); \
+                goto done; \
+            } \
+        } while (0)
+
+    /* A size argument (`allot`, `array`, `fgets`, …) that is negative, or
+       otherwise out of range for its word. */
+    #define _FF_BAD_SIZE(cond, word, n) \
+        do { \
+            if (ff_unlikely(cond)) \
+            { \
+                _FF_SYNC(); \
+                ff_raise(ff, FF_THROW_BAD_ARG, FF_SEV_ERROR | FF_ERR_MALFORMED, \
+                         "%s: invalid size %" FF_PRIdCELL ".", (word), \
+                         (ff_int_t)(n)); \
+                goto done; \
+            } \
+        } while (0)
+
+    /* Words that reach outside the engine run only if the host hasn't
+       withheld them (ff_platform::deny). */
+    #define _FF_NEED_CAP(cap, word) \
+        do { \
+            if (ff_unlikely(ff->platform.deny & (cap))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED, \
+                          "'%s' is not permitted.", (word)); \
+                goto done; \
+            } \
+        } while (0)
+
     /* True while an operand-free opcode runs straight from a word's stub —
        the interpreter (via ff_exec) or `execute` running the word itself —
        rather than from compiled code. Valid only before any `ip++`. */
@@ -1617,6 +1806,19 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 goto done; \
             } \
         } while (0)
+    /* For memory about to be written: not bytecode, not a native's fn
+       pointer (see ff_word_holds_data). */
+    #define _FF_CHECK_WRITE(addr, bytes) \
+        do { \
+            if (ff_unlikely(!ff_addr_writable(ff, (addr), (size_t)(bytes)))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
+                          "Bad pointer for a write: %p (size %zu).", \
+                          (const void *)(addr), (size_t)(bytes)); \
+                goto done; \
+            } \
+        } while (0)
     #define _FF_CHECK_XT(w) \
         do { \
             if (ff_unlikely(!ff_word_valid(ff, (w)))) \
@@ -1627,9 +1829,48 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 goto done; \
             } \
         } while (0)
+    #define _FF_CHECK_STR(s) \
+        do { \
+            if (ff_unlikely(!ff_str_valid(ff, (const char *)(intptr_t)(s)))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
+                          "Bad string: %p.", (const void *)(intptr_t)(s)); \
+                goto done; \
+            } \
+        } while (0)
+    /* A file stream the program opened; with std_too, stdin / stdout /
+       stderr as well (everything but `fclose`). */
+    #define _FF_CHECK_FILE(f, std_too) \
+        do { \
+            if (ff_unlikely(!ff_file_valid(ff, (const FILE *)(intptr_t)(f), \
+                                           (std_too)))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
+                          "Bad file stream: %p.", (const void *)(intptr_t)(f)); \
+                goto done; \
+            } \
+        } while (0)
+    /* `,`, `c,` and `allot` extend the newest word: only a data word, so
+       no program can append to bytecode (see ff_word_holds_data). */
+    #define _FF_CHECK_DATA_WORD(w) \
+        do { \
+            if (ff_unlikely(!ff_word_holds_data(w))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
+                          "'%s' holds code, not data.", (w)->name); \
+                goto done; \
+            } \
+        } while (0)
 #else
     #define _FF_CHECK_ADDR(addr, bytes) ((void)0)
+    #define _FF_CHECK_WRITE(addr, bytes) ((void)0)
     #define _FF_CHECK_XT(w)             ((void)0)
+    #define _FF_CHECK_STR(s)            ((void)0)
+    #define _FF_CHECK_FILE(f, std_too)  ((void)0)
+    #define _FF_CHECK_DATA_WORD(w)      ((void)0)
 #endif
 
     /* Watchdog: count back-branches and word calls, check for an
@@ -1828,6 +2069,15 @@ done:
     #undef _FF_COMPILING
     #undef _FF_NEED_DEF
     #undef _FF_CHECK_THROWN
+    #undef _FF_CHECK_MEM
+    #undef _FF_BAD_SIZE
+    #undef _FF_NEED_CAP
+    #undef _FF_CHECK_ADDR
+    #undef _FF_CHECK_WRITE
+    #undef _FF_CHECK_XT
+    #undef _FF_CHECK_STR
+    #undef _FF_CHECK_FILE
+    #undef _FF_CHECK_DATA_WORD
     #undef _FF_RUNNING_DIRECT
 }
 
@@ -1892,7 +2142,7 @@ ff_error_t ff_load(ff_t *ff, const char *path)
        one exception boundary: a failing line ends the load. */
     ff_eval_enter(ff);
 
-    FILE *f = fopen(path, "r");
+    FILE *f = ff_open_file(ff, path, "r");
     if (!f)
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
                   "Failed to open file '%s': %s.", path, strerror(errno));
@@ -1953,6 +2203,51 @@ ff_error_t ff_load(ff_t *ff, const char *path)
  * words that take user-supplied addresses, regardless of build mode.
  * ------------------------------------------------------------------- */
 
+/* The word heap containing @p a, or NULL. The index is rebuilt lazily on
+   the first call after a dictionary mutation. */
+static const ff_interval_t *ff_dict_region(const ff_t *ff, const char *a)
+{
+    size_t n = 0;
+    const ff_interval_t *ivs = ff_dict_intervals((ff_dict_t *)&ff->dict, &n);
+    size_t lo_i = 0, hi_i = n;
+    while (lo_i < hi_i)
+    {
+        size_t mid = lo_i + (hi_i - lo_i) / 2;
+        if (ivs[mid].lo <= a)
+            lo_i = mid + 1;
+        else
+            hi_i = mid;
+    }
+    if (lo_i > 0 && a < ivs[lo_i - 1].hi)
+        return &ivs[lo_i - 1];
+    return NULL;
+}
+
+/* End of the region — stack, string-arena slab, word heap — containing
+   @p a, or NULL; @p writable says whether a program may write it. */
+static const char *ff_region_end(const ff_t *ff, const char *a,
+                                 bool *writable)
+{
+    *writable = true;
+    if (a == NULL)
+        return NULL;
+
+    const char *lo = (const char *)ff->stack.data;
+    if (a >= lo && a < lo + sizeof(ff->stack.data))
+        return lo + sizeof(ff->stack.data);
+    lo = (const char *)ff->r_stack.data;
+    if (a >= lo && a < lo + sizeof(ff->r_stack.data))
+        return lo + sizeof(ff->r_stack.data);
+    for (const ff_pad_slab_t *sl = ff->pad; sl; sl = sl->next)
+        if (a >= sl->data && a < sl->data + sl->used)
+            return sl->data + sl->used;
+    const ff_interval_t *iv = ff_dict_region(ff, a);
+    if (!iv)
+        return NULL;
+    *writable = iv->writable;
+    return iv->hi;
+}
+
 /** @copydoc ff_addr_valid_dict */
 bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes)
 {
@@ -1968,44 +2263,31 @@ bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes)
     if (end < a)
         return false;
 
-    /* Two indexes — the per-instance one for user-word heaps
-       (rebuilt lazily on the first call after a mutation), and the
-       shared one for built-in native fn-pointer heaps (built once
-       during ff_builtins_init and immutable). Membership in either
-       is enough. */
-    size_t n = 0;
-    const ff_interval_t *ivs = ff_dict_intervals((ff_dict_t *)&ff->dict, &n);
-    for (int pass = 0; pass < 2; ++pass)
-    {
-        if (n > 0)
-        {
-            size_t lo_i = 0, hi_i = n;
-            while (lo_i < hi_i)
-            {
-                size_t mid = lo_i + (hi_i - lo_i) / 2;
-                if (ivs[mid].lo <= a)
-                    lo_i = mid + 1;
-                else
-                    hi_i = mid;
-            }
-            if (lo_i > 0)
-            {
-                const ff_interval_t *iv = &ivs[lo_i - 1];
-                if (a >= iv->lo && end <= iv->hi)
-                    return true;
-            }
-        }
-        if (pass == 0 && ff->dict.builtins)
-        {
-            ivs = ff->dict.builtins->intervals;
-            n   = ff->dict.builtins->intervals_count;
-        }
-        else
-        {
-            break;
-        }
-    }
-    return false;
+    const ff_interval_t *iv = ff_dict_region(ff, a);
+    return iv && end <= iv->hi;
+}
+
+/** @copydoc ff_addr_extent */
+const char *ff_addr_extent(const ff_t *ff, const void *addr)
+{
+    bool writable;
+    return ff_region_end(ff, (const char *)addr, &writable);
+}
+
+/** @copydoc ff_addr_writable */
+bool ff_addr_writable(const ff_t *ff, const void *addr, size_t bytes)
+{
+    const char *a = (const char *)addr;
+    bool writable;
+    const char *end = ff_region_end(ff, a, &writable);
+    return end && writable && bytes && bytes <= (size_t)(end - a);
+}
+
+/** @copydoc ff_str_valid */
+bool ff_str_valid(const ff_t *ff, const char *s)
+{
+    const char *end = ff_addr_extent(ff, s);
+    return end && memchr(s, '\0', (size_t)(end - s)) != NULL;
 }
 
 /** @copydoc ff_word_valid */

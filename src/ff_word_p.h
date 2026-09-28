@@ -62,7 +62,7 @@ typedef void (*ff_word_fn)(ff_t *ff);
  * @param manual Manual entry; first line is the prototype, rest is
  *               the synopsis. May be NULL.
  * @return Newly allocated word, owned by the caller (typically the
- *         dictionary).
+ *         dictionary), or NULL if memory ran out.
  */
 ff_word_t *ff_word_new(const char *name, ff_word_fn code,
                        ff_opcode_t opcode, const char *manual);
@@ -74,7 +74,7 @@ ff_word_t *ff_word_new(const char *name, ff_word_fn code,
  * @param code   Optional native fn pointer.
  * @param opcode Opcode.
  * @param manual Manual entry; may be NULL.
- * @return Newly allocated immediate word.
+ * @return Newly allocated immediate word, or NULL if memory ran out.
  */
 ff_word_t *ff_im_word_new(const char *name, ff_word_fn code,
                           ff_opcode_t opcode, const char *manual);
@@ -148,6 +148,19 @@ void ff_word_set_opcode(ff_word_t *w, ff_opcode_t op);
  * @return true iff @p w should be displayed as native by `see`.
  */
 bool ff_word_is_native(const ff_word_t *w);
+
+/**
+ * Test whether @p w's heap is data a program may address: the storage of
+ * a `create`, `variable`, `constant`, `array`, `string`, `defer` or
+ * `does>` word. A colon definition's heap is its bytecode, the
+ * definition being compiled is bytecode in the making, and a native
+ * word's holds a function pointer; under FF_SAFE_MEM none of those can
+ * be read, written or extended by Forth code, which could otherwise
+ * forge the pointers the inner interpreter follows.
+ *
+ * @param w Word to inspect.
+ */
+bool ff_word_holds_data(const ff_word_t *w);
 
 /**
  * Retrieve the native function pointer of an external native word.

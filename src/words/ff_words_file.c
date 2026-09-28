@@ -18,12 +18,17 @@
 
 const ff_word_def_t FF_FILE_WORDS[] =
 {
+#if FF_WITH_SYSTEM
     _FF_W("system", FF_OP_SYSTEM,
       "( s -- n )  Execute system command\n"
       "Calls the host environment's command processor\n"
       "(*/bin/sh*, *cmd.exe*, *command.com*) with the parameter command.\n"
       "Returns an implementation-defined value (usually the value that\n"
-      "the invoked program returns)."),
+      "the invoked program returns).\n"
+      "\n"
+      "The host may run commands its own way, or not at all."),
+#endif
+#if FF_WITH_FILES
     _FF_W("stdin", FF_OP_STDIN,
       "( -- stream )  stdin file stream\n"
       "*stdin* file stream is left on the top of the stack.\n"
@@ -43,7 +48,11 @@ const ff_word_def_t FF_FILE_WORDS[] =
       "( mode path -- stream )  Open file\n"
       "Opens a file indicated by *path* and returns a file\n"
       "stream associated with that file. *mode* is used to\n"
-      "determine the file access mode."),
+      "determine the file access mode.\n"
+      "\n"
+      "The host may confine which files can be opened, or deny file\n"
+      "access altogether. Streams left open are closed when the engine\n"
+      "is freed."),
     _FF_W("fclose", FF_OP_FCLOSE,
       "( stream -- n )  Close file\n"
       "Closes the given file stream *stream*. Any unwritten buffered\n"
@@ -83,6 +92,7 @@ const ff_word_def_t FF_FILE_WORDS[] =
     _FF_W("seek_end", FF_OP_SEEK_END,
       "( -- SEEK_END )  SEEK_END constant\n"
       "Leaves *SEEK_END* constant on stack."),
+#endif
     _FF_W("ERRNO", FF_OP_ERRNO,
       "( -- errno )  C standard library error\n"
       "Several C standard library functions indicate errors by writing positive\n"

@@ -25,7 +25,7 @@ case FF_OP_HERE:
 /** ( v a -- )  `!` — store v at address a. */
 case FF_OP_STORE:
     _FF_SL(2);
-    _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(ff_int_t));
+    _FF_CHECK_WRITE((const void *)(intptr_t)tos, sizeof(ff_int_t));
     *(ff_int_t *)(intptr_t)tos = _FF_NOS;
     _FF_DROPN(2);
     _FF_NEXT();
@@ -40,7 +40,7 @@ case FF_OP_FETCH:
 /** ( v a -- )  `+!` — *a += v. */
 case FF_OP_PLUS_STORE:
     _FF_SL(2);
-    _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(ff_int_t));
+    _FF_CHECK_WRITE((const void *)(intptr_t)tos, sizeof(ff_int_t));
     *(ff_int_t *)(intptr_t)tos += _FF_NOS;
     _FF_DROPN(2);
     _FF_NEXT();
@@ -49,16 +49,13 @@ case FF_OP_PLUS_STORE:
 case FF_OP_ALLOT:
     _FF_NEED_DEF;
     _FF_SL(1);
-    if (ff_unlikely(tos <= 0))
-    {
-        /* A negative count (or 0) previously truncated through `(int)` into
-           a huge size_t and corrupted the heap. Reject it. */
-        _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                  "allot requires a positive cell count.");
-        goto done;
-    }
+    /* A negative count (or 0) previously truncated through `(int)` into
+       a huge size_t and corrupted the heap. One too large for memory, or
+       for the memory limit, is refused by the heap. */
+    _FF_BAD_SIZE(tos <= 0, "allot", tos);
+    _FF_CHECK_DATA_WORD(ff_dict_top(&ff->dict));
     ff_heap_alloc(&ff_dict_top(&ff->dict)->heap, (size_t)tos);
+    _FF_CHECK_MEM();
     _FF_DROP();
     _FF_NEXT();
 
@@ -66,14 +63,16 @@ case FF_OP_ALLOT:
 case FF_OP_COMMA:
     _FF_NEED_DEF;
     _FF_SL(1);
+    _FF_CHECK_DATA_WORD(ff_dict_top(&ff->dict));
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, tos);
+    _FF_CHECK_MEM();
     _FF_DROP();
     _FF_NEXT();
 
 /** ( v a -- )  `c!` — store v as a single byte at address a. */
 case FF_OP_C_STORE:
     _FF_SL(2);
-    _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(char));
+    _FF_CHECK_WRITE((const void *)(intptr_t)tos, sizeof(char));
     *(char *)(intptr_t)tos = (char)_FF_NOS;
     _FF_DROPN(2);
     _FF_NEXT();
@@ -89,7 +88,9 @@ case FF_OP_C_FETCH:
 case FF_OP_C_COMMA:
     _FF_NEED_DEF;
     _FF_SL(1);
+    _FF_CHECK_DATA_WORD(ff_dict_top(&ff->dict));
     ff_heap_compile_char(&ff_dict_top(&ff->dict)->heap, (char)tos);
+    _FF_CHECK_MEM();
     _FF_DROP();
     _FF_NEXT();
 

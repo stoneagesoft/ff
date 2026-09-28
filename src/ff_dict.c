@@ -23,33 +23,143 @@
 #define FF_DICT_ARENA_SLAB     (64 * 1024)
 
 
-static void ff_dict_ensure(ff_dict_t *d, size_t extra);
+static bool ff_dict_ensure(ff_dict_t *d, size_t extra);
 
+
+/** @copydoc ff_arena_refuse */
+void ff_arena_refuse(ff_arena_t *a, size_t bytes)
+{
+    if (a->mem)
+        ff_mem_refuse(a->mem, bytes, false);
+}
+
+/* Capacity of the slab a request for `bytes` (already rounded) would
+   open: the default size, or the request if bigger — cut back to what
+   the limit leaves, since a request that fits shouldn't fail for the
+   sake of the slack after it. 0 if even the request doesn't fit. */
+static size_t ff_arena_slab_cap(const ff_arena_t *a, size_t bytes)
+{
+    size_t cap = a->default_slab_size ? a->default_slab_size
+                                      : FF_DICT_ARENA_SLAB;
+    if (cap < bytes)
+        cap = bytes;
+    if (a->mem)
+    {
+        size_t room = ff_mem_room(a->mem);
+        size_t head = sizeof(ff_arena_slab_t);
+        if (room < head + bytes)
+            return 0;
+        if (cap > room - head)
+            cap = room - head;
+    }
+    return cap;
+}
+
+/** @copydoc ff_arena_fits */
+bool ff_arena_fits(const ff_arena_t *a, size_t bytes)
+{
+    if (bytes > SIZE_MAX - 7)
+        return false;
+    bytes = (bytes + 7) & ~(size_t)7;
+    const ff_arena_slab_t *s = a->head;
+    if (s && bytes <= s->cap - s->used)
+        return true;
+    return bytes <= SIZE_MAX - sizeof(ff_arena_slab_t)
+               && ff_arena_slab_cap(a, bytes) != 0;
+}
 
 /** @copydoc ff_arena_alloc */
 void *ff_arena_alloc(ff_arena_t *a, size_t bytes)
 {
+    if (bytes > SIZE_MAX - 7 - sizeof(ff_arena_slab_t))
+    {
+        ff_arena_refuse(a, SIZE_MAX);
+        return NULL;
+    }
     /* 8-byte alignment is enough for ff_int_t (intptr_t) on every
        platform we target. */
     bytes = (bytes + 7) & ~(size_t)7;
 
     ff_arena_slab_t *s = a->head;
-    if (s == NULL || s->used + bytes > s->cap)
+    if (s == NULL || bytes > s->cap - s->used)
     {
-        size_t cap = a->default_slab_size
-                         ? a->default_slab_size
-                         : FF_DICT_ARENA_SLAB;
-        if (cap < bytes)
-            cap = bytes;
+        size_t cap = ff_arena_slab_cap(a, bytes);
+        if (cap == 0)
+        {
+            ff_arena_refuse(a, bytes);
+            return NULL;
+        }
         s = (ff_arena_slab_t *)malloc(sizeof(ff_arena_slab_t) + cap);
+        if (!s)
+        {
+            if (a->mem)
+                ff_mem_refuse(a->mem, bytes, true);
+            return NULL;
+        }
         s->cap  = cap;
         s->used = 0;
+        s->seq  = ++a->seq;
         s->next = a->head;
         a->head = s;
+        if (a->mem)
+            ff_mem_charge(a->mem, sizeof(ff_arena_slab_t) + cap);
     }
     void *p = &s->data[s->used];
     s->used += bytes;
     return p;
+}
+
+/** @copydoc ff_arena_mark */
+ff_arena_mark_t ff_arena_mark(const ff_arena_t *a)
+{
+    ff_arena_mark_t m = { 0, 0 };
+    if (a->head)
+    {
+        m.seq  = a->head->seq;
+        m.used = a->head->used;
+    }
+    return m;
+}
+
+/* True if position `x` lies after position `y`. */
+static bool ff_arena_after(ff_arena_mark_t x, ff_arena_mark_t y)
+{
+    return x.seq > y.seq || (x.seq == y.seq && x.used > y.used);
+}
+
+/* Position just past the region of `bytes` bytes that starts at `p`, if
+   `p` is in one of the arena's slabs. Located by its start: an end
+   address can coincide with the start of another slab. */
+static bool ff_arena_locate_end(const ff_arena_t *a, const void *p,
+                                size_t bytes, ff_arena_mark_t *out)
+{
+    const char *c = (const char *)p;
+    for (const ff_arena_slab_t *s = a->head; s; s = s->next)
+    {
+        if (c >= s->data && c < s->data + s->cap)
+        {
+            out->seq  = s->seq;
+            out->used = (size_t)(c - s->data) + ((bytes + 7) & ~(size_t)7);
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Give back everything allocated after position `m`: free the slabs
+   made since, and rewind the one `m` is in. */
+static void ff_arena_release(ff_arena_t *a, ff_arena_mark_t m)
+{
+    while (a->head && a->head->seq > m.seq)
+    {
+        ff_arena_slab_t *s = a->head;
+        a->head = s->next;
+        if (a->mem)
+            ff_mem_release(a->mem, sizeof(ff_arena_slab_t) + s->cap);
+        free(s);
+    }
+    if (a->head && a->head->seq == m.seq && a->head->used > m.used)
+        a->head->used = m.used;
 }
 
 /* Round a byte count up the same way ff_arena_alloc does, so trim
@@ -160,6 +270,32 @@ static void ff_dict_buckets_rebuild(ff_dict_t *d)
 }
 
 
+/**
+ * Give the arena back from position @p from, after words were removed:
+ * everything allocated after it belonged to them. A remaining word's
+ * heap can lie beyond it too — a definition that kept growing after a
+ * word was created between its `[` and `]` — so stop short of the last
+ * such heap.
+ *
+ * @param d    Dictionary.
+ * @param from Arena position where the first removed word began.
+ */
+static void ff_dict_reclaim(ff_dict_t *d, ff_arena_mark_t from)
+{
+    for (size_t i = 0; i < d->count; ++i)
+    {
+        const ff_heap_t *h = &d->words[i]->heap;
+        ff_arena_mark_t end;
+        if (h->arena == &d->arena && h->data && h->capacity
+                && ff_arena_locate_end(&d->arena, h->data,
+                                       h->capacity * sizeof(ff_int_t), &end)
+                && ff_arena_after(end, from))
+            from = end;
+    }
+    ff_arena_release(&d->arena, from);
+}
+
+
 // Public
 
 /**
@@ -211,6 +347,7 @@ void ff_dict_init(ff_dict_t *d, const ff_builtins_t *builtins)
     d->builtins = builtins;
     if (builtins && builtins->static_pool_size)
         d->builtins_used = (uint8_t *)calloc((builtins->static_pool_size + 7) / 8, 1);
+    d->arena.mem = &d->mem;
 }
 
 /** @copydoc ff_dict_destroy */
@@ -313,13 +450,24 @@ bool ff_dict_word_was_used(const ff_dict_t *d, const ff_word_t *w)
     return (w->flags & FF_WORD_USED) != 0;
 }
 
+/** @copydoc ff_dict_word_cost */
+size_t ff_dict_word_cost(const char *name)
+{
+    return sizeof(ff_word_t) + sizeof(ff_word_t *) + strlen(name) + 1;
+}
+
 /** @copydoc ff_dict_append */
 ff_word_t *ff_dict_append(ff_dict_t *d, ff_word_t *w)
 {
-    assert(w);
-
-    ff_dict_ensure(d, 1);
+    if (!w)
+        return NULL;
+    if (!ff_dict_ensure(d, 1))
+    {
+        ff_word_free(w);
+        return NULL;
+    }
     d->words[d->count++] = w;
+    ff_mem_charge(&d->mem, ff_dict_word_cost(w->name));
     ff_dict_bucket_insert(d, w);
     /* Wire the heap to bump our mutation_seq on every realloc-that-
        moves-data, then bump for this append itself. */
@@ -330,7 +478,10 @@ ff_word_t *ff_dict_append(ff_dict_t *d, ff_word_t *w)
        arena and malloc on the same heap would risk freeing arena
        memory in ff_heap_destroy or vice versa. */
     if (w->heap.data == NULL)
+    {
         w->heap.arena = &d->arena;
+        w->heap.mark  = ff_arena_mark(&d->arena);
+    }
     ++d->mutation_seq;
     return w;
 }
@@ -353,6 +504,8 @@ void ff_dict_rename(ff_dict_t *d, ff_word_t *w, const char *new_name)
     char *dup = strdup(new_name);
     if (dup)
     {
+        ff_mem_release(&d->mem, strlen(w->name));
+        ff_mem_charge(&d->mem, strlen(dup));
         free(w->name);
         w->name = dup;
     }
@@ -371,10 +524,22 @@ bool ff_dict_forget(ff_dict_t *d, const char *name)
     {
         if (utf8casecmp(d->words[i]->name, name) == 0)
         {
+            /* Every word from here on goes, so the arena can go back to
+               where the earliest of them began. (Usually the first; a
+               heap trimmed back at `;` can put a later word's start
+               lower.) */
+            ff_arena_mark_t from = d->words[i]->heap.mark;
             for (size_t j = i; j < d->count; ++j)
+            {
+                if (d->words[j]->heap.arena == &d->arena
+                        && ff_arena_after(from, d->words[j]->heap.mark))
+                    from = d->words[j]->heap.mark;
+                ff_mem_release(&d->mem, ff_dict_word_cost(d->words[j]->name));
                 ff_word_free(d->words[j]);
+            }
             d->count = (size_t)i;
             ff_dict_buckets_rebuild(d);
+            ff_dict_reclaim(d, from);
             ++d->mutation_seq;
             return true;
         }
@@ -394,7 +559,12 @@ bool ff_dict_remove(ff_dict_t *d, ff_word_t *w)
                 (d->count - i - 1) * sizeof(d->words[0]));
         d->count--;
         ff_dict_bucket_unlink(d, w);
+        ff_arena_mark_t from = w->heap.mark;
+        bool in_arena = w->heap.arena == &d->arena;
+        ff_mem_release(&d->mem, ff_dict_word_cost(w->name));
         ff_word_free(w);
+        if (in_arena)
+            ff_dict_reclaim(d, from);
         ++d->mutation_seq;
         return true;
     }
@@ -426,8 +596,16 @@ const ff_interval_t *ff_dict_intervals(ff_dict_t *d, size_t *count)
     {
         size_t nc = d->intervals_capacity ? d->intervals_capacity : 64;
         while (nc < d->count) nc *= 2;
-        d->intervals = (ff_interval_t *)realloc(d->intervals,
-                                                nc * sizeof(ff_interval_t));
+        ff_interval_t *grown = (ff_interval_t *)realloc(d->intervals,
+                                                        nc * sizeof(ff_interval_t));
+        if (!grown)
+        {
+            /* No index: every dictionary address fails the check, which
+               is safe, until memory allows a rebuild. */
+            *count = 0;
+            return d->intervals;
+        }
+        d->intervals = grown;
         d->intervals_capacity = nc;
     }
 
@@ -441,6 +619,9 @@ const ff_interval_t *ff_dict_intervals(ff_dict_t *d, size_t *count)
         const char *hi = lo + w->heap.capacity * sizeof(ff_int_t);
         d->intervals[n].lo = lo;
         d->intervals[n].hi = hi;
+        /* Bytecode and native fn pointers are read-only to a program,
+           which could otherwise forge what the interpreter follows. */
+        d->intervals[n].writable = ff_word_holds_data(w);
         ++n;
     }
     if (n > 1)
@@ -470,8 +651,9 @@ void ff_dict_define(ff_dict_t *d, const ff_word_def_t *defs)
  *
  * @param d     Dictionary.
  * @param extra Slots required beyond @ref ff_dict::count.
+ * @return false, leaving the table as it was, if it couldn't grow.
  */
-static void ff_dict_ensure(ff_dict_t *d, size_t extra)
+static bool ff_dict_ensure(ff_dict_t *d, size_t extra)
 {
     if (d->count + extra > d->capacity)
     {
@@ -486,9 +668,16 @@ static void ff_dict_ensure(ff_dict_t *d, size_t extra)
             }
             nc = doubled;
         }
-        d->words = (ff_word_t **)realloc(d->words, nc * sizeof(ff_word_t *));
+        if (nc > SIZE_MAX / sizeof(ff_word_t *))
+            return false;
+        ff_word_t **grown = (ff_word_t **)realloc(d->words,
+                                                  nc * sizeof(ff_word_t *));
+        if (!grown)
+            return false;
+        d->words = grown;
         d->capacity = nc;
     }
+    return true;
 }
 
 
@@ -547,33 +736,6 @@ void ff_builtins_init(ff_builtins_t *b)
     ff_builtins_define_static(b, FF_STRING_WORDS, &pool_idx);
     ff_builtins_define_static(b, FF_VAR_WORDS,    &pool_idx);
     assert(pool_idx == b->static_pool_size);
-
-    /* Sorted intervals over native-word fn-pointer heaps. Built-ins
-       with FF_WORD_NATIVE stash a fn pointer at heap.data[0] (one
-       cell of malloc'd storage). User code that does `c@` / `@`
-       through one of those pointers needs ff_addr_valid to recognize
-       it under FF_SAFE_MEM. */
-    size_t native_count = 0;
-    for (size_t i = 0; i < b->static_pool_size; ++i)
-        if (b->static_pool[i].heap.data && b->static_pool[i].heap.capacity)
-            ++native_count;
-    if (native_count)
-    {
-        b->intervals = (ff_interval_t *)calloc(native_count, sizeof(ff_interval_t));
-        size_t n = 0;
-        for (size_t i = 0; i < b->static_pool_size; ++i)
-        {
-            const ff_word_t *w = &b->static_pool[i];
-            if (!w->heap.data || !w->heap.capacity) continue;
-            b->intervals[n].lo = (const char *)w->heap.data;
-            b->intervals[n].hi = (const char *)w->heap.data
-                                  + w->heap.capacity * sizeof(ff_int_t);
-            ++n;
-        }
-        if (n > 1)
-            qsort(b->intervals, n, sizeof(ff_interval_t), ff_interval_cmp);
-        b->intervals_count = n;
-    }
 }
 
 /** @copydoc ff_builtins_destroy */
@@ -587,7 +749,6 @@ void ff_builtins_destroy(ff_builtins_t *b)
         ff_heap_destroy(&b->static_pool[i].heap);
     free(b->static_pool);
     free(b->buckets);
-    free(b->intervals);
     memset(b, 0, sizeof(*b));
 }
 

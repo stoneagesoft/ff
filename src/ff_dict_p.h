@@ -18,6 +18,8 @@
 
 #pragma once
 
+#include <ff_heap_p.h>
+#include <ff_mem_p.h>
 #include <ff_word_def_p.h>
 
 #include <stdbool.h>
@@ -83,14 +85,24 @@ ff_word_t *ff_dict_top(ff_dict_t *d);
 ff_word_t *ff_dict_lookup(ff_dict_t *d, const char *name);
 
 /**
- * Append @p w as the newest word and link it into its hash bucket.
+ * Append @p w as the newest word and link it into its hash bucket, and
+ * charge it to the dictionary's account.
  *
  * @param d Dictionary.
- * @param w Word to append; must outlive @p d unless freed via
- *          ff_dict_forget() / ff_dict_destroy().
- * @return @p w, for convenient chaining.
+ * @param w Word to append (may be NULL, from a failed ff_word_new());
+ *          must outlive @p d unless freed via ff_dict_forget() /
+ *          ff_dict_remove() / ff_dict_destroy().
+ * @return @p w, or NULL — with @p w freed — if the word table couldn't
+ *         grow.
  */
 ff_word_t *ff_dict_append(ff_dict_t *d, ff_word_t *w);
+
+/**
+ * @brief What a user word named @p name costs the account: the word, its
+ *        name and its slot in the word table (its heap is charged to
+ *        the arena separately).
+ */
+size_t ff_dict_word_cost(const char *name);
 
 /**
  * Atomically rename a word and re-bucket it under the new name. Used
@@ -105,7 +117,8 @@ void ff_dict_rename(ff_dict_t *d, ff_word_t *w, const char *new_name);
 
 /**
  * Remove @p name and every later-defined word from the dictionary
- * (Forth's FORGET). Rebuilds the bucket index after truncation.
+ * (Forth's FORGET). Rebuilds the bucket index after truncation, and
+ * hands the arena back from where the forgotten word began.
  *
  * @param d    Dictionary.
  * @param name Name of the word marking the cut point.
@@ -117,7 +130,8 @@ bool ff_dict_forget(ff_dict_t *d, const char *name);
  * Remove the single word @p w from the dictionary and free it, leaving
  * every other word in place — unlike ff_dict_forget(), which cuts off
  * everything defined after it too. Used to drop a definition that failed
- * to compile: nothing compiled before it can refer to it.
+ * to compile: nothing compiled before it can refer to it. The arena is
+ * handed back from where @p w began, short of any remaining word's heap.
  *
  * @param d Dictionary.
  * @param w Word to remove.
@@ -146,18 +160,22 @@ typedef struct ff_interval
 {
     const char *lo;        /**< First byte (inclusive). */
     const char *hi;        /**< One past the last byte. */
+    bool writable;         /**< A data word's heap (ff_word_holds_data()); bytecode and native
+                                fn pointers can be read but not written. */
 } ff_interval_t;
 
 /**
  * @brief One slab in the dict's word-heap arena.
  *
  * Bumps `used` forward as words allocate. When the next allocation
- * doesn't fit, a new slab is linked in. Slabs are freed in bulk by
- * @ref ff_dict_destroy.
+ * doesn't fit, a new slab is linked in. Removing words hands back the
+ * slabs allocated after them (see ff_dict_forget()); the rest are freed
+ * by @ref ff_dict_destroy.
  */
 typedef struct ff_arena_slab
 {
     struct ff_arena_slab *next; /**< Linked list, newest first. */
+    unsigned long seq;           /**< Creation order, from 1; orders ff_arena_mark_t positions. */
     size_t cap;                  /**< Bytes in @ref data. */
     size_t used;                 /**< Bytes consumed. */
     char data[];                 /**< Flexible payload. */
@@ -178,20 +196,28 @@ struct ff_arena
 {
     ff_arena_slab_t *head;       /**< Newest slab; allocations come from here first. */
     size_t           default_slab_size; /**< Default `cap` for new slabs. */
+    unsigned long    seq;        /**< Sequence number of the newest slab ever made. */
+    ff_mem_t        *mem;        /**< Account slabs are charged to, or NULL. */
 };
 
 /**
  * @brief Allocate @p bytes from the arena.
  *
- * Follows the engine's fail-fast allocation policy: on host allocator
- * failure it does not return a clean error — the process faults. Deep
- * compile-time allocation paths (this, the per-word heaps, the dict
- * table) cannot be unwound mid-definition, so the library assumes they
- * succeed. Hosts that must survive OOM should cap input size up front;
- * the one recoverable allocation, engine creation, is reported by
- * ff_new() returning NULL.
+ * A new slab counts against the account's limit. When the limit or the
+ * host allocator refuses it, the refusal is recorded in the account and
+ * NULL is returned; the caller writes nothing, and the engine raises the
+ * error at its next check (see ff_mem_p.h).
  */
 void *ff_arena_alloc(ff_arena_t *a, size_t bytes);
+
+/** @brief Whether an allocation of @p bytes would stay within the limit. */
+bool  ff_arena_fits(const ff_arena_t *a, size_t bytes);
+
+/** @brief Record a refused allocation of @p bytes (a size that can't be represented). */
+void  ff_arena_refuse(ff_arena_t *a, size_t bytes);
+
+/** @brief The arena's current position: where the next allocation starts. */
+ff_arena_mark_t ff_arena_mark(const ff_arena_t *a);
 
 /** @brief Free every slab. The arena is left zeroed. */
 void  ff_arena_destroy(ff_arena_t *a);
@@ -219,8 +245,6 @@ struct ff_builtins
     size_t      static_pool_size;  /**< Number of valid entries in @ref static_pool. */
     ff_word_t **buckets;           /**< Power-of-two hash buckets over the pool. */
     size_t      bucket_count;
-    ff_interval_t *intervals;      /**< Sorted heap intervals (native-word fn-pointer heaps). */
-    size_t         intervals_count;
 };
 
 /** @brief Populate @p b with every FF_*_WORDS table; thread-unsafe. */
@@ -275,9 +299,10 @@ struct ff_dict
     unsigned long mutation_seq;
 
     /**
-     * Sorted interval index over each word's heap. Built lazily by
-     * @ref ff_dict_intervals on first call after a mutation; cached
-     * across queries. @ref ff_addr_valid binary-searches it.
+     * Sorted interval index over each word's heap, each marked writable
+     * or not (see ff_word_holds_data()). Built lazily by @ref
+     * ff_dict_intervals on first call after a mutation; cached across
+     * queries. @ref ff_addr_valid binary-searches it.
      */
     ff_interval_t *intervals;
     size_t intervals_count;
@@ -291,6 +316,13 @@ struct ff_dict
      * malloc path so their pre-arena fn-pointer stash stays valid.
      */
     ff_arena_t arena;
+
+    /**
+     * What this engine holds for Forth code — the arena's slabs, the
+     * user words and their names, and (charged by the engine) the
+     * transient string arena — against the host's limit.
+     */
+    ff_mem_t mem;
 };
 
 /**

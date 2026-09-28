@@ -110,7 +110,9 @@ ff_error_t ff_eval(ff_t *ff, const char *src);
 bool ff_exec(ff_t *ff, ff_word_t *w);
 
 /**
- * Load a file as if every line were passed to ff_eval() in order.
+ * Load a file as if every line were passed to ff_eval() in order. The
+ * file is opened through ff_platform::open_file when the host set one;
+ * ff_platform::deny doesn't apply — it limits Forth code, not the host.
  *
  * @param ff   Engine instance.
  * @param path File path; NULL or empty is a no-op returning FF_OK.
@@ -124,8 +126,10 @@ ff_error_t ff_load(ff_t *ff, const char *path);
 
 /**
  * Reset the engine's transient state: clears both stacks, drops the
- * current IP, leaves compile mode, and clears the tokenizer's comment
- * state. Word definitions and the dictionary are preserved.
+ * current IP, abandons a definition being compiled, clears the
+ * tokenizer's comment state, and frees the transient string arena
+ * (giving its memory back to the ff_platform::mem_limit account).
+ * Finished word definitions are preserved.
  *
  * Called from inside a running word (a native word), it can't tear the
  * engine down under its callers: it raises ABORT instead, which unwinds
