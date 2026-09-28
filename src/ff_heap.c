@@ -173,9 +173,13 @@ void ff_heap_compile_word(ff_heap_t *h, const ff_word_t *w)
         ff_heap_compile_op(h, w->opcode);
         return;
     }
-    else if (!ff_word_is_native(w))
+    else if (!(w->flags & FF_WORD_NATIVE))
     {
-        /* Non-native without an opcode (legacy colon-def path): nest. */
+        /* No opcode and no native fn: the colon definition being compiled,
+           called from its own body. It gets FF_OP_NEST only at `;`. Tested
+           by the flag, not ff_word_is_native(): that also counts an empty
+           heap as native, which is exactly the state of a definition whose
+           first token calls itself — it compiled a CALL through garbage. */
         ff_heap_push(h, FF_OP_NEST);
         ff_heap_push(h, (ff_int_t)(intptr_t)w);
     }

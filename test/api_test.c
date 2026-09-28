@@ -4,8 +4,9 @@
  * Covers what a script test can't observe: the state an error leaves on
  * the return stack and the scope barrier, the location reported for an
  * error, ff_load()'s line handling, the watchdog / abort flag across
- * nested evaluations, errors raised by native words, and ff_exec() called
- * directly by a host. It includes <ff_p.h> the way a native-word author
+ * nested evaluations, errors raised by native words, ff_exec() called
+ * directly by a host, and what a definition that fails leaves in the
+ * dictionary. It includes <ff_p.h> the way a native-word author
  * does, and is built with strict warnings, so it also checks that the
  * private headers compile cleanly.
  *
@@ -290,6 +291,56 @@ static void test_host_exec(void)
     ff_free(ff);
 }
 
+/* A definition that never reaches `;` leaves nothing in the dictionary:
+   not one an error ended, not one the host abandons with ff_abort(), and
+   not the nameless word `:` or `create` made when its name never came.
+   Each used to stay behind, half-built. */
+static void test_definitions(void)
+{
+    ff_t *ff = new_engine(10000000);
+    size_t base = ff->dict.count;
+
+    CHECK(ff_eval(ff, ": half 1 2 zork ;") == FF_ERR_UNDEFINED);
+    CHECK(ff_eval(ff, ": 42") == FF_ERR_MISSING);
+    CHECK(ff_eval(ff, "create 42") == FF_ERR_MISSING);
+    CHECK(ff_eval(ff, "5 constant \"x\"") == FF_ERR_MISSING);
+    CHECK(ff->dict.count == base);
+    CHECK(ff->compiling == NULL && ff->unnamed == NULL);
+    CHECK(!(ff->state & FF_STATE_COMPILING));
+
+    /* Left open across calls, then abandoned by the host. */
+    CHECK(ff_eval(ff, ": open 1 2") == FF_OK);
+    CHECK(ff->state & FF_STATE_COMPILING);
+    ff_abort(ff);
+    CHECK(ff->dict.count == base);
+    CHECK(ff->compiling == NULL);
+    CHECK(!(ff->state & FF_STATE_COMPILING));
+
+    /* A failing ff_exec() of the host's own is not part of the input a
+       definition is being compiled from, and leaves it open. */
+    CHECK(ff_eval(ff, ": open2 1") == FF_OK);
+    CHECK(!ff_exec(ff, ff_dict_lookup(&ff->dict, "drop")));
+    CHECK(ff_eval(ff, "2 ;") == FF_OK);
+    reset_output();
+    CHECK(ff_eval(ff, "open2 + .") == FF_OK);
+    CHECK(strcmp(g_out, "3") == 0);
+    CHECK(ff->dict.count == base + 1);
+
+    /* A definition a loaded file began goes with the load's own error. */
+    write_file("api_open.ff", ": in-file 1 2 ( runaway\n");
+    CHECK(ff_load(ff, "api_open.ff") == FF_ERR_RUN_COMMENT);
+    CHECK(ff->compiling == NULL);
+    CHECK(ff->dict.count == base + 1);
+    remove("api_open.ff");
+
+    /* `abort"` at the prompt raises with its own message; it used to read
+       one from past the end of its execution stub. */
+    CHECK(ff_eval(ff, "abort\" \"halt here\"") == FF_ERR_ABORTED);
+    CHECK(strcmp(ff_strerror(ff), "halt here") == 0);
+
+    ff_free(ff);
+}
+
 /* `load` pushes the THROW code that ended it, like `evaluate`, and QUIT
    in a loaded file ends the load without an error. */
 static void test_load_codes(void)
@@ -349,6 +400,7 @@ int main(void)
     test_native_errors();
     test_host_exec();
     test_load_codes();
+    test_definitions();
 
     if (g_failures)
         fprintf(stderr, "%d check(s) failed.\n", g_failures);

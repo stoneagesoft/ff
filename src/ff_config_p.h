@@ -35,6 +35,12 @@
 #define FF_SCOPE_ARGS_MAX   16
 
 /**
+ * @brief Maximum nesting of open control structures (`if`, `begin`,
+ *        `do`, …) within one definition.
+ */
+#define FF_CF_DEPTH         64
+
+/**
  * @brief Initial capacity of the transient-string bump arena, in bytes.
  *
  * Strings pushed by interpret-time string literals (`"foo"`) are

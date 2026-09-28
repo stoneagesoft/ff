@@ -192,6 +192,13 @@ case FF_OP_LEAVE:
     ff_stack_popn(R, 3);
     _FF_NEXT();
 
+/** ( -- )  R: ( leave-target limit index -- )  Drop the innermost loop's
+    parameters. Compiled ahead of an `exit` from inside a loop. */
+case FF_OP_UNLOOP:
+    _FF_RSL_T(3);
+    ff_stack_popn(R, 3);
+    _FF_NEXT();
+
 /** ( n -- n n | 0 -- 0 )  `?dup` — duplicate iff non-zero. */
 case FF_OP_QDUP:
     _FF_SL(1);
@@ -298,44 +305,53 @@ case FF_OP_CATCH:
     }
     _FF_NEXT();
 
-/** ( -- bp )  `if` — emit forward QBRANCH placeholder (immediate). */
+/* The compiling words below keep their structures on ff->cf (see
+   ff_cf_p.h), not on the data stack: each closer is checked against what
+   it closes. They call helpers that may raise, hence the _FF_SYNC()s. */
+
+/** ( -- )  `if` — emit forward QBRANCH placeholder (immediate). */
 case FF_OP_IF:
     _FF_COMPILING;
-    _FF_SO(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
         ff_heap_compile_int(h, 0);
-        _FF_PUSH((ff_int_t)(h->size - 1));
+        if (!ff_cf_push(ff, FF_CF_ORIG, "if", h->size - 1))
+            goto done;
     }
     _FF_NEXT();
 
-/** ( bp1 -- bp2 )  `else` — patch IF, emit forward BRANCH placeholder. */
+/** ( -- )  `else` — patch IF, emit forward BRANCH placeholder. */
 case FF_OP_ELSE:
     _FF_COMPILING;
-    _FF_SL(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_cf_t *c = ff_cf_top(ff, FF_CF_ORIG, "else", "if");
+        if (!c)
+            goto done;
+        ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_BRANCH);
         ff_heap_compile_int(h, 0);
-        int bp = (int)tos;
-        h->data[bp] = h->size - bp;
-        tos = h->size - 1;
+        h->data[c->pos] = h->size - c->pos;
+        c->opener = "else";
+        c->pos    = h->size - 1;
         /* The patched IF target lands here; the else-clause's first
            op must not fuse backward into the BRANCH or earlier. */
         ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
-/** ( bp -- )  `then` — patch the matching forward branch. */
+/** ( -- )  `then` — patch the matching forward branch. */
 case FF_OP_THEN:
     _FF_COMPILING;
-    _FF_SL(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
-        int bp = (int)tos;
-        h->data[bp] = h->size - bp;
-        _FF_DROP();
+        ff_cf_t *c = ff_cf_pop(ff, FF_CF_ORIG, "then", "if");
+        if (!c)
+            goto done;
+        ff_heap_t *h = &ff->compiling->heap;
+        h->data[c->pos] = h->size - c->pos;
         /* Position after THEN is a forward-branch target; the next
            op must not fold with whatever was the last op of the
            IF/ELSE clause. */
@@ -343,148 +359,168 @@ case FF_OP_THEN:
     }
     _FF_NEXT();
 
-/** ( -- target )  `begin` — record the current heap position. */
+/** ( -- )  `begin` — record the current heap position. */
 case FF_OP_BEGIN:
     _FF_COMPILING;
-    _FF_SO(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
-        _FF_PUSH((ff_int_t)h->size);
+        ff_heap_t *h = &ff->compiling->heap;
+        if (!ff_cf_push(ff, FF_CF_DEST, "begin", h->size))
+            goto done;
         /* Position is the back-branch target; the next op mustn't
            fold with the previous one. */
         ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
-/** ( target -- )  `until` — emit conditional back-branch. */
+/** ( -- )  `until` — emit conditional back-branch. */
 case FF_OP_UNTIL:
     _FF_COMPILING;
-    _FF_SL(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_cf_t *c = ff_cf_pop(ff, FF_CF_DEST, "until", "begin");
+        if (!c)
+            goto done;
+        ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
-        ff_heap_compile_int(h, -(ff_int_t)(h->size - tos));
-        _FF_DROP();
+        ff_heap_compile_int(h, -(ff_int_t)(h->size - c->pos));
     }
     _FF_NEXT();
 
-/** ( target -- )  `again` — emit unconditional back-branch. */
+/** ( -- )  `again` — emit unconditional back-branch. */
 case FF_OP_AGAIN:
     _FF_COMPILING;
-    _FF_SL(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_cf_t *c = ff_cf_pop(ff, FF_CF_DEST, "again", "begin");
+        if (!c)
+            goto done;
+        ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_BRANCH);
-        ff_heap_compile_int(h, -(ff_int_t)(h->size - tos));
-        _FF_DROP();
+        ff_heap_compile_int(h, -(ff_int_t)(h->size - c->pos));
     }
     _FF_NEXT();
 
-/** ( target -- target bp )  `while` — emit forward QBRANCH inside BEGIN..REPEAT. */
+/** ( -- )  `while` — emit forward QBRANCH inside BEGIN..REPEAT. */
 case FF_OP_WHILE:
     _FF_COMPILING;
-    _FF_SO(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_cf_t *c = ff_cf_top(ff, FF_CF_DEST, "while", "begin");
+        if (!c)
+            goto done;
+        ff_cf_t dest = *c;
+        ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_QBRANCH);
         ff_heap_compile_int(h, 0);
-        _FF_PUSH((ff_int_t)(h->size - 1));
+        if (!ff_cf_push(ff, FF_CF_ORIG, "while", h->size - 1))
+            goto done;
+        /* The orig goes *under* the dest, as in ANS: `repeat` finds the
+           dest on top, and each further `while` stacks another orig
+           beneath it for a `then` after the loop to resolve. */
+        ff->cf[ff->n_cf - 2] = ff->cf[ff->n_cf - 1];
+        ff->cf[ff->n_cf - 1] = dest;
     }
     _FF_NEXT();
 
-/** ( target bp -- )  `repeat` — back-branch and patch WHILE's forward branch. */
+/** ( -- )  `repeat` — back-branch and patch WHILE's forward branch. */
 case FF_OP_REPEAT:
     _FF_COMPILING;
-    _FF_SL(2);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
-        int bp1 = (int)tos;
-        _FF_DROP();
+        ff_cf_t *c = ff_cf_pop(ff, FF_CF_DEST, "repeat", "begin");
+        if (!c)
+            goto done;
+        size_t target = c->pos;
+        c = ff_cf_pop(ff, FF_CF_ORIG, "repeat", "while");
+        if (!c)
+            goto done;
+        ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_BRANCH);
-        int bp = (int)tos;
-        ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
-        h->data[bp1] = h->size - bp1;
-        _FF_DROP();
+        ff_heap_compile_int(h, -(ff_int_t)(h->size - target));
+        h->data[c->pos] = h->size - c->pos;
         /* Position after REPEAT is the WHILE forward target. */
         ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
-/** ( -- bp )  `do` — emit XDO + leave-offset placeholder. */
+/** ( -- )  `do` — emit XDO + leave-offset placeholder. */
 case FF_OP_DO:
     _FF_COMPILING;
-    _FF_SO(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_XDO);
         ff_heap_compile_int(h, 0);
-        _FF_PUSH((ff_int_t)h->size);
+        if (!ff_cf_push(ff, FF_CF_DO, "do", h->size))
+            goto done;
     }
     _FF_NEXT();
 
-/** ( -- bp )  `?do` — emit XQDO + leave-offset placeholder. */
+/** ( -- )  `?do` — emit XQDO + leave-offset placeholder. */
 case FF_OP_QDO:
     _FF_COMPILING;
-    _FF_SO(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_heap_t *h = &ff->compiling->heap;
         ff_heap_compile_op(h, FF_OP_XQDO);
         ff_heap_compile_int(h, 0);
-        _FF_PUSH((ff_int_t)h->size);
+        if (!ff_cf_push(ff, FF_CF_DO, "?do", h->size))
+            goto done;
     }
     _FF_NEXT();
 
-/** ( bp -- )  `loop` — emit XLOOP + back-offset, patch leave-target. */
+/** ( -- )  `loop` — emit XLOOP + back-offset, patch leave-target. */
 case FF_OP_LOOP:
     _FF_COMPILING;
-    _FF_SL(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_cf_t *c = ff_cf_pop(ff, FF_CF_DO, "loop", "do");
+        if (!c)
+            goto done;
+        ff_heap_t *h = &ff->compiling->heap;
+        size_t bp = c->pos;
         ff_heap_compile_op(h, FF_OP_XLOOP);
-        int bp = (int)tos;
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
         h->data[bp - 1] = h->size - bp + 1;
-        _FF_DROP();
         /* DO leave-target lands here. */
         ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
-/** ( bp -- )  `+loop` — emit PXLOOP + back-offset, patch leave-target. */
+/** ( -- )  `+loop` — emit PXLOOP + back-offset, patch leave-target. */
 case FF_OP_PLOOP:
     _FF_COMPILING;
-    _FF_SL(1);
+    _FF_SYNC();
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_cf_t *c = ff_cf_pop(ff, FF_CF_DO, "+loop", "do");
+        if (!c)
+            goto done;
+        ff_heap_t *h = &ff->compiling->heap;
+        size_t bp = c->pos;
         ff_heap_compile_op(h, FF_OP_PXLOOP);
-        int bp = (int)tos;
         ff_heap_compile_int(h, -(ff_int_t)(h->size - bp));
         h->data[bp - 1] = h->size - bp + 1;
-        _FF_DROP();
         /* DO leave-target lands here. */
         ff_heap_inhibit_peephole(h);
     }
     _FF_NEXT();
 
-/**
- * `abort"` — at compile-time set up the inline string anticipation;
- * at runtime THROW -2 with the inline string as its message.
- */
+/** ( -- )  `abort"` — in a definition, compile a -2 THROW carrying the
+    string that follows; at the prompt, raise it at once. Only ever
+    parses: what runs later is FF_OP_ABORTQ_RUNTIME, so an immediate word
+    that uses `abort"` raises when it runs instead of compiling. */
 case FF_OP_ABORTQ:
-    /* If invoked at compile time (direct entry from ff_eval), set up to
-       compile (abortq) + string. If invoked at runtime in compiled heap,
-       raise -2: uncaught, it resets the engine like ABORT, and the host
-       gets the string as the error message. */
-    if (ff->state & FF_STATE_COMPILING)
-    {
-        ff->state |= FF_STATE_STRLIT_ANTIC;
-        ff_heap_compile_op(&ff_dict_top(&ff->dict)->heap, FF_OP_ABORTQ);
-    }
-    else
-    {
-        _FF_SYNC();
-        ff_raise(ff, FF_THROW_ABORTQ, FF_SEV_ERROR | FF_ERR_ABORTED,
-                 "%s", (const char *)(ip + 1));
-        goto done;
-    }
+    ff->state |= FF_STATE_STRLIT_ANTIC;
+    ff->strlit_op = FF_OP_ABORTQ_RUNTIME;
+    ff->strlit_compile = (ff->state & FF_STATE_COMPILING) != 0;
     _FF_NEXT();
+
+/** ( -- )  Runtime of `abort"`: THROW -2 with the inline string as the
+    message. Uncaught, it resets the engine like ABORT, and the host gets
+    the string as the error message. */
+case FF_OP_ABORTQ_RUNTIME:
+    _FF_SYNC();
+    ff_raise(ff, FF_THROW_ABORTQ, FF_SEV_ERROR | FF_ERR_ABORTED,
+             "%s", (const char *)(ip + 1));
+    goto done;

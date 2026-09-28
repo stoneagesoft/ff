@@ -41,10 +41,13 @@ const ff_word_def_t FF_CONIO_WORDS[] =
       "Prints entire contents of stack."),
     _FF_WI(".\"", FF_OP_DOTQUOTE,
       "s ( -- )  Print immediate string\n"
-      "Prints the string literal s that follows in line."),
+      "Compiles the string literal *s* that follows in line into the\n"
+      "current definition, to be printed when the definition runs."),
     _FF_WI(".(", FF_OP_DOT_PAREN,
       "s ( -- )  Print constant string\n"
-      "Immediately prints the string s that follows in the input stream."),
+      "Immediately prints the string literal *s* that follows in the input\n"
+      "stream, inside a definition too: it prints while the definition is\n"
+      "compiled and adds nothing to it."),
     FF_WEND
 };
 

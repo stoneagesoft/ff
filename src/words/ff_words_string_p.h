@@ -22,10 +22,7 @@ case FF_OP_STRLIT:
 /** ( n -- )  `string` — create a named buffer of n bytes. */
 case FF_OP_STRING:
     _FF_SL(1);
-    ff->state |= FF_STATE_DEF_PENDING;
-    ff_dict_append(&ff->dict,
-                   ff_word_new(" ", NULL, FF_OP_CREATE_RUNTIME, NULL));
-    ff_heap_alloc(&ff_dict_top(&ff->dict)->heap,
+    ff_heap_alloc(&ff_def_new(ff, FF_OP_CREATE_RUNTIME)->heap,
                   (int)((tos + 1 + sizeof(ff_int_t)) / sizeof(ff_int_t)));
     _FF_DROP();
     _FF_NEXT();

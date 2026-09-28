@@ -20,8 +20,10 @@ const ff_word_def_t FF_CTRL_WORDS[] =
 {
     _FF_W("exit", FF_OP_EXIT,
       "( -- )  Exit definition\n"
-      "Exit from the current definition immediately. Note that\n"
-      "**exit** cannot be used within a **do-loop**; use **leave** instead."),
+      "Exit from the current definition immediately. Inside a **do-loop**\n"
+      "the loop's parameters are discarded first, and inside a **{** scope\n"
+      "the scope is closed first, as **}** would close it: the cells left\n"
+      "on its stack must be the outputs it declares."),
     _FF_W("branch", FF_OP_BRANCH,
       "( -- )  Branch\n"
       "Jump to the address that follows in line."),
@@ -62,7 +64,12 @@ const ff_word_def_t FF_CTRL_WORDS[] =
       "( flag -- )  Decide begin-while-repeat loop\n"
       "If *flag* is nonzero, execution continues after the **while**.\n"
       "If *flag* is zero, the loop is exited and execution resumed\n"
-      "after the **repeat** that marks the end of the loop."),
+      "after the **repeat** that marks the end of the loop.\n"
+      "\n"
+      "A loop may have more than one **while**; each one after the first\n"
+      "exits to the matching **then** after the **repeat**:\n"
+      "\n"
+      "    begin ... while ... while ... repeat ... then"),
     _FF_WI("repeat", FF_OP_REPEAT,
       "( -- )  Close begin-while-repeat loop\n"
       "Another iteration of the current **begin-while-repeat**\n"
@@ -113,7 +120,9 @@ const ff_word_def_t FF_CTRL_WORDS[] =
     _FF_W("leave", FF_OP_LEAVE,
       "( -- )  Exit do-loop\n"
       "The innermost **do-loop** is immediately exited. Execution resumes\n"
-      "after the **loop** statement marking the end of the loop."),
+      "after the **loop** statement marking the end of the loop. A **{**\n"
+      "scope opened inside the loop is closed first, as **}** would close\n"
+      "it. Only valid inside a **do-loop** of the same definition."),
     _FF_W("quit", FF_OP_QUIT,
       "( -- )  Quit execution\n"
       "The return stack is cleared and control is returned to the interpreter,\n"
@@ -126,7 +135,9 @@ const ff_word_def_t FF_CTRL_WORDS[] =
     _FF_WI("abort\"", FF_OP_ABORTQ,
       "s ( -- )  Abort with message\n"
       "Performs `-2 throw` with the string literal *s* that follows in line\n"
-      "as the error message. If nothing catches it, it aborts like **abort**."),
+      "as the error message. If nothing catches it, it aborts like **abort**.\n"
+      "In a definition the throw happens when the definition runs; at the\n"
+      "prompt it happens at once."),
     _FF_W("throw", FF_OP_THROW,
       "( n -- )  Raise exception\n"
       "If *n* is zero, **throw** is a no-op. Otherwise execution stops and\n"

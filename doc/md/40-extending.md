@@ -130,6 +130,12 @@ A word that pops `p` items and pushes `q` items has stack effect
 All five macros early-return on failure. Put them before any stack
 manipulation — once you have written to a cell, rolling back is on you.
 
+A compile-time word that lays down code writes it into the definition
+being compiled, `ff->compiling` (which `FF_COMPILING(ff)` guarantees is
+there), through the `ff_heap_compile_*` helpers on its `heap`. Don't
+use the newest dictionary word for this: a `create` run between `[` and
+`]` makes a newer one.
+
 `FF_SL` measures depth against the current **stack scope** barrier, not
 absolute stack bottom. When your native word is invoked from inside a
 `{ … }` scope, `FF_SL(ff, p)` requires `p` cells *above the barrier* —

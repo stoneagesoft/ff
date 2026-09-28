@@ -80,8 +80,11 @@ case FF_OP_ARG:
     _FF_NEXT();
 
 /** ( … -- … )  Check arity, slide outputs over inputs, restore the barrier.
-    Operand: FF_SCOPE_PACK_EXIT(nargs, nouts, varout). */
+    Operand: FF_SCOPE_PACK_EXIT(nargs, nouts, varout). SCOPE_UNWIND is the
+    same operation, compiled ahead of an `exit` or `leave` that leaves the
+    scope before its `}`. */
 case FF_OP_SCOPE_EXIT:
+case FF_OP_SCOPE_UNWIND:
     {
         ff_int_t packed = *ip++;
         int      nargs  = FF_SCOPE_NARGS(packed);

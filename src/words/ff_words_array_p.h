@@ -12,12 +12,12 @@
 /** ( n -- )  `array` — define a new word that holds n cells of storage. */
 case FF_OP_ARRAY:
     _FF_SL(1);
-    ff->state |= FF_STATE_DEF_PENDING;
-    ff_dict_append(&ff->dict,
-                   ff_word_new(" ", NULL, FF_OP_ARRAY_RUNTIME, NULL));
-    ff_heap_alloc(&ff_dict_top(&ff->dict)->heap, (int)tos);
-    /* Array size is fixed at definition; trim the doubling slack. */
-    ff_heap_trim(&ff_dict_top(&ff->dict)->heap);
+    {
+        ff_word_t *nw = ff_def_new(ff, FF_OP_ARRAY_RUNTIME);
+        ff_heap_alloc(&nw->heap, (int)tos);
+        /* Array size is fixed at definition; trim the doubling slack. */
+        ff_heap_trim(&nw->heap);
+    }
     _FF_DROP();
     _FF_NEXT();
 

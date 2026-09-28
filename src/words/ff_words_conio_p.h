@@ -85,27 +85,25 @@ case FF_OP_DOT_S:
     }
     _FF_NEXT();
 
-/**
- * `.(` — print an inline `( … )` string. Distinguishes direct-entry
- * from ff_eval (immediate mode: anticipate a string token) vs runtime
- * from compiled heap (string follows inline).
- */
+/** ( -- )  `.(` — print the string that follows at once. Immediate, so
+    inside a definition it prints while compiling and compiles nothing. */
 case FF_OP_DOT_PAREN:
-    if (_FF_RUNNING_DIRECT)
-    {
-        ff->state |= FF_STATE_STRLIT_ANTIC;
-    }
-    else
-    {
-        _FF_SYNC();
-        ff_printf(ff, "%s", (const char *)(ip + 1));
-        ip += *ip;
-    }
+    ff->state |= FF_STATE_STRLIT_ANTIC;
+    ff->strlit_op = FF_OP_PRINT_STR;
+    ff->strlit_compile = false;
     _FF_NEXT();
 
-/** ( -- )  `."` — compile a print of the next string literal. */
+/** ( -- )  `."` — compile a print of the string that follows. */
 case FF_OP_DOTQUOTE:
     _FF_COMPILING;
     ff->state |= FF_STATE_STRLIT_ANTIC;
-    ff_heap_compile_op(&ff_dict_top(&ff->dict)->heap, FF_OP_DOT_PAREN);
+    ff->strlit_op = FF_OP_PRINT_STR;
+    ff->strlit_compile = true;
+    _FF_NEXT();
+
+/** ( -- )  Runtime of `."`: print the inline string and step over it. */
+case FF_OP_PRINT_STR:
+    _FF_SYNC();
+    ff_printf(ff, "%s", (const char *)(ip + 1));
+    ip += *ip;
     _FF_NEXT();

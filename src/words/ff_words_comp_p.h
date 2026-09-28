@@ -51,19 +51,27 @@ case FF_OP_LBRACE:
     _FF_NEXT();
 
 /** ( -- )  `}` — close a scope: emit FF_OP_SCOPE_EXIT and drop the
-    compile-time signature record. */
+    compile-time signature record. A control structure opened inside the
+    scope must be closed inside it too. */
 case FF_OP_RBRACE:
     _FF_COMPILING;
     if (ff_unlikely(ff->n_csig <= 0))
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                  "'}' without a matching '{'.");
+        ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                 "'}' without a matching '{'.");
+        goto done;
+    }
+    if (ff_unlikely(ff->n_cf > 0 && ff->cf[ff->n_cf - 1].scope == ff->n_csig))
+    {
+        _FF_SYNC();
+        ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                 "'%s' still open at '}'.", ff->cf[ff->n_cf - 1].opener);
         goto done;
     }
     {
         ff_csig_t *cs = &ff->csig[ff->n_csig - 1];
-        ff_heap_t *h  = &ff_dict_top(&ff->dict)->heap;
+        ff_heap_t *h  = &ff->compiling->heap;
 
         ff_heap_compile_op(h, FF_OP_SCOPE_EXIT);
         ff_heap_compile_int(h, FF_SCOPE_PACK_EXIT(cs->nargs, cs->nouts,
@@ -78,7 +86,7 @@ case FF_OP_RBRACE:
     }
     _FF_NEXT();
 
-/** ( -- )  `immediate` — flag the most recent definition as immediate. */
+/** ( -- )  `immediate` — flag the most recent word as immediate. */
 case FF_OP_IMMEDIATE:
     _FF_NEED_DEF;
     ff_dict_top(&ff->dict)->flags |= FF_WORD_IMMEDIATE;
@@ -90,10 +98,15 @@ case FF_OP_LBRACKET:
     ff->state &= ~FF_STATE_COMPILING;
     _FF_NEXT();
 
-/** ( -- )  `]` — switch from interpret to compile mode. Every compile
-    path writes into ff_dict_top(), so there must be a word to write to. */
+/** ( -- )  `]` — resume compiling the definition that `[` left. */
 case FF_OP_RBRACKET:
-    _FF_NEED_DEF;
+    if (ff_unlikely(!ff->compiling))
+    {
+        _FF_SYNC();
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
+                  "No definition to resume.");
+        goto done;
+    }
     ff->state |= FF_STATE_COMPILING;
     _FF_NEXT();
 
@@ -119,14 +132,18 @@ case FF_OP_BRACKET_COMPILE:
 case FF_OP_LITERAL:
     _FF_COMPILING;
     _FF_SL(1);
-    ff_heap_compile_lit(&ff_dict_top(&ff->dict)->heap, tos);
+    ff_heap_compile_lit(&ff->compiling->heap, tos);
     _FF_DROP();
     _FF_NEXT();
 
-/** ( -- )  `compile` — compile the next inline cell verbatim. */
+/** ( -- )  `compile` — parse the next word and compile code that, when
+    this definition runs, compiles a call to it into the definition then
+    in progress: `postpone` for any word, immediate or not. Immediate, and
+    parsing — the classic form copied the next compiled cell, which is
+    half an instruction for any word that compiles to two. */
 case FF_OP_COMPILE:
     _FF_COMPILING;
-    ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, *ip++);
+    ff->state |= FF_STATE_COMPILE_PENDING;
     _FF_NEXT();
 
 /** ( -- )  `postpone` — parse the next word and append its compilation
@@ -143,22 +160,36 @@ case FF_OP_POSTPONE:
 case FF_OP_POSTPONE_RUNTIME:
     {
         ff_word_t *w = (ff_word_t *)(intptr_t)*ip++;
+        _FF_SYNC();
         if (ff_unlikely(!(ff->state & FF_STATE_COMPILING)))
         {
-            _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
                       "A postponed word ran with no definition being compiled.");
             goto done;
         }
-        ff_heap_compile_word(&ff_dict_top(&ff->dict)->heap, w);
+        if (!ff_compile_call(ff, w))
+            goto done;
     }
     _FF_NEXT();
 
-/** ( -- )  `:` — start a new colon-def; placeholder name is renamed by next token. */
+/** ( -- )  `recurse` — compile a call to the definition being compiled.
+    A definition can also call itself by name; `recurse` is the standard
+    spelling, for code shared with other Forths. */
+case FF_OP_RECURSE:
+    _FF_COMPILING;
+    ff_heap_compile_word(&ff->compiling->heap, ff->compiling);
+    _FF_NEXT();
+
+/** ( -- )  `:` — begin a colon definition, named by the next token. */
 case FF_OP_COLON:
-    ff->state |= FF_STATE_COMPILING | FF_STATE_DEF_PENDING;
-    ff_dict_append(&ff->dict,
-                   ff_word_new(" ", NULL, FF_OP_NONE, NULL));
+    if (ff_unlikely(ff->compiling))
+    {
+        _FF_SYNC();
+        ff_raise(ff, FF_THROW_NESTING, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                 "':' inside the definition of '%s'.", ff->compiling->name);
+        goto done;
+    }
+    ff_def_begin(ff);
     _FF_NEXT();
 
 /** ( -- )  `;` — finish a colon-def; emits EXIT or folds to TNEST tail-call. */
@@ -167,12 +198,19 @@ case FF_OP_SEMICOLON:
     if (ff_unlikely(ff->n_csig != 0))
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                  "Definition ended with %d scope(s) still open.", ff->n_csig);
+        ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                 "Definition ended with %d scope(s) still open.", ff->n_csig);
+        goto done;
+    }
+    if (ff_unlikely(ff->n_cf != 0))
+    {
+        _FF_SYNC();
+        ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                 "'%s' still open at ';'.", ff->cf[ff->n_cf - 1].opener);
         goto done;
     }
     {
-        ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
+        ff_heap_t *h = &ff->compiling->heap;
         /* Tail-call peephole: if the body ends with [NEST, word_ptr],
            rewrite NEST → TNEST and skip the EXIT emit. The TNEST opcode
            replaces the current frame so the called word's EXIT pops the
@@ -196,7 +234,8 @@ case FF_OP_SEMICOLON:
         ff_heap_trim(h);
     }
     ff->state &= ~FF_STATE_COMPILING;
-    ff_word_set_opcode(ff_dict_top(&ff->dict), FF_OP_NEST);
+    ff_word_set_opcode(ff->compiling, FF_OP_NEST);
+    ff->compiling = NULL;
     _FF_NEXT();
 
 /** ( -- xt )  `'` — read next word, push its xt (or defer across input lines). */

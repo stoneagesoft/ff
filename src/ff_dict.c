@@ -130,6 +130,22 @@ static void ff_dict_bucket_insert(ff_dict_t *d, ff_word_t *w)
 }
 
 /**
+ * Unlink @p w from the bucket its current name hashes to.
+ *
+ * @param d Dictionary.
+ * @param w Word to unlink.
+ */
+static void ff_dict_bucket_unlink(ff_dict_t *d, ff_word_t *w)
+{
+    size_t i = (size_t)(ff_dict_hash(w->name) & (d->bucket_count - 1));
+    ff_word_t **link = &d->buckets[i];
+    while (*link && *link != w)
+        link = &(*link)->next_bucket;
+    if (*link == w)
+        *link = w->next_bucket;
+}
+
+/**
  * Wipe every chain and reinsert each surviving word in append order
  * so the newest-wins property holds. Called by @ref ff_dict_forget
  * after the @ref ff_dict::words tail is truncated.
@@ -329,12 +345,7 @@ void ff_dict_rename(ff_dict_t *d, ff_word_t *w, const char *new_name)
     assert(!(w->flags & FF_WORD_STATIC));
 
     /* Unlink from the current bucket (keyed on the old name). */
-    size_t i = (size_t)(ff_dict_hash(w->name) & (d->bucket_count - 1));
-    ff_word_t **link = &d->buckets[i];
-    while (*link && *link != w)
-        link = &(*link)->next_bucket;
-    if (*link == w)
-        *link = w->next_bucket;
+    ff_dict_bucket_unlink(d, w);
 
     /* Replace name and reinsert into the bucket of the new name. A failed
        strdup would leave a NULL name that the hash walk dereferences, so
@@ -367,6 +378,25 @@ bool ff_dict_forget(ff_dict_t *d, const char *name)
             ++d->mutation_seq;
             return true;
         }
+    }
+    return false;
+}
+
+/** @copydoc ff_dict_remove */
+bool ff_dict_remove(ff_dict_t *d, ff_word_t *w)
+{
+    /* The word is almost always the newest; search from that end. */
+    for (size_t i = d->count; i-- > 0; )
+    {
+        if (d->words[i] != w)
+            continue;
+        memmove(&d->words[i], &d->words[i + 1],
+                (d->count - i - 1) * sizeof(d->words[0]));
+        d->count--;
+        ff_dict_bucket_unlink(d, w);
+        ff_word_free(w);
+        ++d->mutation_seq;
+        return true;
     }
     return false;
 }

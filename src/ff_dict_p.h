@@ -114,6 +114,18 @@ void ff_dict_rename(ff_dict_t *d, ff_word_t *w, const char *new_name);
 bool ff_dict_forget(ff_dict_t *d, const char *name);
 
 /**
+ * Remove the single word @p w from the dictionary and free it, leaving
+ * every other word in place — unlike ff_dict_forget(), which cuts off
+ * everything defined after it too. Used to drop a definition that failed
+ * to compile: nothing compiled before it can refer to it.
+ *
+ * @param d Dictionary.
+ * @param w Word to remove.
+ * @return false if @p w is not a user word in @p d.
+ */
+bool ff_dict_remove(ff_dict_t *d, ff_word_t *w);
+
+/**
  * Append every entry of a NULL-terminated @ref ff_word_def_t table
  * via @ref ff_word_new (i.e. heap-allocated). The static-pool path
  * used by @ref ff_dict_init is internal.

@@ -1,0 +1,46 @@
+\ ff-test: lines
+\ `."`, `abort"` and `.(` only parse their string and leave the run-time
+\ work to primitives of their own, and `compile` parses the word it
+\ compiles.
+\
+\ Each used to be one opcode doing both jobs, telling them apart by
+\ STATE or by where it ran from: `abort"` in an immediate word compiled
+\ itself into the definition being built and then ran its string as
+\ code, `.(` in a definition compiled its string's bytes as instructions,
+\ and `compile` copied one cell - half of a two-cell call.
+
+: p 32 emit . ;
+
+\ `.(` prints at once, in a definition too, and compiles nothing.
+.( "now" cr
+: quiet .( "compiling" 7 ;
+cr quiet p cr
+
+\ `."` prints when the word runs.
+: greet ." "hello" ;
+greet cr
+
+\ `abort"` in a definition throws -2 when it runs ...
+: chk abort" "failed" ;
+' chk catch p cr
+
+\ ... also in an immediate word, which runs while another word compiles.
+: stop-here abort" "stop" ; immediate
+: user stop-here 1 ;
+user
+3 p cr
+
+\ At the prompt it throws at once.
+abort" "halt"
+4 p cr
+
+\ `compile w` in an immediate word compiles a call to w when it runs,
+\ whatever w compiles to.
+: seven 7 ;
+: lay-seven compile seven ; immediate
+: fourteen lay-seven lay-seven + ;
+fourteen p cr
+see fourteen
+: lay-dup compile dup ; immediate
+: doubled lay-dup + ;
+21 doubled p cr

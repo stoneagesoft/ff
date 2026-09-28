@@ -21,6 +21,8 @@ the project follows [Semantic Versioning](https://semver.org/).
   - `FF_ERR_CODE()` / `FF_ERR_SEV()` for splitting a packed `ff_error_t`.
 - Build now uses `-fwrapv`: signed overflow wraps two's-complement, as
   Forth arithmetic expects, and the optimizer can't assume it away.
+- `recurse`, the standard spelling of a definition's call to itself
+  (calling it by name keeps working).
 
 ### Fixed
 
@@ -118,6 +120,43 @@ the project follows [Semantic Versioning](https://semver.org/).
   stack.
 - Running an internal word such as `branch`, `(xdo)` or `(strlit)`
   directly no longer jumps into memory past its operand; it does nothing.
+- **A definition that fails is discarded.** An error before `;` — an
+  undefined word, a stray token where the name should be, a failing word
+  run between `[` and `]` — left the word in the dictionary half-compiled
+  and without an `EXIT`, so calling it ran off the end of its body. The
+  word is now removed, as is one that `ff_abort()` or an uncaught `abort`
+  interrupts, and the nameless word that `create`, `variable`, … made
+  when its name never came. An error that an `evaluate` inside `[ ]`
+  catches leaves the definition open.
+- **Control-structure mismatches are compile errors** (-22). The
+  compiler kept `if` / `begin` / `do` bookkeeping as bare heap offsets
+  on the data stack: `[ 100000 ] then` wrote far outside the word,
+  `begin then` patched a cell that was never a branch, an `if` still open
+  at `;` left a branch past the end of the word, and a structure could
+  straddle a `{ }` scope.
+- **`exit` inside a `do` loop** returned through the loop's parameters
+  as if they were a return frame, and `leave` outside a loop jumped
+  through a return frame; both crashed. `exit` now drops the loop
+  parameters first, and `leave` outside a loop is a compile error.
+  `exit` and `leave` inside a `{ }` scope close it first, checking its
+  outputs, where the barrier used to stay raised in the caller. `does>`
+  inside a loop or a scope is rejected.
+- A word calling itself as its first token (`: f f … ;`) compiled a call
+  through a garbage pointer. That also crashed a redefinition such as
+  `: foo foo 1 + ;`, which now recurses into the new `foo`, as a call by
+  name does.
+- **Compile target:** code went into whichever word was newest, so a
+  `create` or `variable` between `[` and `]` took over the rest of the
+  definition, `:` inside a definition started a second one on top of the
+  first, and `forget` could free the definition being compiled. Code now
+  goes into the word `:` made; `:` there raises -29 and `forget` -15.
+- `abort"` in an immediate word compiled itself into the word being
+  defined and then ran its string as code; `.(` in a definition compiled
+  its string's bytes as instructions; and `abort"` at the prompt raised
+  with garbage as its message.
+- `compile` copied a single cell of compiled code — half of the two-cell
+  call of a colon definition — and the cell after it then ran as an
+  opcode.
 
 ### Changed
 
@@ -145,14 +184,31 @@ the project follows [Semantic Versioning](https://semver.org/).
   calling `ff_exec` recursively.
 - `FF_STATE_BROKEN`, `FF_STATE_ABORTED` and `FF_STATE_ERROR` are gone;
   `FF_STATE_THROWN` marks an exception in flight.
+- `."`, `abort"` and `.(` only parse their string; separate primitives do
+  the run-time work, so what they do no longer depends on STATE or on
+  how they are invoked. `.(` prints at once inside a definition too, as
+  in ANS, and compiles nothing. `abort"` at the prompt throws -2 at once.
+- `compile` is immediate and parses the word it compiles: `compile w` in
+  an immediate word compiles a call to `w` when that word runs — like
+  `postpone`, but also for an immediate `w`.
+- Control structures are tracked on a compile-time stack of their own
+  instead of the data stack. `while` follows ANS: a loop may have several,
+  each after the first closed by a `then` after the `repeat`
+  (`begin … while … while … repeat … then`), and `see` prints them back.
+- New THROW codes -22 (control structure mismatch) and -29 (compiler
+  nesting), reported to the host as `FF_ERR_MALFORMED`. `}` without `{`
+  and `;` with a scope still open now raise -22 as well.
+- `]` needs an open definition (`FF_ERR_NOT_IN_DEF` otherwise) instead
+  of any word to compile into, and scope input names are recognised only
+  while compiling.
 
 - `abort` / `abort"` now discard the rest of the input line and return
   `FF_ERR_ABORTED` (ANS `ABORT` semantics) instead of running on.
 - Integer literals are base 10 by default with explicit `0x` hex; C's
   implicit octal is gone (`010` is ten, `009` is nine).
-- `.(`, `."`, and `abort"` are correctly tagged `FF_OP_LAYOUT_STR` in the
-  opcode metadata, so `see` / `dump-word` no longer mis-decode a word's
-  body after an inline string.
+- The inline strings of `."` and `abort"` are correctly tagged
+  `FF_OP_LAYOUT_STR` in the opcode metadata, so `see` / `dump-word` no
+  longer mis-decode a word's body after an inline string.
 - `ff_err_line()` is 1-based for `ff_eval()` input too (the line within
   the evaluated string), and 0 only when there is no source position.
 - A malformed string escape is an error (`FF_ERR_MALFORMED`) instead of

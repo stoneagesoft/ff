@@ -1,0 +1,68 @@
+\ ff-test: lines budget=1000000
+\ Control structures are tracked on a stack of their own, and every
+\ closer is checked against what it closes.
+\
+\ They used to be bare heap offsets on the data stack: `then` patched
+\ whatever number it found there (`[ 100000 ] then` wrote far outside the
+\ word), `begin then` patched a cell that was never a branch, and an `if`
+\ still open at `;` left its branch pointing past the end of the word.
+
+: p 32 emit . ;
+
+\ A closer that doesn't match, and a structure left open, are errors.
+: t1 [ 100000 ] then ;
+: t2 begin then ;
+: t3 if ;
+: t4 do until ;
+: t5 1 if loop ;
+: t6 begin repeat ;
+clear
+
+\ A structure can't straddle a `{ }` scope: its branch would skip the
+\ scope's entry or exit.
+: t7 1 if { ( -- ) then } ;
+: t8 { ( -- ) 1 if } ;
+: t9 begin { ( -- ) again } ;
+
+\ The data stack is the program's while compiling: `literal` works inside
+\ a structure.
+: t10 1 if [ 2 3 + ] literal else 0 then ;
+t10 p cr
+
+\ Any number of `while`s, the ones after the first closed by `then`.
+: classify begin dup 10 < while dup 5 <> while 1 + repeat ." "five" drop else ." "ten" drop then ;
+3 classify cr
+7 classify cr
+see classify
+
+\ `leave` needs a loop.
+: t11 leave ;
+
+\ `exit` from inside a loop drops the loop's parameters first; it used
+\ to return through them as if they were a return frame.
+: first-over 0 do i i * 10 > if i exit then loop -1 ;
+5 first-over p 3 first-over p cr
+: caller 5 first-over 100 + ;
+caller p cr
+: find-pair 5 0 do 5 0 do i j * 6 = if i j + exit then loop loop -1 ;
+find-pair p cr
+
+\ Leaving a scope early closes it as `}` would, checking its outputs; the
+\ barrier used to stay up in the caller.
+clear
+: clamp0 { ( n -- m ) n 0 < if 0 exit then n } ;
+: use-clamp -5 clamp0 7 clamp0 + ;
+use-clamp p depth p cr
+: bad-clamp { ( n -- m ) n 0 < if exit then n } ;
+-1 bad-clamp
+clear
+: upto3 0 swap 0 do { ( c -- d ) c 1 + dup 3 = if leave then } loop ;
+10 upto3 p 2 upto3 p depth p cr
+
+\ `see` shows those exits as written.
+see first-over
+see clamp0
+
+\ `does>` ends the defining word, so it can't stand inside a loop, whose
+\ parameters it would take for the return address.
+: t12 create 3 0 do does> loop ;

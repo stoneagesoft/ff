@@ -1,0 +1,49 @@
+[MALFORMED]
+[MALFORMED]
+[MALFORMED]
+[MALFORMED]
+[MALFORMED]
+[MALFORMED]
+[MALFORMED]
+[MALFORMED]
+[MALFORMED]
+ 5
+five
+ten
+: classify
+    begin
+        dup 10 <
+    while
+        dup 5 <>
+    while
+        1+
+    repeat
+        ." "five" drop
+    else
+        ." "ten" drop
+    then
+;
+[MALFORMED]
+ 4 -1
+ 104
+ 5
+ 7 0
+[SCOPE_ARITY]
+ 3 2 0
+: first-over
+    0 do
+        i i * 10 > if
+            i exit
+        then
+    loop
+    -1
+;
+: clamp0
+    { ( n -- m )
+        n 0< if
+            0 exit
+        then
+        n
+    }
+;
+[MALFORMED]

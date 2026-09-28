@@ -32,11 +32,14 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_LITSUB]            = { NULL,        FF_OP_LAYOUT_INT  },
     [FF_OP_FLIT]              = { NULL,        FF_OP_LAYOUT_REAL },
     [FF_OP_STRLIT]            = { NULL,        FF_OP_LAYOUT_STR  },
+    [FF_OP_PRINT_STR]         = { NULL,        FF_OP_LAYOUT_STR  },
+    [FF_OP_ABORTQ_RUNTIME]    = { NULL,        FF_OP_LAYOUT_STR  },
     [FF_OP_BRANCH]            = { "branch",    FF_OP_LAYOUT_INT  },
     [FF_OP_QBRANCH]           = { "?branch",   FF_OP_LAYOUT_INT  },
 
     [FF_OP_SCOPE_ENTER]       = { NULL,        FF_OP_LAYOUT_INT  },
     [FF_OP_SCOPE_EXIT]        = { NULL,        FF_OP_LAYOUT_INT  },
+    [FF_OP_SCOPE_UNWIND]      = { NULL,        FF_OP_LAYOUT_INT  },
     [FF_OP_ARG]               = { NULL,        FF_OP_LAYOUT_INT  },
 
     [FF_OP_DOES_RUNTIME]      = { NULL,        FF_OP_LAYOUT_WORD },
@@ -135,8 +138,8 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_EMIT]              = { "emit",      FF_OP_LAYOUT_NONE },
     [FF_OP_TYPE]              = { "type",      FF_OP_LAYOUT_NONE },
     [FF_OP_DOT_S]             = { ".s",        FF_OP_LAYOUT_NONE },
-    [FF_OP_DOT_PAREN]         = { ".(",        FF_OP_LAYOUT_STR  },
-    [FF_OP_DOTQUOTE]          = { ".\"",       FF_OP_LAYOUT_STR  },
+    [FF_OP_DOT_PAREN]         = { ".(",        FF_OP_LAYOUT_NONE },
+    [FF_OP_DOTQUOTE]          = { ".\"",       FF_OP_LAYOUT_NONE },
 
     [FF_OP_XDO]               = { NULL,        FF_OP_LAYOUT_INT  },
     [FF_OP_XQDO]              = { NULL,        FF_OP_LAYOUT_INT  },
@@ -145,6 +148,7 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_LOOP_I]            = { "i",         FF_OP_LAYOUT_NONE },
     [FF_OP_LOOP_J]            = { "j",         FF_OP_LAYOUT_NONE },
     [FF_OP_LEAVE]             = { "leave",     FF_OP_LAYOUT_NONE },
+    [FF_OP_UNLOOP]            = { NULL,        FF_OP_LAYOUT_NONE },
     [FF_OP_I_ADD]             = { NULL,        FF_OP_LAYOUT_NONE },
     [FF_OP_I_ADD_LOOP]        = { NULL,        FF_OP_LAYOUT_INT  },
     [FF_OP_NIP]               = { "nip",       FF_OP_LAYOUT_NONE },
@@ -169,6 +173,7 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_COMPILE]           = { "compile",   FF_OP_LAYOUT_NONE },
     [FF_OP_POSTPONE]          = { "postpone",  FF_OP_LAYOUT_NONE },
     [FF_OP_POSTPONE_RUNTIME]  = { NULL,        FF_OP_LAYOUT_WORD },
+    [FF_OP_RECURSE]           = { "recurse",   FF_OP_LAYOUT_NONE },
     [FF_OP_DOES]              = { "does>",     FF_OP_LAYOUT_NONE },
 
     [FF_OP_QDUP]              = { "?dup",      FF_OP_LAYOUT_NONE },
@@ -188,7 +193,7 @@ static const ff_opcode_meta_t g_meta[FF_OP_COUNT] = {
     [FF_OP_ABORT]             = { "abort",     FF_OP_LAYOUT_NONE },
     [FF_OP_THROW]             = { "throw",     FF_OP_LAYOUT_NONE },
     [FF_OP_CATCH]             = { "catch",     FF_OP_LAYOUT_NONE },
-    [FF_OP_ABORTQ]            = { "abort\"",   FF_OP_LAYOUT_STR  },
+    [FF_OP_ABORTQ]            = { "abort\"",   FF_OP_LAYOUT_NONE },
 
     [FF_OP_CREATE]            = { "create",    FF_OP_LAYOUT_NONE },
     [FF_OP_FORGET]            = { "forget",    FF_OP_LAYOUT_NONE },

@@ -20,10 +20,14 @@ const ff_word_def_t FF_COMP_WORDS[] =
 {
     _FF_W(":", FF_OP_COLON,
       "w ( -- )  Begin definition\n"
-      "Begins compilation of a word named *w*."),
+      "Begins compilation of a word named *w*. The word can call itself by\n"
+      "name (see also **recurse**). If an error ends the input before the\n"
+      "matching **;**, the definition is discarded: *w* is not left in the\n"
+      "dictionary half-compiled. Definitions don't nest."),
     _FF_WI(";", FF_OP_SEMICOLON,
       "( -- )  End definition\n"
-      "Ends compilation of word."),
+      "Ends compilation of word. Every **if**, **begin**, **do** and **{**\n"
+      "opened in the definition must be closed by then."),
     _FF_WI("{", FF_OP_LBRACE,
       "( a b -- c )  Open a stack scope\n"
       "Opens a scope over the data stack. The scope must be followed by a\n"
@@ -61,7 +65,7 @@ const ff_word_def_t FF_COMP_WORDS[] =
       "Within a compilation, returns to the interpretive state."),
     _FF_W("]", FF_OP_RBRACKET,
       "( -- )  End interpretive state\n"
-      "Restore compile state after temporary interpretive state."),
+      "Resume compiling the definition that **[** left."),
     _FF_W("'", FF_OP_TICK,
       "w ( -- cfa )  Obtain compilation address\n"
       "Places the compilation address of the following word *w* on the stack."),
@@ -93,10 +97,16 @@ const ff_word_def_t FF_COMP_WORDS[] =
       "word that lays down control-flow words such as **if** or **then**.\n"
       "\n"
       "Supersedes the older **compile** / **[compile]** pair."),
-    _FF_W("compile", FF_OP_COMPILE,
+    _FF_WI("compile", FF_OP_COMPILE,
       "w ( -- )  Compile word\n"
-      "Adds the compile address of the word *w* that follows\n"
-      "in line to the definition currently being compiled."),
+      "Used in an immediate word: when that word runs, it adds a call to\n"
+      "the word *w* that follows in line to the definition then being\n"
+      "compiled. Like **postpone**, but *w* is compiled even if it is\n"
+      "immediate."),
+    _FF_WI("recurse", FF_OP_RECURSE,
+      "( -- )  Recursive call\n"
+      "Compiles a call to the definition being compiled. A definition can\n"
+      "also call itself by its name; **recurse** is the standard spelling."),
     _FF_W("does>", FF_OP_DOES,
       "( -- )  Run-time action\n"
       "Sets the run-time action of a word created by the last\n"

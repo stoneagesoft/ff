@@ -28,9 +28,7 @@
  * `branch`, `(xdo)`, `(strlit)` and the other internals that only make
  * sense inside compiled code — get a stub that does nothing: run directly
  * they would read the stub's EXIT as their operand and jump off into
- * whatever follows it. `.(`, `."` and `abort"` are the exception: their
- * inline string exists only in compiled code, and run directly they don't
- * read one.
+ * whatever follows it.
  *
  * @param w Word whose opcode (and native fn, if any) is already set.
  */
@@ -64,10 +62,6 @@ static void ff_word_build_stub(ff_word_t *w)
             break;
 
         default:
-            if (w->opcode == FF_OP_DOT_PAREN
-                    || w->opcode == FF_OP_DOTQUOTE
-                    || w->opcode == FF_OP_ABORTQ)
-                s[0] = w->opcode;
             break;
     }
 }

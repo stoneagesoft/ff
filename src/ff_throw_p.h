@@ -36,8 +36,11 @@ typedef enum ff_throw
     FF_THROW_COMPILE_ONLY  =  -14,  /**< FF_ERR_NOT_IN_DEF. */
     FF_THROW_BAD_FORGET    =  -15,  /**< FF_ERR_FORGET_PROT. */
     FF_THROW_UNSUPPORTED   =  -21,  /**< FF_ERR_UNSUPPORTED. */
+    FF_THROW_CS_MISMATCH   =  -22,  /**< Control structure mismatch: an unmatched, misnested or
+                                         unclosed `if` / `begin` / `do` / `{`. */
     FF_THROW_RSTACK_IMBAL  =  -25,  /**< FF_ERR_SCOPE_RSTACK. */
     FF_THROW_INTERRUPT     =  -28,  /**< Watchdog / ff_request_abort(). Not catchable. */
+    FF_THROW_NESTING       =  -29,  /**< Compiler nesting: `:` while a definition is open. */
     FF_THROW_FILE_IO       =  -37,  /**< FF_ERR_FILE_IO. */
     FF_THROW_QUIT          =  -56,  /**< `quit`. Not catchable; not an error either. */
     FF_THROW_ALLOCATE      =  -59,  /**< FF_ERR_OOM. */

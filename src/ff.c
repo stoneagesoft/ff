@@ -348,6 +348,8 @@ static ff_error_t ff_error_from_throw(ff_int_t n)
         case FF_THROW_COMPILE_ONLY:  return FF_ERR_NOT_IN_DEF;
         case FF_THROW_BAD_FORGET:    return FF_ERR_FORGET_PROT;
         case FF_THROW_UNSUPPORTED:   return FF_ERR_UNSUPPORTED;
+        case FF_THROW_CS_MISMATCH:
+        case FF_THROW_NESTING:       return FF_ERR_MALFORMED;
         case FF_THROW_RSTACK_IMBAL:  return FF_ERR_SCOPE_RSTACK;
         case FF_THROW_FILE_IO:       return FF_ERR_FILE_IO;
         case FF_THROW_ALLOCATE:      return FF_ERR_OOM;
@@ -451,14 +453,305 @@ static void ff_throw(ff_t *ff, ff_int_t code)
                  "Uncaught exception %" FF_PRIdCELL ".", code);
 }
 
+/* ===================================================================
+ * Definitions and control structures.
+ *
+ * A colon definition compiles into ff->compiling, from `:` to `;`. An
+ * exception that ends the evaluation the definition was begun in
+ * abandons it: the word, which could only ever run the part of its body
+ * compiled so far, is removed again. Each control structure inside it has
+ * a record on ff->cf (see ff_cf_p.h) that its closer is checked against.
+ * None of this is on the dispatch hot path.
+ * =================================================================== */
+
+/**
+ * Create the word that a defining word (`:`, `create`, `variable`, …)
+ * makes; the next token names it.
+ *
+ * @param ff Engine.
+ * @param op Opcode of the new word.
+ * @return The new word, already in the dictionary.
+ */
+static ff_word_t *ff_def_new(ff_t *ff, ff_opcode_t op)
+{
+    ff_word_t *w = ff_dict_append(&ff->dict, ff_word_new(" ", NULL, op, NULL));
+    ff->unnamed = w;
+    ff->state |= FF_STATE_DEF_PENDING;
+    return w;
+}
+
+/**
+ * Begin a colon definition (`:`).
+ *
+ * @param ff Engine.
+ */
+static void ff_def_begin(ff_t *ff)
+{
+    ff->compiling = ff_def_new(ff, FF_OP_NONE);
+    ff->def_depth = ff->eval_depth;
+    ff->n_cf = 0;
+    ff->state |= FF_STATE_COMPILING;
+}
+
+/**
+ * Drop the compile-time `{` scope records, freeing their input names,
+ * and leave signature mode.
+ *
+ * @param ff Engine.
+ */
+static void ff_csig_clear(ff_t *ff)
+{
+    while (ff->n_csig > 0)
+    {
+        ff_csig_t *cs = &ff->csig[--ff->n_csig];
+        for (int i = 0; i < cs->nargs; i++)
+            free(cs->names[i]);
+    }
+    ff->state &= ~FF_STATE_SIG_PENDING;
+    ff->tokenizer.state &= ~FF_TOK_STATE_SIG;
+}
+
+/**
+ * Abandon the definition being compiled, if any: remove its word, drop
+ * the compiler's records for it and leave compile state.
+ *
+ * @param ff Engine.
+ */
+static void ff_def_abandon(ff_t *ff)
+{
+    ff_word_t *w = ff->compiling;
+    ff->compiling = NULL;
+    ff->n_cf = 0;
+    ff_csig_clear(ff);
+    ff->state &= ~FF_STATE_COMPILING;
+    if (w)
+    {
+        if (ff->unnamed == w)
+            ff->unnamed = NULL;
+        ff_dict_remove(&ff->dict, w);
+    }
+}
+
+/**
+ * Remove the word that a defining word made if its name never came.
+ *
+ * @param ff Engine.
+ */
+static void ff_def_drop_unnamed(ff_t *ff)
+{
+    if ((ff->state & FF_STATE_DEF_PENDING) && ff->unnamed
+            && ff->unnamed != ff->compiling)
+        ff_dict_remove(&ff->dict, ff->unnamed);
+    ff->unnamed = NULL;
+    ff->state &= ~FF_STATE_DEF_PENDING;
+}
+
+/**
+ * Clean up the compiler after an exception that unwinds out of the
+ * evaluation at depth ff->eval_depth.
+ *
+ * The rest of that input is discarded, so the one-shot next-token flags
+ * go, and so does a word still waiting for its name. A definition begun
+ * at this depth or deeper is abandoned. One begun further out stays open:
+ * the exception is settled before it gets there — an `evaluate` run from
+ * `[ ]` pushes the code, and compilation carries on.
+ *
+ * @param ff Engine.
+ */
+static void ff_def_unwind(ff_t *ff)
+{
+    ff_def_drop_unnamed(ff);
+    ff->state &= ~FF_STATE_PENDING_ALL;
+    ff->tokenizer.state &= ~FF_TOK_STATE_SIG;
+    if (ff->compiling && ff->def_depth >= ff->eval_depth)
+        ff_def_abandon(ff);
+}
+
+/**
+ * Open a control structure: push its record.
+ *
+ * @param ff     Engine.
+ * @param kind   Record type.
+ * @param opener Word opening it.
+ * @param pos    Heap index the record refers to (see ff_cf::pos).
+ * @return false, with the error raised, if structures nest too deeply.
+ */
+static bool ff_cf_push(ff_t *ff, ff_cf_kind_t kind, const char *opener,
+                       size_t pos)
+{
+    if (ff->n_cf >= FF_CF_DEPTH)
+    {
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                  "Control structures nested deeper than %d.", FF_CF_DEPTH);
+        return false;
+    }
+    ff_cf_t *c = &ff->cf[ff->n_cf++];
+    c->kind   = kind;
+    c->opener = opener;
+    c->pos    = pos;
+    c->scope  = ff->n_csig;
+    return true;
+}
+
+/**
+ * Check that @p closer can close the innermost open control structure:
+ * that there is one, that it was opened inside the current `{ }` scope,
+ * and that it is of kind @p kind.
+ *
+ * @param ff     Engine.
+ * @param kind   Kind @p closer closes.
+ * @param closer Word closing it.
+ * @param expect What @p closer pairs with, for the message when none is open.
+ * @return The record, still on the stack, or NULL with the error raised.
+ */
+static ff_cf_t *ff_cf_top(ff_t *ff, ff_cf_kind_t kind, const char *closer,
+                          const char *expect)
+{
+    if (ff->n_cf == 0)
+    {
+        ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                 "'%s' without '%s'.", closer, expect);
+        return NULL;
+    }
+    ff_cf_t *c = &ff->cf[ff->n_cf - 1];
+    if (c->scope != ff->n_csig)
+    {
+        ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                 "'%s' can't close the '%s' outside this '{' scope.",
+                 closer, c->opener);
+        return NULL;
+    }
+    if (c->kind != kind)
+    {
+        ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                 "'%s' can't close '%s'.", closer, c->opener);
+        return NULL;
+    }
+    return c;
+}
+
+/**
+ * ff_cf_top(), then pop the record. The pointer stays valid until the
+ * next ff_cf_push().
+ *
+ * @param ff     Engine.
+ * @param kind   Kind @p closer closes.
+ * @param closer Word closing it.
+ * @param expect What @p closer pairs with.
+ * @return The popped record, or NULL with the error raised.
+ */
+static ff_cf_t *ff_cf_pop(ff_t *ff, ff_cf_kind_t kind, const char *closer,
+                          const char *expect)
+{
+    ff_cf_t *c = ff_cf_top(ff, kind, closer, expect);
+    if (c)
+        ff->n_cf--;
+    return c;
+}
+
+/**
+ * Compile a SCOPE_UNWIND for each open `{` scope numbered above @p to, up
+ * to @p from, innermost first. A jump out of them then leaves each one as
+ * its `}` would, outputs checked; without it the barrier stayed raised in
+ * the caller.
+ *
+ * @param ff   Engine.
+ * @param from Innermost scope to leave (a count of open scopes).
+ * @param to   Scopes up to this one stay open.
+ */
+static void ff_compile_scope_unwind(ff_t *ff, int from, int to)
+{
+    ff_heap_t *h = &ff->compiling->heap;
+    for (int s = from; s > to; --s)
+    {
+        const ff_csig_t *cs = &ff->csig[s - 1];
+        ff_heap_compile_op(h, FF_OP_SCOPE_UNWIND);
+        ff_heap_compile_int(h, FF_SCOPE_PACK_EXIT(cs->nargs, cs->nouts,
+                                                  cs->var_out));
+    }
+}
+
+/**
+ * Compile a call to @p w into the definition being compiled.
+ *
+ * `exit` and `leave` jump out of what encloses them, so they first close
+ * it as its closer would at run time: each `{ }` scope with a
+ * SCOPE_UNWIND, and for `exit` each counted loop with an UNLOOP. An
+ * `exit` from a loop used to return through the loop's parameters as if
+ * they were a return frame. `does>` also ends the running word, so it
+ * may not stand where that would skip a loop's or a scope's cleanup.
+ *
+ * @param ff Engine.
+ * @param w  Word to call.
+ * @return false, with the error raised, if @p w can't be compiled here.
+ */
+static bool ff_compile_call(ff_t *ff, const ff_word_t *w)
+{
+    ff_heap_t *h = &ff->compiling->heap;
+
+    if (w->opcode == FF_OP_EXIT)
+    {
+        int s = ff->n_csig;
+        for (int i = ff->n_cf - 1; i >= 0; --i)
+        {
+            if (ff->cf[i].kind != FF_CF_DO)
+                continue;
+            ff_compile_scope_unwind(ff, s, ff->cf[i].scope);
+            s = ff->cf[i].scope;
+            ff_heap_compile_op(h, FF_OP_UNLOOP);
+        }
+        ff_compile_scope_unwind(ff, s, 0);
+    }
+    else if (w->opcode == FF_OP_LEAVE)
+    {
+        int i = ff->n_cf;
+        while (i > 0 && ff->cf[i - 1].kind != FF_CF_DO)
+            --i;
+        if (i == 0)
+        {
+            ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                     "'leave' outside 'do' ... 'loop'.");
+            return false;
+        }
+        ff_compile_scope_unwind(ff, ff->n_csig, ff->cf[i - 1].scope);
+    }
+    else if (w->opcode == FF_OP_DOES)
+    {
+        for (int i = 0; i < ff->n_cf; ++i)
+            if (ff->cf[i].kind == FF_CF_DO)
+            {
+                ff_raise(ff, FF_THROW_CS_MISMATCH,
+                         FF_SEV_ERROR | FF_ERR_MALFORMED,
+                         "'does>' inside '%s' ... 'loop'.", ff->cf[i].opener);
+                return false;
+            }
+        if (ff->n_csig > 0)
+        {
+            ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                     "'does>' inside a '{' scope.");
+            return false;
+        }
+    }
+
+    ff_heap_compile_word(h, w);
+    return true;
+}
+
 /**
  * Reset the engine's transient state: the work of an uncaught ABORT, and
- * of ff_abort() between evaluations. Word definitions are kept.
+ * of ff_abort() between evaluations. Finished definitions are kept; one
+ * still being compiled is abandoned.
  *
  * @param ff Engine.
  */
 static void ff_reset(ff_t *ff)
 {
+    /* Before the state flags go: they say whether a word still waits for
+       its name. ff_def_abandon also frees the `{` scope records, whose
+       names ff_scope_arg would otherwise go on resolving. */
+    ff_def_drop_unnamed(ff);
+    ff_def_abandon(ff);
+
     ff->stack.top = 0;
     ff->r_stack.top = 0;
     ff->ip = NULL;
@@ -466,18 +759,6 @@ static void ff_reset(ff_t *ff)
     ff->tokenizer.state = 0;
     ff->cur_word = NULL;
 
-    /* Tear down any open `{` scope records. Without this, an abort that
-       fires while a signature/scope is open leaves n_csig > 0 with live
-       arg-name strings; ff_scope_arg() is consulted for every subsequent
-       word token, so a later interpreted word matching a leftover name
-       would compile FF_OP_ARG into the top dictionary word. Free the
-       names and reset the compile-time scope stack. */
-    while (ff->n_csig > 0)
-    {
-        ff_csig_t *cs = &ff->csig[--ff->n_csig];
-        for (int i = 0; i < cs->nargs; i++)
-            free(cs->names[i]);
-    }
     ff->n_scopes = 0;
     ff->stack.floor = 0;
     /* Reset the transient-string arena by freeing all slabs. Anything
@@ -555,7 +836,7 @@ static bool ff_sig_finish(ff_t *ff, ff_csig_t *cs, ff_error_t *ec)
         return false;
     }
 
-    ff_word_t *w = ff_dict_top(&ff->dict);
+    ff_word_t *w = ff->compiling;
     ff_heap_t *h = &w->heap;
 
     /* Record the signature against the offset of the SCOPE_ENTER cell
@@ -571,33 +852,6 @@ static bool ff_sig_finish(ff_t *ff, ff_csig_t *cs, ff_error_t *ec)
     ff->state &= ~FF_STATE_SIG_PENDING;
     ff->tokenizer.state &= ~FF_TOK_STATE_SIG;
     return true;
-}
-
-/**
- * Abandon the signature being parsed and leave signature mode.
- *
- * Both flags are engine state that outlives a single ff_eval call, so a
- * signature error that skipped this would leave the parser claiming the
- * *next* line's tokens as signature names.
- *
- * @param ff Engine.
- */
-static void ff_sig_abort(ff_t *ff)
-{
-    while (ff->n_csig > 0)
-    {
-        ff_csig_t *cs = &ff->csig[--ff->n_csig];
-        for (int i = 0; i < cs->nargs; i++)
-            free(cs->names[i]);
-    }
-    /* Drop out of compile state too, the same way an undefined word
-       mid-definition does: the definition is unsalvageable, and leaving
-       COMPILING set would silently compile the user's next line into the
-       wreck instead of running it. Also clear every one-shot pending flag
-       — a [']/[compile]/."/postpone left mid-air would otherwise survive
-       the error and miscompile an unrelated later definition. */
-    ff->state &= ~(FF_STATE_PENDING_ALL | FF_STATE_COMPILING);
-    ff->tokenizer.state &= ~FF_TOK_STATE_SIG;
 }
 
 /**
@@ -812,20 +1066,16 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                 ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
                                "'%s' is not a name a scope signature can bind.",
                                t->token);
-                ff_sig_abort(ff);
                 goto out;
             }
             if (!ff_sig_token(ff, t->token, &ec))
-            {
-                ff_sig_abort(ff);
                 goto out;
-            }
             continue;
         }
 
         /* One-shot pending flags consume the very next token. Validate its
            kind here, before the kind switch, so a wrong-kind token errors
-           (and the flag is cleared at `out:` via ff_sig_abort) instead of
+           (and the flag is cleared at `out:` by ff_def_unwind) instead of
            being processed by the INTEGER/REAL/STRING case while the flag
            silently survives to ambush a later token — e.g. `: 42`, `' 5`,
            `." 42`. NULL passes through so a flag may span ff_eval calls
@@ -855,6 +1105,15 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                 if (ff->state & FF_STATE_FORGET_PENDING)
                 {
                     ff->state &= ~FF_STATE_FORGET_PENDING;
+                    /* Forgetting cuts off every later word, which would
+                       free the open definition under the compiler. */
+                    if (ff->compiling)
+                    {
+                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FORGET_PROT,
+                                       "Can't forget while '%s' is being defined.",
+                                       ff->compiling->name);
+                        goto out;
+                    }
                     if (!ff_dict_forget(d, t->token))
                     {
                         ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
@@ -862,15 +1121,19 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                         goto out;
                     }
                 }
-                else if (ff->state & FF_STATE_POSTPONE_PENDING)
+                else if (ff->state & (FF_STATE_POSTPONE_PENDING
+                                          | FF_STATE_COMPILE_PENDING))
                 {
                     /* `postpone name`. Append name's compilation semantics
                        to the current definition: for an immediate word,
                        compile a call so it runs when this definition runs;
                        for a non-immediate word, emit POSTPONE_RUNTIME so
                        that a call to name is *compiled* when this definition
-                       runs (deferred by one level). */
-                    ff->state &= ~FF_STATE_POSTPONE_PENDING;
+                       runs (deferred by one level). `compile name` defers
+                       any word that way, immediate or not. */
+                    bool defer_all = (ff->state & FF_STATE_COMPILE_PENDING) != 0;
+                    ff->state &= ~(FF_STATE_POSTPONE_PENDING
+                                   | FF_STATE_COMPILE_PENDING);
                     ff_word_t *w = ff_dict_lookup(d, t->token);
                     if (!w)
                     {
@@ -881,11 +1144,12 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     if (!(ff->state & FF_STATE_COMPILING))
                     {
                         ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
-                                       "postpone outside a definition.");
+                                       "%s outside a definition.",
+                                       defer_all ? "compile" : "postpone");
                         goto out;
                     }
-                    ff_heap_t *ph = &ff_dict_top(d)->heap;
-                    if (w->flags & FF_WORD_IMMEDIATE)
+                    ff_heap_t *ph = &ff->compiling->heap;
+                    if ((w->flags & FF_WORD_IMMEDIATE) && !defer_all)
                         ff_heap_compile_word(ph, w);
                     else
                     {
@@ -937,16 +1201,17 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                 }
                 else if (ff->state & FF_STATE_DEF_PENDING)
                 {
-                    /* If a definition is pending, define the token and
-                       leave the address of the new word item created for
-                       it on the return stack. */
+                    /* The name of the word a defining word just made. */
                     ff->state &= ~FF_STATE_DEF_PENDING;
                     if (ff_dict_lookup(d, t->token))
                         ff_tracef(ff, FF_SEV_WARNING | FF_ERR_NON_UNIQUE,
                                   "'%s' isn't unique.", t->token);
-                    ff_dict_rename(d, ff_dict_top(d), t->token);
+                    if (ff->unnamed)
+                        ff_dict_rename(d, ff->unnamed, t->token);
+                    ff->unnamed = NULL;
                 }
-                else if (ff_scope_arg(ff, t->token) > 0)
+                else if ((ff->state & FF_STATE_COMPILING)
+                             && ff_scope_arg(ff, t->token) > 0)
                 {
                     /* A named scope input. Resolved here, ahead of the
                        dictionary, so the name is bound lexically and
@@ -955,7 +1220,7 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                        below the barrier — no dictionary entry is ever
                        created, so nothing can collide and nothing needs
                        cleaning up at `}`. */
-                    ff_heap_t *h = &ff_dict_top(d)->heap;
+                    ff_heap_t *h = &ff->compiling->heap;
                     ff_heap_compile_op(h, FF_OP_ARG);
                     ff_heap_compile_int(h, ff_scope_arg(ff, t->token));
                 }
@@ -978,8 +1243,8 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                                 /* If a compile-time tick preceded this
                                    word, compile a (lit) word to cause its
                                    address to be pushed at execution time. */
-                                ff_heap_compile_op(&ff_dict_top(d)->heap, FF_OP_LIT);
-                                ff_heap_compile_int(&ff_dict_top(d)->heap,
+                                ff_heap_compile_op(&ff->compiling->heap, FF_OP_LIT);
+                                ff_heap_compile_int(&ff->compiling->heap,
                                                     (ff_int_t)(intptr_t)w);
                                 ff->state &= ~FF_STATE_CTICK_PENDING;
                                 ff->state &= ~FF_STATE_CBRACK_PENDING;
@@ -987,7 +1252,8 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                             else
                             {
                                 ff->state &= ~FF_STATE_CBRACK_PENDING;
-                                ff_heap_compile_word(&ff_dict_top(d)->heap, w);
+                                if (!ff_compile_call(ff, w))
+                                    goto out;
                             }
                         }
                         else
@@ -1005,7 +1271,6 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     }
                     else
                     {
-                        ff->state &= ~FF_STATE_COMPILING;
                         ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
                                        "'%s' undefined.", t->token);
                         goto out;
@@ -1015,7 +1280,7 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
 
             case FF_TOKEN_INTEGER:
                 if (ff->state & FF_STATE_COMPILING)
-                    ff_heap_compile_lit(&ff_dict_top(d)->heap, t->integer_val);
+                    ff_heap_compile_lit(&ff->compiling->heap, t->integer_val);
                 else if (ff_eval_room(ff, &ec))
                     ff_stack_push(&ff->stack, t->integer_val);
                 else
@@ -1025,8 +1290,8 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
             case FF_TOKEN_REAL:
                 if (ff->state & FF_STATE_COMPILING)
                 {
-                    ff_heap_compile_op(&ff_dict_top(d)->heap, FF_OP_FLIT);
-                    ff_heap_compile_real(&ff_dict_top(d)->heap, t->real_val);
+                    ff_heap_compile_op(&ff->compiling->heap, FF_OP_FLIT);
+                    ff_heap_compile_real(&ff->compiling->heap, t->real_val);
                 }
                 else if (ff_eval_room(ff, &ec))
                     ff_stack_push_real(&ff->stack, t->real_val);
@@ -1037,10 +1302,29 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
             case FF_TOKEN_STRING:
                 if (ff->state & FF_STATE_STRLIT_ANTIC)
                 {
+                    /* The string `."`, `.(` or `abort"` is waiting for:
+                       what to do with it was fixed when that word ran, not
+                       by the state now — `.(` prints at once even in a
+                       definition. */
                     ff->state &= ~FF_STATE_STRLIT_ANTIC;
-                    if (ff->state & FF_STATE_COMPILING)
-                        ff_heap_compile_str(&ff_dict_top(d)->heap,
+                    if (ff->strlit_compile)
+                    {
+                        if (!ff->compiling)
+                        {
+                            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
+                                           "No definition to compile the string into.");
+                            goto out;
+                        }
+                        ff_heap_compile_op(&ff->compiling->heap, ff->strlit_op);
+                        ff_heap_compile_str(&ff->compiling->heap,
                                             t->token, t->token_len);
+                    }
+                    else if (ff->strlit_op == FF_OP_ABORTQ_RUNTIME)
+                    {
+                        ff_raise(ff, FF_THROW_ABORTQ,
+                                 FF_SEV_ERROR | FF_ERR_ABORTED, "%s", t->token);
+                        goto out;
+                    }
                     else
                         ff_printf(ff, "%s", t->token);
                 }
@@ -1048,8 +1332,8 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                 {
                     if (ff->state & FF_STATE_COMPILING)
                     {
-                        ff_heap_compile_op(&ff_dict_top(d)->heap, FF_OP_STRLIT);
-                        ff_heap_compile_str(&ff_dict_top(d)->heap,
+                        ff_heap_compile_op(&ff->compiling->heap, FF_OP_STRLIT);
+                        ff_heap_compile_str(&ff->compiling->heap,
                                             t->token, t->token_len);
                     }
                     else
@@ -1073,14 +1357,14 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     }
 
 out:
-    /* Any exception abandons the definition being compiled, so open scope
-       records go with it. Catches the paths that raise from inside a
-       case body (`;` with a scope still open, `}` without `{`) and so
-       never reach ff_sig_abort. Harmless on the clean-exit path, where
-       an open `{` simply means the definition continues in the next
-       ff_eval call. */
+    /* An exception discards the rest of this input, and with it whatever
+       was being compiled from it: pending next-token flags, a word still
+       waiting for its name, and a definition begun at this depth — with
+       its scope and control-flow records. On the clean-exit path they all
+       carry over: a definition, an open `{` or a pending name may continue
+       in the next ff_eval call. */
     if (ff->state & FF_STATE_THROWN)
-        ff_sig_abort(ff);
+        ff_def_unwind(ff);
 
     /* Single restore-and-return point: every clean exit (FF_TOKEN_NULL)
        and every error path lands here so the input/input_pos snapshot
@@ -1291,9 +1575,8 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 goto done; \
             } \
         } while (0)
-    /* Words that write into (or mark) the current definition —
-       ff_dict_top() — outside compile mode: `here`, `,`, `allot`,
-       `immediate`, `]`, … On a fresh engine there is no such word yet. */
+    /* Words that act on the newest word, ff_dict_top(): `here`, `,`,
+       `allot`, `immediate`, `does>`, … On a fresh engine there is none. */
     #define _FF_NEED_DEF \
         do { \
             if (ff_unlikely(!ff_dict_top(&ff->dict))) \
@@ -1514,7 +1797,14 @@ done:
        exception, so it is settled here and the next call starts clean. */
     bool ok = !(ff->state & FF_STATE_THROWN);
     if (!ok && ff->exec_depth == 0 && ff->eval_depth == 0)
+    {
+        /* A definition this call began goes with it. One the host is
+           feeding in through ff_eval() calls stays open: this call is not
+           part of that input. */
+        if (ff->compiling && ff->def_depth == 0)
+            ff_def_abandon(ff);
         (void)ff_settle(ff, true);
+    }
     return ok;
 
     #undef _FF_NEXT
@@ -1642,8 +1932,14 @@ ff_error_t ff_load(ff_t *ff, const char *path)
         }
     }
 
+    /* The load is an evaluation too: a definition the file began and its
+       own errors (a runaway comment, say) ended goes with it, as at the
+       end of ff_eval. */
     if (ff->state & FF_STATE_THROWN)
+    {
+        ff_def_unwind(ff);
         ec = ff_settle(ff, ff->eval_depth == 1 && ff->exec_depth == 0);
+    }
     ff_eval_leave(ff);
     ff->ip = prev_ip;
     ff->tokenizer.line = prev_line;

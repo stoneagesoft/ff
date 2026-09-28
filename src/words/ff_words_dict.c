@@ -281,8 +281,10 @@ static const ff_word_t *ff_see_opcode_to_word(ff_dict_t *d, ff_opcode_t opcode)
  *
  * Disambiguation rules:
  *   QBRANCH (forward) — IF, unless we're inside a BEGIN block AND the
- *                       target is past the BEGIN's closing backward
- *                       BRANCH, in which case it's a WHILE.
+ *                       target is past the backward branch closing it,
+ *                       in which case it's a WHILE: closed by REPEAT if
+ *                       it lands right after that BRANCH, otherwise by a
+ *                       THEN after the loop (ANS multiple WHILEs).
  *   BRANCH  (forward) — ELSE (when stack top is IF and the offset
  *                       lands past a THEN target).
  *   QBRANCH (backward) — UNTIL (closes a BEGIN).
@@ -295,7 +297,8 @@ typedef enum
 {
     SEE_F_IF,    /* end = position of THEN */
     SEE_F_ELSE,  /* end = position of THEN */
-    SEE_F_BEGIN, /* begin_at = BEGIN position; has_while tracked */
+    SEE_F_BEGIN, /* begin_at = BEGIN position, end = its backward branch;
+                    has_while tracked */
     SEE_F_DO,    /* end = position after LOOP+offset */
     SEE_F_SCOPE  /* sig = signature text; closed by SCOPE_EXIT */
 } see_kind_t;
@@ -307,6 +310,8 @@ typedef struct
     size_t      begin_at;
     int         has_while;
     const char *sig;   /* SEE_F_SCOPE: signature text, for resolving FF_OP_ARG */
+    int         late;  /* SEE_F_IF of a `while` a `then` after the loop closes:
+                          1 until the loop ends, then 2 */
 } see_frame_t;
 
 #define SEE_MAX_DEPTH 64
@@ -384,6 +389,18 @@ static void see_continue(see_printer_t *p, const char *kw)
     see_newline(p, outer);
     see_text(p, "%s", kw);
     see_newline(p, outer + 1);
+}
+
+/* Call after popping a frame. When that uncovers the IF frame of a
+   `while` that a `then` after its loop resolves, the code up to that
+   `then` is its branch: indent it like an `if` body. */
+static void see_uncover(see_printer_t *p, see_frame_t *stack, int top)
+{
+    if (top > 0 && stack[top - 1].late == 1)
+    {
+        stack[top - 1].late = 2;
+        see_newline(p, p->indent + 1);
+    }
 }
 
 /* Length of an opcode's encoded form (opcode cell + any inline operand
@@ -527,7 +544,7 @@ static bool see_sig_arg_name(const char *sig, int k, char *buf, size_t bufsz)
 
 /* Pre-pass: mark each cell index that is the target of a backward
    branch. Caller owns the buffer and frees it. */
-static void see_mark_begins(const ff_int_t *cells, size_t size, char *is_begin)
+static void see_mark_begins(const ff_int_t *cells, size_t size, size_t *loop_end)
 {
     for (size_t pos = 0; pos < size; )
     {
@@ -539,7 +556,7 @@ static void see_mark_begins(const ff_int_t *cells, size_t size, char *is_begin)
             {
                 ssize_t target = (ssize_t)(pos + 1) + off;
                 if (target >= 0 && (size_t)target < size)
-                    is_begin[target] = 1;
+                    loop_end[target] = pos + 1;
             }
         }
         size_t step = see_opcode_len(cells, pos, size);
@@ -564,10 +581,12 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
     if (size == 0)
         return;
 
-    char *is_begin = (char *)calloc(size, 1);
-    if (!is_begin)
+    /* loop_end[i]: 1 + the position of the backward branch to i, for
+       each i that is a BEGIN point; 0 elsewhere. */
+    size_t *loop_end = (size_t *)calloc(size, sizeof(size_t));
+    if (!loop_end)
         return;
-    see_mark_begins(cells, size, is_begin);
+    see_mark_begins(cells, size, loop_end);
 
     ff_dict_t *d = &ff->dict;
     see_frame_t stack[SEE_MAX_DEPTH];
@@ -585,9 +604,10 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
             see_close(pr,
                       stack[top - 1].kind == SEE_F_DO ? "loop" : "then");
             top--;
+            see_uncover(pr, stack, top);
         }
 
-        if (is_begin[pos]
+        if (loop_end[pos]
             && (top == 0 || stack[top - 1].kind != SEE_F_BEGIN
                 || stack[top - 1].begin_at != pos))
         {
@@ -595,7 +615,8 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
             stack[top].kind      = SEE_F_BEGIN;
             stack[top].begin_at  = pos;
             stack[top].has_while = 0;
-            stack[top].end       = 0;
+            stack[top].late      = 0;
+            stack[top].end       = loop_end[pos] - 1;
             top++;
             see_open(pr, "begin");
         }
@@ -616,6 +637,7 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                 stack[top].kind = SEE_F_SCOPE;
                 stack[top].sig  = sig;
                 stack[top].end  = 0;
+                stack[top].late = 0;
                 top++;
                 if (sig)
                     see_text(pr, "{ %s", sig);
@@ -631,6 +653,7 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                 {
                     see_close(pr, "}");
                     top--;
+                    see_uncover(pr, stack, top);
                 }
                 else
                     see_text(pr, "<}?>");
@@ -706,13 +729,21 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                 break;
 
             /* Inline-string instructions compiled by `."` and `abort"`. */
-            case FF_OP_DOT_PAREN:
+            case FF_OP_PRINT_STR:
                 see_string(pr, ".\"", cells, pos, size);
                 pos = see_next(cells, pos, size);
                 break;
 
-            case FF_OP_ABORTQ:
+            case FF_OP_ABORTQ_RUNTIME:
                 see_string(pr, "abort\"", cells, pos, size);
+                pos = see_next(cells, pos, size);
+                break;
+
+            /* Cleanup compiled ahead of an `exit` or `leave` that jumps
+               out of a scope or loop: part of that word as written, so it
+               prints as nothing. */
+            case FF_OP_SCOPE_UNWIND:
+            case FF_OP_UNLOOP:
                 pos = see_next(cells, pos, size);
                 break;
 
@@ -787,17 +818,25 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                     {
                         if (stack[i].kind != SEE_F_BEGIN)
                             continue;
-                        if (target >= 2
-                            && (size_t)(target - 2) < size
-                            && cells[target - 2] == FF_OP_BRANCH
-                            && cells[target - 1] < 0)
+                        size_t lend = stack[i].end;
+                        if ((size_t)target > lend)
                         {
-                            ssize_t bb_tgt = (ssize_t)(target - 1)
-                                                 + cells[target - 1];
-                            if ((size_t)bb_tgt == stack[i].begin_at)
-                            {
-                                is_while = 1;
+                            is_while = 1;
+                            if ((size_t)target == lend + 2
+                                    && cells[lend] == FF_OP_BRANCH)
                                 stack[i].has_while = 1;
+                            else
+                            {
+                                /* Resolved by a `then` after the loop:
+                                   an IF frame under the BEGIN, so it
+                                   closes once the loop has. */
+                                if (top >= SEE_MAX_DEPTH) goto out;
+                                memmove(&stack[i + 1], &stack[i],
+                                        (size_t)(top - i) * sizeof(stack[0]));
+                                stack[i].kind = SEE_F_IF;
+                                stack[i].end  = (size_t)target;
+                                stack[i].late = 1;
+                                top++;
                             }
                         }
                         break;
@@ -809,6 +848,7 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                         if (top >= SEE_MAX_DEPTH) goto out;
                         stack[top].kind = SEE_F_IF;
                         stack[top].end  = (size_t)target;
+                        stack[top].late = 0;
                         top++;
                         see_open(pr, "if");
                     }
@@ -819,6 +859,7 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                     {
                         see_close(pr, "until");
                         top--;
+                        see_uncover(pr, stack, top);
                     }
                     else
                         see_text(pr, "<until?>");
@@ -851,6 +892,7 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                                   stack[top - 1].has_while
                                       ? "repeat" : "again");
                         top--;
+                        see_uncover(pr, stack, top);
                     }
                     else
                         see_text(pr, "<again?>");
@@ -867,6 +909,7 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                 if (top >= SEE_MAX_DEPTH) goto out;
                 stack[top].kind = SEE_F_DO;
                 stack[top].end  = (size_t)end_pos;
+                stack[top].late = 0;
                 top++;
                 see_open(pr, op == FF_OP_XDO ? "do" : "?do");
                 pos += 2;
@@ -935,10 +978,11 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
         see_close(pr,
                   stack[top - 1].kind == SEE_F_DO ? "loop" : "then");
         top--;
+        see_uncover(pr, stack, top);
     }
 
 out:
-    free(is_begin);
+    free(loop_end);
 }
 
 /* Find the dictionary word whose heap contains the given pointer.

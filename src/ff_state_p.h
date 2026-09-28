@@ -17,16 +17,20 @@
  */
 typedef enum ff_state
 {
-    FF_STATE_COMPILING      = 1 <<  0,  /**< Inside a `:` colon-definition. */
+    FF_STATE_COMPILING      = 1 <<  0,  /**< Compile state: tokens are compiled into ff::compiling. `[`
+                                             clears it while the definition stays open. */
     FF_STATE_DEF_PENDING    = 1 <<  1,  /**< Next token is a name to assign to the just-created definition placeholder. */
     FF_STATE_FORGET_PENDING = 1 <<  2,  /**< Next token names a word to remove via FORGET. */
     FF_STATE_IS_PENDING     = 1 << 12,  /**< `is`: pop xt from data stack and store at next-token-named deferred word. */
     FF_STATE_TICK_PENDING   = 1 <<  3,  /**< Top-level `'` is waiting for the next-line word name. */
     FF_STATE_CTICK_PENDING  = 1 <<  4,  /**< Compile-time `[']`: emit the next word's address as a literal. */
     FF_STATE_CBRACK_PENDING = 1 <<  5,  /**< Compile-time `[compile]`: compile the next word non-immediate. */
-    FF_STATE_STRLIT_ANTIC   = 1 <<  6,  /**< Tokenizer should treat the next string as inline literal data. */
+    FF_STATE_STRLIT_ANTIC   = 1 <<  6,  /**< The next token must be a string, for `."`, `.(` or `abort"`;
+                                             ff::strlit_op says what it is for. */
     FF_STATE_TRACE          = 1 <<  7,  /**< Trace each word entry through ff_tracef(). */
     FF_STATE_BACKTRACE      = 1 <<  8,  /**< Push to the back-trace stack on every word entry. */
+    FF_STATE_COMPILE_PENDING = 1 << 9,  /**< `compile`: next token names a word whose call the definition
+                                             being compiled will itself compile when it runs. */
     FF_STATE_THROWN         = 1 << 13,  /**< An exception is in flight (an error, THROW, ABORT, QUIT or a
                                              watchdog abort; code in ff::throw_code). Execution unwinds until
                                              a `catch`, `evaluate` / `load`, or the outermost API call
@@ -44,7 +48,7 @@ typedef enum ff_state
 #define FF_STATE_NAME_PENDING \
     (FF_STATE_DEF_PENDING | FF_STATE_FORGET_PENDING | FF_STATE_IS_PENDING \
      | FF_STATE_TICK_PENDING | FF_STATE_CTICK_PENDING | FF_STATE_CBRACK_PENDING \
-     | FF_STATE_POSTPONE_PENDING)
+     | FF_STATE_POSTPONE_PENDING | FF_STATE_COMPILE_PENDING)
 
 /** @brief Every one-shot next-token flag (name-consumers, string, signature). */
 #define FF_STATE_PENDING_ALL \

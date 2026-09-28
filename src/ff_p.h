@@ -21,6 +21,7 @@
 /* Internal definitions */
 #include <ff_base_p.h>
 #include <ff_bt_stack_p.h>
+#include <ff_cf_p.h>
 #include <ff_config_p.h>
 #include <ff_dict_p.h>
 #include <ff_heap_p.h>
@@ -141,6 +142,28 @@ struct ff
     size_t      n_scopes;               /**< Number of open scopes. */
     ff_csig_t   csig[FF_CSCOPE_DEPTH];  /**< Compile-time signature stack. */
     int         n_csig;                 /**< Depth of @ref csig. */
+
+    /* The definition being compiled. `compiling` is where compiled code
+       goes, from `:` to `;` — named explicitly rather than taken to be the
+       newest dictionary word, which a `create` between `[` and `]` would
+       change. `def_depth` is the evaluation depth its `:` ran at: an
+       exception that unwinds through that depth abandons the definition
+       and removes the word, while one caught deeper (an `evaluate` inside
+       `[ ]`) leaves it open. `unnamed` is the word that `:`, `create`,
+       `variable`, … just made and the next token is to name. */
+    ff_word_t  *compiling;              /**< Definition being compiled, or NULL. */
+    int         def_depth;              /**< ff::eval_depth when @ref compiling was started. */
+    ff_word_t  *unnamed;                /**< Word awaiting its name (FF_STATE_DEF_PENDING), or NULL. */
+    ff_cf_t     cf[FF_CF_DEPTH];        /**< Open control structures of @ref compiling. */
+    int         n_cf;                   /**< Depth of @ref cf. */
+
+    /* What the string awaited under FF_STATE_STRLIT_ANTIC is for: with
+       `strlit_compile`, it is compiled as the operand of `strlit_op`
+       (`."`, and `abort"` in a definition); otherwise `strlit_op` says
+       what to do with it at once (`.(` prints it, `abort"` at the prompt
+       raises it). */
+    ff_opcode_t strlit_op;              /**< FF_OP_PRINT_STR or FF_OP_ABORTQ_RUNTIME. */
+    bool        strlit_compile;         /**< Compile the string rather than act on it now. */
 
     /* Watchdog state. `abort_requested` is set asynchronously (by
        ff_request_abort, possibly from a signal handler or another
@@ -264,7 +287,8 @@ struct ff
     } while (0)
 
 /**
- * @brief "Must be in compile mode" check; returns on miss.
+ * @brief "Must be in compile mode" check; returns on miss. On a hit,
+ *        `e->compiling` is the definition to compile into.
  * @param e Engine pointer.
  */
 #define FF_COMPILING(e) \

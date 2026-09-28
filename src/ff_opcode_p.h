@@ -15,9 +15,12 @@
  * | @c FF_OP_CONSTANT_RUNTIME    | opcode + word_ptr  | CONSTANT-built word entry.            |
  * | @c FF_OP_ARRAY_RUNTIME       | opcode + word_ptr  | ARRAY-built word entry.               |
  * | @c FF_OP_LIT / FLIT / STRLIT | opcode + payload   | Inline literal data.                  |
+ * | @c FF_OP_PRINT_STR           | opcode + string    | Runtime of `."`.                      |
+ * | @c FF_OP_ABORTQ_RUNTIME      | opcode + string    | Runtime of `abort"`.                  |
  * | @c FF_OP_LITADD / LITSUB     | opcode + n         | Superinstruction (LIT + arith).       |
  * | @c FF_OP_BRANCH / QBRANCH    | opcode + offset    | Relative jump (negative = backward).  |
  * | @c FF_OP_XDO / XQDO / XLOOP  | opcode + offset    | Counted-loop scaffolding.             |
+ * | @c FF_OP_SCOPE_* / ARG       | opcode + operand   | Stack scopes (packed operand).        |
  * | every other opcode           | single cell        | No operand.                           |
  */
 
@@ -50,6 +53,9 @@ typedef enum ff_opcode
     FF_OP_LITSUB,               /**< + n — superinstruction: TOS -= n. */
     FF_OP_FLIT,                 /**< + value — push an inline real. */
     FF_OP_STRLIT,               /**< + skip count + packed bytes — push a pointer to the inline string. */
+    FF_OP_PRINT_STR,            /**< + skip count + packed bytes — print the inline string (runtime of `."`). */
+    FF_OP_ABORTQ_RUNTIME,       /**< + skip count + packed bytes — THROW -2 with the inline string as its
+                                     message (runtime of `abort"`). */
 
     FF_OP_BRANCH,               /**< + offset — unconditional jump. */
     FF_OP_QBRANCH,              /**< + offset — jump if TOS is zero (consumes TOS). */
@@ -58,6 +64,9 @@ typedef enum ff_opcode
 
     FF_OP_SCOPE_ENTER,          /**< + packed — install the data-stack barrier. See FF_SCOPE_PACK_ENTER. */
     FF_OP_SCOPE_EXIT,           /**< + packed — check arity, slide outputs over inputs, restore barrier. */
+    FF_OP_SCOPE_UNWIND,         /**< + packed — SCOPE_EXIT compiled ahead of an `exit` or `leave` that
+                                     leaves the scope early. Runs identically; a separate opcode only so
+                                     `see` can tell it from a `}`. */
     FF_OP_ARG,                  /**< + k — push data[floor - k]: a named scope input (k = 1..nargs). */
 
     /* --- Runtimes for words made with create / does> / constant / array --- */
@@ -126,8 +135,8 @@ typedef enum ff_opcode
     FF_OP_EMIT,                 /**< Print TOS as a single byte. */
     FF_OP_TYPE,                 /**< Print NUL-terminated string at TOS. */
     FF_OP_DOT_S,                /**< Print full data stack as a table. */
-    FF_OP_DOT_PAREN,            /**< Compile/print inline `( … )` string. */
-    FF_OP_DOTQUOTE,             /**< Compile a `."` literal-string-print. */
+    FF_OP_DOT_PAREN,            /**< `.(` — print the string that follows at once, in a definition too. */
+    FF_OP_DOTQUOTE,             /**< `."` — compile a print of the string that follows. */
 
     /* --- Counted loops --- */
 
@@ -138,6 +147,8 @@ typedef enum ff_opcode
     FF_OP_LOOP_I,               /**< Push current loop index (`i`). */
     FF_OP_LOOP_J,               /**< Push outer loop index (`j`). */
     FF_OP_LEAVE,                /**< Exit innermost counted loop early. */
+    FF_OP_UNLOOP,               /**< Drop the innermost loop's parameters: compiled ahead of an `exit`
+                                     from inside a loop. */
     FF_OP_I_ADD,                /**< Superinstruction: i + (add the loop index to TOS). */
     FF_OP_I_ADD_LOOP,           /**< Superinstruction: i + loop (fused index+ and loop back-edge). */
     FF_OP_NIP,                  /**< ( a b -- b ) — drop the second-from-top item. */
@@ -161,9 +172,10 @@ typedef enum ff_opcode
     FF_OP_STATE,                /**< Push 0 / true depending on FF_STATE_COMPILING. */
     FF_OP_BRACKET_COMPILE,      /**< `[compile]` — compile next word non-immediate. */
     FF_OP_LITERAL,              /**< Pop, compile a literal of that value. */
-    FF_OP_COMPILE,              /**< Compile next inline cell verbatim. */
+    FF_OP_COMPILE,              /**< `compile` — parse next word; compile code that compiles a call to it. */
     FF_OP_POSTPONE,             /**< `postpone` — parse next word; defer its compilation semantics. */
     FF_OP_POSTPONE_RUNTIME,     /**< + word_ptr — compile a call to the word into the def then in progress. */
+    FF_OP_RECURSE,              /**< `recurse` — compile a call to the definition being compiled. */
     FF_OP_DOES,                 /**< `DOES>` — install runtime body for the just-created word. */
 
     /* --- Control flow (immediate) --- */
@@ -177,7 +189,7 @@ typedef enum ff_opcode
     FF_OP_ABORT,                /**< Reset the engine state. */
     FF_OP_THROW,                /**< ANS Forth THROW: pop n; if non-zero, unwind to the most recent CATCH. */
     FF_OP_CATCH,                /**< ANS Forth CATCH: execute xt, push 0 on clean return or n on THROW. */
-    FF_OP_ABORTQ,               /**< `abort"` — abort with the inline message. */
+    FF_OP_ABORTQ,               /**< `abort"` — compile a -2 THROW with the string that follows. */
 
     /* --- Definitions --- */
 

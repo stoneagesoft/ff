@@ -121,8 +121,8 @@ Alongside these, the following `_p.h` files hold pure type/enum/macro
 definitions (no corresponding struct body):
 
 `ff_types_p.h`, `ff_config_p.h`, `ff_opcode_p.h`, `ff_state_p.h`,
-`ff_throw_p.h`, `ff_base_p.h`, `ff_token_p.h`, `ff_tok_state_p.h`,
-`ff_word_flags_p.h`, `ff_word_def_p.h`.
+`ff_throw_p.h`, `ff_cf_p.h`, `ff_base_p.h`, `ff_token_p.h`,
+`ff_tok_state_p.h`, `ff_word_flags_p.h`, `ff_word_def_p.h`.
 
 **Implementation files** in `src/` (one `.c` per subsystem):
 
@@ -228,8 +228,15 @@ struct ff
 
     ff_base_t     base;
     ff_word_t    *cur_word;              /* word currently executing */
+
+    ff_word_t    *compiling;             /* definition being compiled */
+    ff_cf_t       cf[FF_CF_DEPTH];       /* its open control structures */
+    int           n_cf;
 };
 ~~~
+
+`compiling` and `cf` are the compiler's state between `:` and `;`; see
+*Compiling a definition*.
 
 The `ip` field points into a word's compiled heap and is the program
 counter of the inner interpreter. While `ff_exec` is running the live
@@ -250,13 +257,16 @@ interpreter mode:
 
 | Flag | Meaning |
 |---|---|
-| `FF_STATE_COMPILING` | Building a colon-definition |
+| `FF_STATE_COMPILING` | Compile state: tokens are compiled into `ff->compiling`. `[` clears it while the definition stays open |
 | `FF_STATE_DEF_PENDING` | Next token becomes the new word's name |
 | `FF_STATE_FORGET_PENDING` | Next token is a word name to delete |
+| `FF_STATE_IS_PENDING` | Next token names the deferred word `is` stores into |
 | `FF_STATE_TICK_PENDING` | Next token is pushed as a word address (`'`) |
 | `FF_STATE_CTICK_PENDING` | Compile-time `[']` pending |
-| `FF_STATE_CBRACK_PENDING` | Inside `[…]` — temporary interpret mode |
-| `FF_STATE_STRLIT_ANTIC` | Next string token is a literal (for `."`, `.(`) |
+| `FF_STATE_CBRACK_PENDING` | `[compile]`: compile the next word even if it is immediate |
+| `FF_STATE_POSTPONE_PENDING` | `postpone`: next token names the word whose compilation to append |
+| `FF_STATE_COMPILE_PENDING` | `compile`: next token names the word a call to which the definition will compile when it runs |
+| `FF_STATE_STRLIT_ANTIC` | Next token must be a string, for `."`, `.(` or `abort"`; `ff->strlit_op` says what it is for |
 | `FF_STATE_SIG_PENDING` | Collecting a scope signature — the evaluator routes tokens to the signature parser, not the kind dispatch |
 | `FF_STATE_TRACE` | Print each word name before executing it |
 | `FF_STATE_BACKTRACE` | Maintain a call-chain for debugging |
@@ -301,16 +311,18 @@ in a loop and dispatches on the current state:
 immediately via `ff_exec`; integers and reals are pushed to the data stack.
 
 **Compile mode** (`FF_STATE_COMPILING` set by `:`): words are compiled
-into the heap of the top dictionary entry rather than executed, unless
-the word carries `FF_WORD_IMMEDIATE`, in which case it executes at
-compile time. Integers are compiled as one of the specialised
+into the heap of the definition being compiled, `ff->compiling`, rather
+than executed, unless the word carries `FF_WORD_IMMEDIATE`, in which case
+it executes at compile time. Integers are compiled as one of the specialised
 literals (`FF_OP_LIT0`/`LIT1`/`LITM1`) when possible, otherwise as
 `FF_OP_LIT` + value; reals always go through `FF_OP_FLIT` + bit-cast
 value.
 
 The `[` word temporarily clears `FF_STATE_COMPILING`, allowing interpret-
 mode evaluation inside a definition. `]` restores compile mode.
-`['word']` compiles a word's address as a literal.
+`['word']` compiles a word's address as a literal. What happens to a
+definition across lines and errors is described under *Compiling a
+definition*.
 
 Several single-token look-ahead effects are implemented through pending
 flags: setting `FF_STATE_TICK_PENDING` before returning from the current
@@ -432,8 +444,11 @@ This decision shapes several other parts of the engine:
   `FF_OP_TNEST`, `FF_OP_DOES_RUNTIME`, `FF_OP_CREATE_RUNTIME`,
   `FF_OP_CONSTANT_RUNTIME`, `FF_OP_ARRAY_RUNTIME`: two cells —
   `w->opcode`, `(ff_int_t)(intptr_t)w`.
-- **External native (`FF_OP_NONE`)**: two cells — `FF_OP_CALL`,
-  `(ff_int_t)(intptr_t)ff_word_native_fn(w)`.
+- **External native (`FF_OP_NONE`, `FF_WORD_NATIVE`)**: two cells —
+  `FF_OP_CALL`, `(ff_int_t)(intptr_t)ff_word_native_fn(w)`.
+- **The definition being compiled (`FF_OP_NONE`, not native)** — a word
+  calling itself: two cells, `FF_OP_NEST`, `w`. It gets its own
+  `FF_OP_NEST` opcode only at `;`.
 
 Other compile helpers:
 
@@ -480,20 +495,78 @@ heap.data:
   [2]  FF_OP_EXIT
 ~~~
 
-**Example — `: greet ." Hello" cr ;`**
+**Example — `: greet ." "Hello" cr ;`**
 
 ~~~
 heap.data:
-  [0]  FF_OP_STRLIT
-  [1]  4              ← skip count (cells to advance past string)
-  [2..4]  "Hello\0"  ← string bytes packed into 3 × 8-byte cells
-  [5]  FF_OP_CR
-  [6]  FF_OP_EXIT
+  [0]  FF_OP_PRINT_STR
+  [1]  2              ← skip count (cells to advance past string)
+  [2]  "Hello\0"      ← string bytes packed into one 8-byte cell
+  [3]  FF_OP_CR
+  [4]  FF_OP_EXIT
 ~~~
 
 (`cr` is a built-in opcode so the call collapses to one cell. An
 embedder-supplied native would be the two-cell `FF_OP_CALL`, `fn_ptr`
 sequence instead.)
+
+
+## Compiling a definition
+
+`:` creates the word and makes it `ff->compiling`, the one place compiled
+code goes until `;`. It is not simply the newest word in the dictionary:
+a `create` or `variable` run between `[` and `]` adds a newer one, and
+the rest of the definition must not follow it there. The word is visible
+under its name from the start, so a definition can call itself by name;
+`recurse` compiles the same call. Definitions don't nest — `:` while one
+is open raises -29 — and `forget` is refused while one is open, since it
+would free the word under the compiler.
+
+**Abandoning a definition.** A definition that doesn't reach `;` must not
+stay behind: its body has no `EXIT` yet, and its opcode is still
+`FF_OP_NONE`. So an exception that discards the input a definition is
+being compiled from also removes the word (`ff_dict_remove`), along with
+the compiler's records for it. Which input that is follows the
+evaluation depth: `:` records `ff->eval_depth` in `ff->def_depth`, and an
+exception that ends an `ff_eval` at that depth or a shallower one
+abandons the definition. One caught deeper leaves it open, so
+`: w [ "zork" evaluate ] literal ;` compiles the -13 that `evaluate`
+pushes. An uncaught `abort` and `ff_abort()` abandon it too. A word that
+`create`, `variable` and the other defining words made and whose name
+never came (`ff->unnamed`) is removed the same way.
+
+**Control structures** are kept on a stack of their own, `ff->cf`, not
+on the data stack as ANS permits. Each record (`ff_cf_p.h`) holds its
+kind (the ANS *orig*, *dest* or *do-sys*), the word that opened it for
+error messages, the heap index it refers to, and the number of `{`
+scopes open when it was opened. Every closer checks the top record: that
+there is one, that it is of the kind the closer takes, and that it was
+opened in the current scope — a branch across a scope boundary would
+skip its `SCOPE_ENTER` or `SCOPE_EXIT`. `}` and `;` check that nothing
+opened inside them is still open. A failed check raises -22. `while`
+puts its *orig* under the *dest*, as in ANS, so a loop may have several
+`while`s, each after the first closed by a `then` after the `repeat`.
+
+Keeping the records off the data stack means a number there can never be
+mistaken for a branch to patch, and the data stack stays the program's
+while it compiles: `[ 2 3 + ] literal` inside an `if` works.
+
+**Leaving early.** `exit` and `leave` jump out of whatever encloses them,
+so `ff_compile_call`, the one path that compiles a call, first closes
+what they leave: each `{` scope with `FF_OP_SCOPE_UNWIND` (the same
+operation as `}`'s `SCOPE_EXIT`, outputs checked, under an opcode of its
+own so that `see` can leave it out) and, for `exit`, each counted loop
+with `FF_OP_UNLOOP`, innermost first. `leave` needs a `do` in the same
+definition. `does>` also ends the running word, so it may not stand
+inside a loop or a scope.
+
+**Parsing words** only parse. `."` and `abort"` in a definition compile
+their string after a run-time primitive, `FF_OP_PRINT_STR` or
+`FF_OP_ABORTQ_RUNTIME`; `.(` prints its string at once, in a definition
+too; `abort"` at the prompt throws at once. What to do with the string is
+decided when the parsing word runs (`ff->strlit_op`), not from the state
+when the string arrives. `compile w` compiles `FF_OP_POSTPONE_RUNTIME w`,
+which compiles a call to `w` when the definition runs.
 
 
 ## Opcode set
@@ -507,17 +580,17 @@ entries (the canonical list is `FF_OP_*` in
 | Group | Examples |
 |---|---|
 | Structural | `FF_OP_CALL`, `FF_OP_NEST`, `FF_OP_TNEST`, `FF_OP_EXIT`, `FF_OP_BRANCH`, `FF_OP_QBRANCH` |
-| Literals | `FF_OP_LIT`, `FF_OP_LIT0`, `FF_OP_LIT1`, `FF_OP_LITM1`, `FF_OP_LITADD`, `FF_OP_LITSUB`, `FF_OP_FLIT`, `FF_OP_STRLIT` |
+| Literals | `FF_OP_LIT`, `FF_OP_LIT0`, `FF_OP_LIT1`, `FF_OP_LITM1`, `FF_OP_LITADD`, `FF_OP_LITSUB`, `FF_OP_FLIT`, `FF_OP_STRLIT`, and the string runtimes `FF_OP_PRINT_STR` (`."`) and `FF_OP_ABORTQ_RUNTIME` (`abort"`) |
 | Defining-word runtimes | `FF_OP_CREATE_RUNTIME`, `FF_OP_DOES_RUNTIME`, `FF_OP_CONSTANT_RUNTIME`, `FF_OP_ARRAY_RUNTIME`, `FF_OP_DEFER_RUNTIME`, `FF_OP_VAR_FETCH`/`VAR_STORE`/`VAR_PLUS_STORE` (peephole) |
 | Stack manipulation | `FF_OP_DUP`, `FF_OP_DROP`, `FF_OP_SWAP`, `FF_OP_OVER`, `FF_OP_NIP`, `FF_OP_TUCK`, `FF_OP_ROT`, `FF_OP_NROT`, `FF_OP_PICK`, `FF_OP_ROLL`, `FF_OP_DEPTH`, `FF_OP_CLEAR`, `FF_OP_TO_R`, `FF_OP_FROM_R`, `FF_OP_FETCH_R` |
 | Two-cell stack ops | `FF_OP_2DUP`, `FF_OP_2DROP`, `FF_OP_2SWAP`, `FF_OP_2OVER` |
 | Integer math / bitwise / compare | `FF_OP_ADD`/`SUB`/`MUL`/`DIV`/`MOD`/`DIVMOD`, `FF_OP_MIN`/`MAX`/`NEGATE`/`ABS`, `FF_OP_AND`/`OR`/`XOR`/`NOT`/`SHIFT`, `FF_OP_EQ`/`NEQ`/`LT`/`GT`/`LE`/`GE`, `FF_OP_ZERO_EQ`/`ZERO_NEQ`/`ZERO_LT`/`ZERO_GT`, `FF_OP_INC`/`DEC`/`INC2`/`DEC2`/`MUL2`/`DIV2`, `FF_OP_SET_BASE` |
 | Floating-point | `FF_OP_FADD`/`FSUB`/`FMUL`/`FDIV`, `FF_OP_FNEGATE`/`FABS`/`FSQRT`, `FF_OP_FSIN`/`FCOS`/`FTAN`/`FASIN`/`FACOS`/`FATAN`/`FATAN2`, `FF_OP_FEXP`/`FLOG`/`FPOW`, `FF_OP_F_DOT`/`FLOAT`/`FIX`/`PI`/`E_CONST`, `FF_OP_FEQ`/`FNEQ`/`FLT`/`FGT`/`FLE`/`FGE` |
 | Console I/O | `FF_OP_DOT`, `FF_OP_QUESTION`, `FF_OP_CR`, `FF_OP_EMIT`, `FF_OP_TYPE`, `FF_OP_DOT_S`, `FF_OP_DOT_PAREN`, `FF_OP_DOTQUOTE` |
-| Counted loops | `FF_OP_XDO`, `FF_OP_XQDO`, `FF_OP_XLOOP`, `FF_OP_PXLOOP`, `FF_OP_LOOP_I`, `FF_OP_LOOP_J`, `FF_OP_LEAVE`, `FF_OP_I_ADD` (peephole `i +`), `FF_OP_I_ADD_LOOP` (peephole `i + loop`) |
-| Compiler / immediate | `FF_OP_COLON`, `FF_OP_SEMICOLON`, `FF_OP_IMMEDIATE`, `FF_OP_LBRACKET`, `FF_OP_RBRACKET`, `FF_OP_TICK`, `FF_OP_BRACKET_TICK`, `FF_OP_EXECUTE`, `FF_OP_STATE`, `FF_OP_BRACKET_COMPILE`, `FF_OP_LITERAL`, `FF_OP_COMPILE`, `FF_OP_POSTPONE`, `FF_OP_POSTPONE_RUNTIME`, `FF_OP_DOES` |
+| Counted loops | `FF_OP_XDO`, `FF_OP_XQDO`, `FF_OP_XLOOP`, `FF_OP_PXLOOP`, `FF_OP_LOOP_I`, `FF_OP_LOOP_J`, `FF_OP_LEAVE`, `FF_OP_UNLOOP` (before an `exit` from a loop), `FF_OP_I_ADD` (peephole `i +`), `FF_OP_I_ADD_LOOP` (peephole `i + loop`) |
+| Compiler / immediate | `FF_OP_COLON`, `FF_OP_SEMICOLON`, `FF_OP_IMMEDIATE`, `FF_OP_LBRACKET`, `FF_OP_RBRACKET`, `FF_OP_TICK`, `FF_OP_BRACKET_TICK`, `FF_OP_EXECUTE`, `FF_OP_STATE`, `FF_OP_BRACKET_COMPILE`, `FF_OP_LITERAL`, `FF_OP_COMPILE`, `FF_OP_POSTPONE`, `FF_OP_POSTPONE_RUNTIME`, `FF_OP_RECURSE`, `FF_OP_DOES` |
 | Control flow | `FF_OP_QDUP`, `FF_OP_IF`/`ELSE`/`THEN`, `FF_OP_BEGIN`/`UNTIL`/`AGAIN`, `FF_OP_WHILE`/`REPEAT`, `FF_OP_DO`/`QDO`/`LOOP`/`PLOOP`, `FF_OP_QUIT`, `FF_OP_ABORT`, `FF_OP_ABORTQ`, `FF_OP_THROW`, `FF_OP_CATCH` |
-| Stack scopes | `FF_OP_LBRACE`/`RBRACE` (immediate `{`/`}`), `FF_OP_SCOPE_ENTER`, `FF_OP_SCOPE_EXIT`, `FF_OP_ARG` |
+| Stack scopes | `FF_OP_LBRACE`/`RBRACE` (immediate `{`/`}`), `FF_OP_SCOPE_ENTER`, `FF_OP_SCOPE_EXIT`, `FF_OP_SCOPE_UNWIND` (before an `exit` or `leave` out of a scope), `FF_OP_ARG` |
 | Definitions | `FF_OP_CREATE`, `FF_OP_FORGET`, `FF_OP_VARIABLE`, `FF_OP_CONSTANT`, `FF_OP_ARRAY`, `FF_OP_DEFER`, `FF_OP_IS` |
 | Heap | `FF_OP_HERE`, `FF_OP_STORE`/`FETCH`/`PLUS_STORE`, `FF_OP_ALLOT`/`COMMA`, `FF_OP_C_STORE`/`C_FETCH`/`C_COMMA`/`C_ALIGN` |
 | Strings | `FF_OP_STRING`, `FF_OP_S_STORE`, `FF_OP_S_CAT`, `FF_OP_STRLEN`, `FF_OP_STRCMP` |
@@ -1072,6 +1145,10 @@ links it at the head of its hash bucket.
 **Forget** removes the named word and every word defined after it,
 truncating `words` and rebuilding `buckets` from scratch.
 
+**Remove** (`ff_dict_remove`) takes out one word and leaves the words
+after it in place. The compiler uses it to drop a definition that failed:
+nothing older can refer to it.
+
 The static pool is filled at init time by `ff_dict_define_words`,
 which walks the per-category `FF_*_WORDS` registration tables and
 stamps the corresponding pool slots. Built-in word names are taken by
@@ -1170,7 +1247,9 @@ defining words — words that create other words.
 points at the `does>` body inside the *defining* word) is captured
 into the new word's `does` field. The defining word's compiled
 sequence then ends with an early `EXIT` so the defining word's caller
-sees a normal return.
+sees a normal return. Because of that exit, `does>` may not be compiled
+inside a `do` loop or a `{ }` scope, whose run-time state it would leave
+behind.
 
 At runtime, when a word produced by `does>` is invoked, the dispatch
 arm is just a few inline instructions:
@@ -1281,11 +1360,16 @@ Two exceptions can't be caught: the watchdog / `ff_request_abort()`
 returns `FF_ERR_ABORTED` for the former and `FF_OK` for `quit`.
 
 An uncaught `abort` (-1) or `abort"` (-2) resets the engine once it
-reaches the outermost call: both stacks are emptied, compile mode is
-left, and the transient string arena is released. `ff_abort()` does the
+reaches the outermost call: both stacks are emptied, the definition being
+compiled is abandoned, and the transient string arena is released. `ff_abort()` does the
 same reset directly when nothing is running; called from inside a native
 word, it raises -1 instead, so that the reset happens after everything
 above it has unwound.
+
+Any exception that ends an evaluation also abandons a definition that
+evaluation was compiling (see *Compiling a definition*). The compiler's
+own errors carry -22 (control structure mismatch) and -29 (`:` inside a
+definition); the host sees both as `FF_ERR_MALFORMED`.
 
 `ff->error` and `ff->error_msg` always describe the most recent error
 raised, caught or not — they are what `ff_errno()` and `ff_strerror()`
@@ -1319,7 +1403,7 @@ engine is compiled:
 
 | Option | Effect |
 |---|---|
-| `FF_R_TRUSTED` | Drops the `_FF_RSL` underflow checks inside opcodes the compiler emits in matched pairs (`EXIT`, `XLOOP`, `PXLOOP`, `LEAVE`, `LOOP_I`, `LOOP_J`, and the `i +` / `r@ +` superinstructions). Well-formed code can't fail them; `i`, `j` or `leave` misused outside a loop then go unchecked. Overflow checks are never dropped, since recursion depth is up to the program. The embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. |
+| `FF_R_TRUSTED` | Drops the `_FF_RSL` underflow checks inside opcodes the compiler emits in matched pairs (`EXIT`, `XLOOP`, `PXLOOP`, `LEAVE`, `UNLOOP`, `LOOP_I`, `LOOP_J`, and the `i +` / `r@ +` superinstructions). Well-formed code can't fail them; the compiler rejects `leave` outside a loop, but `i` or `j` misused outside one then go unchecked. Overflow checks are never dropped, since recursion depth is up to the program. The embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. |
 | `FF_LTO` | Enables link-time optimisation (`-flto` / `/GL` via CMake's `INTERPROCEDURAL_OPTIMIZATION`). Lets the compiler inline across translation-unit boundaries — particularly `ff_exec` ↔ `ff_dict_lookup` ↔ `ff_word_native_fn`. Typically 2-5 %. |
 | `FF_PGO=GENERATE` / `USE` | Profile-guided optimisation. Two-pass build: first an instrumented build that writes `*.profraw` when run against a representative workload, then `llvm-profdata merge`, then a second build with `FF_PGO=USE -DFF_PGO_DATA=path/to/merged.profdata`. Typical gain on dispatch-bound code: 5-15 %. |
 
