@@ -5,9 +5,9 @@
  * After the opcode-dispatch migration a built-in word is little more
  * than a name + an opcode; the case body lives in the per-category
  * `words/ff_words_*_p.h` dispatch include. External natives use the
- * FF_OP_CALL escape hatch and stash their fn pointer in heap.data[0].
- * Colon-defs compile bytecode into the heap and may set `does` to a
- * DOES>-clause entry point.
+ * FF_OP_CALL escape hatch through their @ref ff_word::fn. Colon-defs
+ * compile bytecode into the heap and may set `does` to a DOES>-clause
+ * entry point.
  */
 
 #pragma once
@@ -82,8 +82,7 @@ ff_word_t *ff_im_word_new(const char *name, ff_word_fn code,
 /**
  * Release a word and everything it owns. Words tagged @ref
  * FF_WORD_STATIC keep their struct and name (both belong to a static
- * pool) but their heap is still released because external natives
- * stash a fn pointer there.
+ * pool).
  *
  * @param w Word to free, or NULL.
  */
@@ -150,22 +149,21 @@ void ff_word_set_opcode(ff_word_t *w, ff_opcode_t op);
 bool ff_word_is_native(const ff_word_t *w);
 
 /**
- * Test whether @p w's heap is data a program may address: the storage of
+ * Test whether @p w's heap is data a program may write: the storage of
  * a `create`, `variable`, `constant`, `array`, `string`, `defer` or
- * `does>` word. A colon definition's heap is its bytecode, the
- * definition being compiled is bytecode in the making, and a native
- * word's holds a function pointer; under FF_SAFE_MEM none of those can
- * be read, written or extended by Forth code, which could otherwise
- * forge the pointers the inner interpreter follows.
+ * `does>` word. A colon definition's heap is its bytecode, and the
+ * definition being compiled is bytecode in the making; under
+ * FF_SAFE_MEM Forth code may read them but not write or extend them,
+ * which would let it forge the pointers the inner interpreter follows.
+ * (A native word has no heap data at all.)
  *
  * @param w Word to inspect.
  */
 bool ff_word_holds_data(const ff_word_t *w);
 
 /**
- * Retrieve the native function pointer of an external native word.
- * Stashed at heap.data[0]; valid only when
- * `(w->flags & FF_WORD_NATIVE)`.
+ * Retrieve the native function pointer of an external native word
+ * (@ref ff_word::fn); NULL unless `(w->flags & FF_WORD_NATIVE)`.
  *
  * @param w Word with FF_WORD_NATIVE set.
  * @return Function pointer dispatched by FF_OP_CALL.
@@ -187,11 +185,12 @@ struct ff_word
     ff_opcode_t opcode;         /**< Engine opcode driving execution; FF_OP_NONE = no opcode. Set via
                                      ff_word_set_opcode(). */
     ff_word_flags_t flags;      /**< OR of FF_WORD_* flags. */
+    ff_word_fn fn;              /**< External native's C function (FF_WORD_NATIVE), else NULL. */
     ff_int_t stub[3];           /**< Executable form: the word's call sequence, then EXIT. ff_exec()
                                      and `execute` run the word by entering this under a return frame,
                                      so neither builds code on the fly or recurses in C. */
     ff_int_t *does;             /**< DOES> clause IP (NULL if none). */
-    ff_heap_t heap;             /**< Compiled bytecode (colon-defs) or fn pointer (natives). */
+    ff_heap_t heap;             /**< Compiled bytecode (colon-defs) or data (create & co.). */
     ff_sig_t *sigs;             /**< Scope signatures by bytecode offset, for `see`; NULL if none. */
     size_t sigs_len;            /**< Count of @ref sigs. */
     const char *manual;         /**< Markdown manual entry; may be NULL. */

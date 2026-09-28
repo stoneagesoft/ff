@@ -142,11 +142,6 @@ const ff_word_def_t FF_DEBUG_WORDS[] =
     _FF_W("dump", FF_OP_DUMP,
       "( a n -- )  Memory dump\n"
       "Print memory dump *n* bytes in length starting at address *a*."),
-    _FF_W("ERRNO", FF_OP_ERRNO,
-      "( -- errno )  C standard library error\n"
-      "Gives a read-only access to the *errno* C variable.\n"
-      "\n"
-      "See also: **strerror**"),
 #ifdef FF_OS_UNIX
     _FF_W("memstat", FF_OP_MEMSTAT,
       "( -- )  Print memory status\n"

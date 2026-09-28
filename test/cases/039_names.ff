@@ -1,0 +1,24 @@
+\ ff-test: lines
+\ Word names match with ASCII letters folded to lower case and every
+\ other byte exactly - the way they are hashed.
+\
+\ They were compared as UTF-8, case-insensitively, which read past the
+\ end of a name ending in a cut-off UTF-8 sequence - defining one twice
+\ read out of bounds - and matched non-ASCII letters of another case only
+\ when both spellings happened to hash alike.
+
+: p 32 emit . ;
+
+: Twice 2 * ;
+3 TWICE p 4 twice p cr
+
+\ \xDA starts a two-byte sequence, cut off by the end of the name.
+"variable ab\xDA" evaluate p
+"variable ab\xDA" evaluate p
+"5 ab\xDA ! ab\xDA @" evaluate p p cr
+"ab\xDA\xDA" evaluate p cr
+
+\ Non-ASCII letters are not folded: é and É are two names.
+"1 constant é" evaluate p
+"é" evaluate p p
+"É" evaluate p cr

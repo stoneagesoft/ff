@@ -25,12 +25,12 @@ case FF_OP_STRING:
     _FF_BAD_SIZE(tos < 0, "string", tos);
     _FF_SYNC();
     {
-        ff_word_t *nw = ff_def_new(ff, FF_OP_CREATE_RUNTIME);
+        ff_word_t *nw = ff_def_new(ff, "string", FF_OP_CREATE_RUNTIME);
         if (!nw)
             goto done;
         /* Room for tos bytes and the NUL, rounded up to cells. */
         ff_heap_alloc(&nw->heap, ((size_t)tos + 1) / sizeof(ff_int_t) + 1);
-        _FF_CHECK_MEM();
+        _FF_CHECK_MEM_NEW(nw);
     }
     _FF_DROP();
     _FF_NEXT();

@@ -15,11 +15,11 @@ case FF_OP_ARRAY:
     _FF_BAD_SIZE(tos < 0, "array", tos);
     _FF_SYNC();
     {
-        ff_word_t *nw = ff_def_new(ff, FF_OP_ARRAY_RUNTIME);
+        ff_word_t *nw = ff_def_new(ff, "array", FF_OP_ARRAY_RUNTIME);
         if (!nw)
             goto done;
         ff_heap_alloc(&nw->heap, (size_t)tos);
-        _FF_CHECK_MEM();
+        _FF_CHECK_MEM_NEW(nw);
         /* Array size is fixed at definition; trim the doubling slack. */
         ff_heap_trim(&nw->heap);
     }

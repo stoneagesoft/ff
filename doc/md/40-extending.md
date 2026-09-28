@@ -155,7 +155,7 @@ since a buggy or hostile script can put any integer into that slot:
 | Macro | Use when |
 |---|---|
 | `FF_CHECK_ADDR(ff, addr, bytes)` | The word reads `bytes` of memory at `addr`. Confirms the range falls inside one of the engine's tracked regions (any word's heap, the data / return stacks, the string arena). |
-| `FF_CHECK_WRITE(ff, addr, bytes)` | The word writes `bytes` of memory at `addr`. As above, but excluding bytecode and native fn pointers, which a program must never be able to overwrite. |
+| `FF_CHECK_WRITE(ff, addr, bytes)` | The word writes `bytes` of memory at `addr`. As above, but excluding bytecode, which a program must never be able to overwrite. |
 | `FF_CHECK_STR(ff, s)` | The word reads the NUL-terminated string at `s`. Confirms the terminator comes before the end of its region, so reading can't run off it. |
 | `FF_CHECK_XT(ff, w)` | The word receives an `ff_word_t *` from Forth code (e.g. as the target of a custom `execute`-like primitive) and is about to dispatch through it. Confirms the pointer is a live dictionary entry. |
 

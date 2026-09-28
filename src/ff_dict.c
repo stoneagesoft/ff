@@ -8,8 +8,6 @@
 
 #include "ff_word_p.h"
 
-#include "utf8/utf8.h"
-
 #include <assert.h>
 #include <ctype.h>
 #include <stdlib.h>
@@ -202,11 +200,20 @@ void ff_arena_destroy(ff_arena_t *a)
 
 
 /**
+ * Fold an ASCII letter to lower case; any other byte is its own fold.
+ *
+ * @param c Byte of a word name.
+ * @return The byte names are hashed and compared by.
+ */
+static inline unsigned char ff_dict_fold(unsigned char c)
+{
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c - 'A' + 'a') : c;
+}
+
+/**
  * FNV-1a hash over ASCII-lowercase-folded bytes. Non-ASCII bytes
- * (>= 0x80) are passed through unchanged so the resulting hash matches
- * across "Foo"/"foo" for ASCII while staying byte-stable for any UTF-8
- * sequence; case-insensitive matching of non-ASCII characters happens
- * on the chain via @c utf8casecmp.
+ * (>= 0x80) are passed through unchanged, so "Foo" and "foo" hash alike
+ * and any UTF-8 sequence hashes byte for byte.
  *
  * @param name NUL-terminated word name.
  * @return 64-bit FNV-1a digest.
@@ -216,13 +223,32 @@ static uint64_t ff_dict_hash(const char *name)
     uint64_t h = 0xcbf29ce484222325ULL;
     for (const unsigned char *p = (const unsigned char *)name; *p; ++p)
     {
-        unsigned char c = *p;
-        if (c < 0x80 && c >= 'A' && c <= 'Z')
-            c = (unsigned char)(c - 'A' + 'a');
-        h ^= c;
+        h ^= ff_dict_fold(*p);
         h *= 0x100000001b3ULL;
     }
     return h;
+}
+
+/**
+ * Whether two word names match: ASCII letters regardless of case, every
+ * other byte exactly — the same folding as ff_dict_hash(), so a name is
+ * found in exactly the bucket it hashes to. (utf8casecmp(), used before,
+ * folded non-ASCII letters too, which only matched when both spellings
+ * happened to share a bucket, and read past the end of a name ending in
+ * a cut-off UTF-8 sequence.)
+ *
+ * @param a NUL-terminated name.
+ * @param b NUL-terminated name.
+ * @return true if they name the same word.
+ */
+static bool ff_dict_name_eq(const char *a, const char *b)
+{
+    const unsigned char *p = (const unsigned char *)a;
+    const unsigned char *q = (const unsigned char *)b;
+    for (; ff_dict_fold(*p) == ff_dict_fold(*q); ++p, ++q)
+        if (*p == '\0')
+            return true;
+    return false;
 }
 
 /**
@@ -257,7 +283,7 @@ static void ff_dict_bucket_unlink(ff_dict_t *d, ff_word_t *w)
 
 /**
  * Wipe every chain and reinsert each surviving word in append order
- * so the newest-wins property holds. Called by @ref ff_dict_forget
+ * so the newest-wins property holds. Called by @ref ff_dict_truncate
  * after the @ref ff_dict::words tail is truncated.
  *
  * @param d Dictionary.
@@ -393,7 +419,7 @@ ff_word_t *ff_dict_lookup(ff_dict_t *d, const char *name)
     size_t i = hash & (d->bucket_count - 1);
     for (ff_word_t *w = d->buckets[i]; w; w = w->next_bucket)
     {
-        if (utf8casecmp(w->name, name) == 0)
+        if (ff_dict_name_eq(w->name, name))
         {
             w->flags |= FF_WORD_USED;
             return w;
@@ -408,7 +434,7 @@ ff_word_t *ff_dict_lookup(ff_dict_t *d, const char *name)
         size_t bi = hash & (d->builtins->bucket_count - 1);
         for (ff_word_t *w = d->builtins->buckets[bi]; w; w = w->next_bucket)
         {
-            if (utf8casecmp(w->name, name) == 0)
+            if (ff_dict_name_eq(w->name, name))
             {
                 size_t pi = ff_dict_builtin_index(d, w);
                 if (pi != (size_t)-1 && d->builtins_used)
@@ -472,11 +498,9 @@ ff_word_t *ff_dict_append(ff_dict_t *d, ff_word_t *w)
     /* Wire the heap to bump our mutation_seq on every realloc-that-
        moves-data, then bump for this append itself. */
     w->heap.mutation_seq_p = &d->mutation_seq;
-    /* Bind the heap to the dict's arena unless the heap already owns
-       a malloc'd buffer (native-word fn pointer stashed at heap.data[0]
-       during ff_word_init_common, before this append runs). Mixing
-       arena and malloc on the same heap would risk freeing arena
-       memory in ff_heap_destroy or vice versa. */
+    /* Bind the heap to the dict's arena. A heap that already owns a
+       malloc'd buffer stays on malloc: mixing the two on one heap would
+       free arena memory in ff_heap_destroy or vice versa. */
     if (w->heap.data == NULL)
     {
         w->heap.arena = &d->arena;
@@ -486,65 +510,39 @@ ff_word_t *ff_dict_append(ff_dict_t *d, ff_word_t *w)
     return w;
 }
 
-/** @copydoc ff_dict_rename */
-void ff_dict_rename(ff_dict_t *d, ff_word_t *w, const char *new_name)
+/** @copydoc ff_dict_index */
+size_t ff_dict_index(const ff_dict_t *d, const char *name)
 {
-    assert(w && new_name);
-    /* Rename only ever fires for placeholder colon-defs (`:`, `variable`,
-       `constant`, `array`, `string`) created via ff_word_new. Built-ins
-       in the static pool never reach this path. */
-    assert(!(w->flags & FF_WORD_STATIC));
-
-    /* Unlink from the current bucket (keyed on the old name). */
-    ff_dict_bucket_unlink(d, w);
-
-    /* Replace name and reinsert into the bucket of the new name. A failed
-       strdup would leave a NULL name that the hash walk dereferences, so
-       keep the old name on OOM rather than corrupting the bucket. */
-    char *dup = strdup(new_name);
-    if (dup)
-    {
-        ff_mem_release(&d->mem, strlen(w->name));
-        ff_mem_charge(&d->mem, strlen(dup));
-        free(w->name);
-        w->name = dup;
-    }
-    ff_dict_bucket_insert(d, w);
+    /* User words only. Built-ins live in the shared block — forgetting
+       one would mutate state seen by every other engine sharing the
+       singleton. */
+    for (size_t i = d->count; i-- > 0; )
+        if (ff_dict_name_eq(d->words[i]->name, name))
+            return i;
+    return (size_t)-1;
 }
 
-/** @copydoc ff_dict_forget */
-bool ff_dict_forget(ff_dict_t *d, const char *name)
+/** @copydoc ff_dict_truncate */
+void ff_dict_truncate(ff_dict_t *d, size_t index)
 {
-    /* Forget only walks user words. Built-ins live in the shared
-       block — forgetting one would mutate state seen by every other
-       engine sharing the singleton, so callers get FF_ERR_FORGET_PROT
-       (returned as `false` here, with the public error path raising
-       FF_ERR_UNDEFINED today; tightening the message is a follow-up). */
-    for (int i = (int)d->count - 1; i >= 0; --i)
+    if (index >= d->count)
+        return;
+    /* Every word from here on goes, so the arena can go back to where
+       the earliest of them began. (Usually the first; a heap trimmed
+       back at `;` can put a later word's start lower.) */
+    ff_arena_mark_t from = d->words[index]->heap.mark;
+    for (size_t j = index; j < d->count; ++j)
     {
-        if (utf8casecmp(d->words[i]->name, name) == 0)
-        {
-            /* Every word from here on goes, so the arena can go back to
-               where the earliest of them began. (Usually the first; a
-               heap trimmed back at `;` can put a later word's start
-               lower.) */
-            ff_arena_mark_t from = d->words[i]->heap.mark;
-            for (size_t j = i; j < d->count; ++j)
-            {
-                if (d->words[j]->heap.arena == &d->arena
-                        && ff_arena_after(from, d->words[j]->heap.mark))
-                    from = d->words[j]->heap.mark;
-                ff_mem_release(&d->mem, ff_dict_word_cost(d->words[j]->name));
-                ff_word_free(d->words[j]);
-            }
-            d->count = (size_t)i;
-            ff_dict_buckets_rebuild(d);
-            ff_dict_reclaim(d, from);
-            ++d->mutation_seq;
-            return true;
-        }
+        if (d->words[j]->heap.arena == &d->arena
+                && ff_arena_after(from, d->words[j]->heap.mark))
+            from = d->words[j]->heap.mark;
+        ff_mem_release(&d->mem, ff_dict_word_cost(d->words[j]->name));
+        ff_word_free(d->words[j]);
     }
-    return false;
+    d->count = index;
+    ff_dict_buckets_rebuild(d);
+    ff_dict_reclaim(d, from);
+    ++d->mutation_seq;
 }
 
 /** @copydoc ff_dict_remove */
@@ -619,8 +617,8 @@ const ff_interval_t *ff_dict_intervals(ff_dict_t *d, size_t *count)
         const char *hi = lo + w->heap.capacity * sizeof(ff_int_t);
         d->intervals[n].lo = lo;
         d->intervals[n].hi = hi;
-        /* Bytecode and native fn pointers are read-only to a program,
-           which could otherwise forge what the interpreter follows. */
+        /* Bytecode is read-only to a program, which could otherwise
+           forge what the interpreter follows. */
         d->intervals[n].writable = ff_word_holds_data(w);
         ++n;
     }
@@ -706,6 +704,9 @@ static void ff_builtins_define_static(ff_builtins_t *b, const ff_word_def_t *def
         if (def->is_immediate)
             w->flags |= FF_WORD_IMMEDIATE;
         ff_builtins_bucket_insert(b->buckets, b->bucket_count, w);
+        if (def->opcode >= 0 && def->opcode < FF_OP_COUNT
+                && !b->by_opcode[def->opcode])
+            b->by_opcode[def->opcode] = w;
     }
 }
 
@@ -742,11 +743,8 @@ void ff_builtins_init(ff_builtins_t *b)
 void ff_builtins_destroy(ff_builtins_t *b)
 {
     if (!b) return;
-    /* Each native built-in's heap.data is a single-cell malloc holding
-       the fn pointer. Free those individually before releasing the
-       pool itself. Static names point at string literals — no free. */
-    for (size_t i = 0; i < b->static_pool_size; ++i)
-        ff_heap_destroy(&b->static_pool[i].heap);
+    /* Built-ins own no heap memory, and their names point at string
+       literals. */
     free(b->static_pool);
     free(b->buckets);
     memset(b, 0, sizeof(*b));

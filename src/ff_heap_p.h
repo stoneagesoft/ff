@@ -124,7 +124,7 @@ typedef struct ff_arena ff_arena_t;
 /**
  * @brief A position in the dictionary's word-storage arena. Everything
  *        allocated after it can be handed back at once (see
- *        ff_dict_forget()).
+ *        ff_dict_truncate()).
  */
 typedef struct ff_arena_mark
 {
@@ -163,9 +163,8 @@ struct ff_heap
     /**
      * When non-NULL, every growth allocates a fresh region from the
      * arena instead of malloc/realloc. The heap never frees its data
-     * (arena owns the lifetime); native-word heaps with a fn pointer
-     * already stashed at heap.data[0] keep the malloc path so that
-     * pre-arena allocation isn't orphaned.
+     * (arena owns the lifetime). A dictionary binds every word's heap
+     * to its arena; malloc serves only heaps outside one.
      */
     ff_arena_t *arena;
 

@@ -521,9 +521,22 @@ case FF_OP_PLOOP:
     parses: what runs later is FF_OP_ABORTQ_RUNTIME, so an immediate word
     that uses `abort"` raises when it runs instead of compiling. */
 case FF_OP_ABORTQ:
-    ff->state |= FF_STATE_STRLIT_ANTIC;
-    ff->strlit_op = FF_OP_ABORTQ_RUNTIME;
-    ff->strlit_compile = (ff->state & FF_STATE_COMPILING) != 0;
+    _FF_SYNC();
+    {
+        const char *str = ff_parse(ff, "abort\"", FF_TOKEN_STRING);
+        if (!str)
+            goto done;
+        if (!(ff->state & FF_STATE_COMPILING))
+        {
+            ff_raise(ff, FF_THROW_ABORTQ, FF_SEV_ERROR | FF_ERR_ABORTED,
+                     "%s", str);
+            goto done;
+        }
+        ff_heap_compile_op(&ff->compiling->heap, FF_OP_ABORTQ_RUNTIME);
+        ff_heap_compile_str(&ff->compiling->heap, str,
+                            (size_t)ff->tokenizer.token_len);
+        _FF_CHECK_MEM();
+    }
     _FF_NEXT();
 
 /** ( -- )  Runtime of `abort"`: THROW -2 with the inline string as the

@@ -149,21 +149,11 @@ struct ff
        change. `def_depth` is the evaluation depth its `:` ran at: an
        exception that unwinds through that depth abandons the definition
        and removes the word, while one caught deeper (an `evaluate` inside
-       `[ ]`) leaves it open. `unnamed` is the word that `:`, `create`,
-       `variable`, … just made and the next token is to name. */
+       `[ ]`) leaves it open. */
     ff_word_t  *compiling;              /**< Definition being compiled, or NULL. */
     int         def_depth;              /**< ff::eval_depth when @ref compiling was started. */
-    ff_word_t  *unnamed;                /**< Word awaiting its name (FF_STATE_DEF_PENDING), or NULL. */
     ff_cf_t     cf[FF_CF_DEPTH];        /**< Open control structures of @ref compiling. */
     int         n_cf;                   /**< Depth of @ref cf. */
-
-    /* What the string awaited under FF_STATE_STRLIT_ANTIC is for: with
-       `strlit_compile`, it is compiled as the operand of `strlit_op`
-       (`."`, and `abort"` in a definition); otherwise `strlit_op` says
-       what to do with it at once (`.(` prints it, `abort"` at the prompt
-       raises it). */
-    ff_opcode_t strlit_op;              /**< FF_OP_PRINT_STR or FF_OP_ABORTQ_RUNTIME. */
-    bool        strlit_compile;         /**< Compile the string rather than act on it now. */
 
     /* Watchdog state. `abort_requested` is set asynchronously (by
        ff_request_abort, possibly from a signal handler or another
@@ -309,6 +299,37 @@ struct ff
 
 
 /* ===================================================================
+ * Parsing words.
+ * =================================================================== */
+
+/**
+ * @brief Read the token that a word taking one from the input stream
+ *        wants: a name for `:`, `create`, `'`, `see`, …, a string literal
+ *        for `."`, `.(` and `abort"`.
+ *
+ * It is read when the word runs, and must follow it on the same line, as
+ * in standard Forth — whether the word was typed at the prompt or runs
+ * inside another word (`: mk create ;  mk name`).
+ *
+ * @param ff   Engine.
+ * @param word The word asking, for messages.
+ * @param kind FF_TOKEN_WORD or FF_TOKEN_STRING.
+ * @return The token's text — the tokenizer's buffer, valid until the
+ *         next token is read — or NULL with the error raised.
+ */
+const char *ff_parse(ff_t *ff, const char *word, ff_token_t kind);
+
+/**
+ * @brief ff_parse() a name and look it up.
+ *
+ * @param ff   Engine.
+ * @param word The word asking, for messages.
+ * @return The word named, or NULL with the error raised.
+ */
+ff_word_t *ff_parse_word(ff_t *ff, const char *word);
+
+
+/* ===================================================================
  * Memory-safety checks (gated by FF_SAFE_MEM).
  *
  * `ff_addr_valid` returns true when [addr, addr + bytes) lies entirely
@@ -316,8 +337,8 @@ struct ff
  * return stack, the string arena, or a word's heap. Ranges are checked
  * against capacity (not size), so a `here`-derived pointer into
  * freshly-allotted but as-yet-unwritten cells is accepted.
- * `ff_addr_writable` leaves out bytecode and native fn pointers, which a
- * program could otherwise forge (see ff_word_holds_data()), and
+ * `ff_addr_writable` leaves out bytecode, which a program could
+ * otherwise forge (see ff_word_holds_data()), and
  * `ff_str_valid` requires the string's terminator inside the region.
  *
  * `ff_word_valid` returns true when @p w is currently in the
@@ -346,8 +367,8 @@ const char *ff_addr_extent(const ff_t *ff, const void *addr);
 
 /**
  * @brief Like ff_addr_valid(), for a write: the range must also be
- *        writable, which a colon definition's bytecode and a native
- *        word's fn pointer are not (see ff_word_holds_data()).
+ *        writable, which a colon definition's bytecode is not (see
+ *        ff_word_holds_data()).
  */
 bool ff_addr_writable(const ff_t *ff, const void *addr, size_t bytes);
 

@@ -45,9 +45,3 @@ tmp
 1000 failing
 broken
 8 p cr
-
-\ One word can't make two new words at once: only the newest could ever
-\ get the name that comes next, so the others used to pile up nameless.
-: two-creates create create ;
-two-creates
-9 p cr

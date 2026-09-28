@@ -27,242 +27,273 @@
 #pragma once
 
 /**
+ * @def FF_OPCODES
+ * @brief Every opcode, in enum order, as `X(name, layout)`.
+ *
+ * The one list the enum below and the operand-layout table
+ * (ff_opcode_meta.c) are generated from, so the two can't drift apart.
+ * `layout` names an ff_op_layout_t (NONE, INT, REAL, WORD, FN, STR):
+ * what, if anything, follows the opcode in compiled code. A built-in
+ * word's name, immediacy and manual are in its registration table
+ * (words/ff_words_*.c), its behaviour in its dispatch case
+ * (words/ff_words_*_p.h).
+ */
+#define FF_OPCODES(X) \
+    /* --- Structural / control flow --- */ \
+    X(CALL,             FN)    /* + fn_ptr — external native word escape hatch. */ \
+    X(NEST,             WORD)  /* + word_ptr — colon-def invocation; pushes return frame. */ \
+    X(TNEST,            WORD)  /* + word_ptr — tail-call NEST that replaces caller's frame. */ \
+    X(EXIT,             NONE)  /* Pop the return frame and resume; a NULL ip there ends ff_exec. */ \
+    X(LIT,              INT)   /* + value — push an inline cell. */ \
+    X(LIT0,             NONE)  /* Push 0 — specialized for the most common literal. */ \
+    X(LIT1,             NONE)  /* Push 1. */ \
+    X(LITM1,            NONE)  /* Push -1. */ \
+    X(LITADD,           INT)   /* + n — superinstruction: TOS += n. */ \
+    X(LITSUB,           INT)   /* + n — superinstruction: TOS -= n. */ \
+    X(FLIT,             REAL)  /* + value — push an inline real. */ \
+    X(STRLIT,           STR)   /* + skip + bytes — push a pointer to the inline string. */ \
+    X(PRINT_STR,        STR)   /* + skip + bytes — print the inline string (runtime of `."`). */ \
+    X(ABORTQ_RUNTIME,   STR)   /* + skip + bytes — THROW -2 with the inline message (`abort"`). */ \
+    X(BRANCH,           INT)   /* + offset — unconditional jump. */ \
+    X(QBRANCH,          INT)   /* + offset — jump if TOS is zero (consumes TOS). */ \
+    /* --- Scopes: `{ ( a b -- c ) … }` --- */ \
+    X(SCOPE_ENTER,      INT)   /* + packed — install the data-stack barrier (FF_SCOPE_PACK_ENTER). */ \
+    X(SCOPE_EXIT,       INT)   /* + packed — check arity, slide outputs over inputs, restore barrier. */ \
+    X(SCOPE_UNWIND,     INT)   /* + packed — SCOPE_EXIT ahead of an early `exit` / `leave`. */ \
+    X(ARG,              INT)   /* + k — push data[floor - k]: named scope input k (1..nargs). */ \
+    /* --- Runtimes for words made with create / does> / constant / array --- */ \
+    X(DOES_RUNTIME,     WORD)  /* + word_ptr — DOES>-clause entry. */ \
+    X(CREATE_RUNTIME,   WORD)  /* + word_ptr — push word's heap.data pointer. */ \
+    X(CONSTANT_RUNTIME, WORD)  /* + word_ptr — push word's heap.data[0]. */ \
+    X(ARRAY_RUNTIME,    WORD)  /* + word_ptr — index into word's heap (TOS = base + idx). */ \
+    X(DEFER_RUNTIME,    WORD)  /* + word_ptr — call through the xt at heap.data[0] (ANS DEFER). */ \
+    X(VAR_FETCH,        WORD)  /* + word_ptr — push word's heap.data[0] (peephole `v @`). */ \
+    X(VAR_STORE,        WORD)  /* + word_ptr — pop, store at heap.data[0] (peephole `v !`). */ \
+    X(VAR_PLUS_STORE,   WORD)  /* + word_ptr — pop, add to heap.data[0] (peephole `v +!`). */ \
+    /* --- Stack manipulation --- */ \
+    X(DUP,              NONE)  /* ( a -- a a ) */ \
+    X(DROP,             NONE)  /* ( a -- ) */ \
+    X(SWAP,             NONE)  /* ( a b -- b a ) */ \
+    X(OVER,             NONE)  /* ( a b -- a b a ) */ \
+    X(ROT,              NONE)  /* ( a b c -- b c a ) */ \
+    X(NROT,             NONE)  /* ( a b c -- c a b ) */ \
+    X(PICK,             NONE)  /* ( … n -- … item-at-depth-n ) */ \
+    X(ROLL,             NONE)  /* Rotate item at depth n to TOS. */ \
+    X(DEPTH,            NONE)  /* ( -- n ) push current data-stack depth. */ \
+    X(CLEAR,            NONE)  /* Drop every data-stack item. */ \
+    X(TO_R,             NONE)  /* ( a -- ) R: ( -- a ) — move TOS to return stack. */ \
+    X(FROM_R,           NONE)  /* Inverse of FF_OP_TO_R. */ \
+    X(FETCH_R,          NONE)  /* Copy R's TOS to data stack. */ \
+    /* --- Double-cell stack ops --- */ \
+    X(2DUP,             NONE)  /* ( a b -- a b a b ) */ \
+    X(2DROP,            NONE)  /* ( a b -- ) */ \
+    X(2SWAP,            NONE)  /* ( a b c d -- c d a b ) */ \
+    X(2OVER,            NONE)  /* ( a b c d -- a b c d a b ) */ \
+    /* --- Integer math and comparisons --- */ \
+    X(ADD,              NONE) \
+    X(SUB,              NONE) \
+    X(MUL,              NONE) \
+    X(DIV,              NONE) \
+    X(MOD,              NONE) \
+    X(DIVMOD,           NONE) \
+    X(MIN,              NONE) \
+    X(MAX,              NONE) \
+    X(NEGATE,           NONE) \
+    X(ABS,              NONE) \
+    X(AND,              NONE) \
+    X(OR,               NONE) \
+    X(XOR,              NONE) \
+    X(NOT,              NONE) \
+    X(SHIFT,            NONE) \
+    X(EQ,               NONE) \
+    X(NEQ,              NONE) \
+    X(LT,               NONE) \
+    X(GT,               NONE) \
+    X(LE,               NONE) \
+    X(GE,               NONE) \
+    X(ZERO_EQ,          NONE) \
+    X(ZERO_NEQ,         NONE) \
+    X(ZERO_LT,          NONE) \
+    X(ZERO_GT,          NONE) \
+    X(INC,              NONE) \
+    X(DEC,              NONE) \
+    X(INC2,             NONE) \
+    X(DEC2,             NONE) \
+    X(MUL2,             NONE) \
+    X(DIV2,             NONE) \
+    X(SET_BASE,         NONE)  /* Pop n, set the print/parse base to n (10 or 16). */ \
+    /* --- Floating-point --- */ \
+    X(FADD,             NONE) \
+    X(FSUB,             NONE) \
+    X(FMUL,             NONE) \
+    X(FDIV,             NONE) \
+    X(FNEGATE,          NONE) \
+    X(FABS,             NONE) \
+    X(FSQRT,            NONE) \
+    X(FSIN,             NONE) \
+    X(FCOS,             NONE) \
+    X(FTAN,             NONE) \
+    X(FASIN,            NONE) \
+    X(FACOS,            NONE) \
+    X(FATAN,            NONE) \
+    X(FATAN2,           NONE) \
+    X(FEXP,             NONE) \
+    X(FLOG,             NONE) \
+    X(FPOW,             NONE) \
+    X(F_DOT,            NONE)  /* Print top-of-stack as a real (`f.`). */ \
+    X(FLOAT,            NONE)  /* Convert TOS int → real bit-pattern. */ \
+    X(FIX,              NONE)  /* Convert TOS real → truncated int. */ \
+    X(PI,               NONE)  /* Push PI. */ \
+    X(E_CONST,          NONE)  /* Push e. */ \
+    X(FEQ,              NONE) \
+    X(FNEQ,             NONE) \
+    X(FLT,              NONE) \
+    X(FGT,              NONE) \
+    X(FLE,              NONE) \
+    X(FGE,              NONE) \
+    /* --- Console I/O --- */ \
+    X(DOT,              NONE)  /* Print TOS as integer in current base. */ \
+    X(QUESTION,         NONE)  /* Print value at the address on TOS. */ \
+    X(CR,               NONE)  /* Print newline. */ \
+    X(EMIT,             NONE)  /* Print TOS as a single byte. */ \
+    X(TYPE,             NONE)  /* Print NUL-terminated string at TOS. */ \
+    X(DOT_S,            NONE)  /* Print full data stack as a table. */ \
+    X(DOT_PAREN,        NONE)  /* `.(` — print the string that follows at once, even when compiling. */ \
+    X(DOTQUOTE,         NONE)  /* `."` — compile a print of the string that follows. */ \
+    /* --- Counted loops --- */ \
+    X(XDO,              INT)   /* + offset — runtime DO entry. */ \
+    X(XQDO,             INT)   /* + offset — runtime ?DO entry (skip body if start==limit). */ \
+    X(XLOOP,            INT)   /* + offset — runtime LOOP back-edge. */ \
+    X(PXLOOP,           INT)   /* + offset — runtime +LOOP back-edge. */ \
+    X(LOOP_I,           NONE)  /* Push current loop index (`i`). */ \
+    X(LOOP_J,           NONE)  /* Push outer loop index (`j`). */ \
+    X(LEAVE,            NONE)  /* Exit innermost counted loop early. */ \
+    X(UNLOOP,           NONE)  /* Drop the innermost loop parameters (ahead of an `exit` from a loop). */ \
+    X(I_ADD,            NONE)  /* Superinstruction: i + (add the loop index to TOS). */ \
+    X(I_ADD_LOOP,       INT)   /* Superinstruction: i + loop (fused index+ and loop back-edge). */ \
+    X(NIP,              NONE)  /* ( a b -- b ) — drop the second-from-top item. */ \
+    X(TUCK,             NONE)  /* ( a b -- b a b ) — copy TOS under NOS. */ \
+    X(OVER_PLUS,        NONE)  /* Superinstruction: over + (TOS += NOS). */ \
+    X(R_PLUS,           NONE)  /* Superinstruction: r@ + (add return-stack TOS to data TOS). */ \
+    X(DUP_ADD,          NONE)  /* Superinstruction: dup + (TOS *= 2). */ \
+    /* --- Compile-time / immediate --- */ \
+    X(COLON,            NONE)  /* Begin a colon-def. */ \
+    X(SEMICOLON,        NONE)  /* End a colon-def (emits EXIT or folds tail-NEST). */ \
+    X(LBRACE,           NONE)  /* Immediate `{` — open a scope; starts signature collection. */ \
+    X(RBRACE,           NONE)  /* Immediate `}` — close a scope; emits FF_OP_SCOPE_EXIT. */ \
+    X(IMMEDIATE,        NONE)  /* Mark just-defined word immediate. */ \
+    X(LBRACKET,         NONE)  /* Switch to interpret mode inside a colon-def. */ \
+    X(RBRACKET,         NONE)  /* Resume compile mode. */ \
+    X(TICK,             NONE)  /* `'` — push xt of next word. */ \
+    X(BRACKET_TICK,     NONE)  /* `[']` — compile-time tick. */ \
+    X(EXECUTE,          NONE)  /* Pop xt, recursively call ff_exec on it. */ \
+    X(STATE,            NONE)  /* Push 0 / true depending on FF_STATE_COMPILING. */ \
+    X(BRACKET_COMPILE,  NONE)  /* `[compile]` — compile next word non-immediate. */ \
+    X(LITERAL,          NONE)  /* Pop, compile a literal of that value. */ \
+    X(COMPILE,          NONE)  /* `compile` — parse a word; compile code that compiles a call to it. */ \
+    X(POSTPONE,         NONE)  /* `postpone` — parse next word; defer its compilation semantics. */ \
+    X(POSTPONE_RUNTIME, WORD)  /* + word_ptr — compile a call to the word into the current definition. */ \
+    X(RECURSE,          NONE)  /* `recurse` — compile a call to the definition being compiled. */ \
+    X(DOES,             NONE)  /* `DOES>` — install runtime body for the just-created word. */ \
+    /* --- Control flow (immediate) --- */ \
+    X(QDUP,             NONE)  /* ( n -- n n | 0 -- 0 ) — dup if non-zero. */ \
+    X(IF,               NONE) \
+    X(ELSE,             NONE) \
+    X(THEN,             NONE) \
+    X(BEGIN,            NONE) \
+    X(UNTIL,            NONE) \
+    X(AGAIN,            NONE) \
+    X(WHILE,            NONE) \
+    X(REPEAT,           NONE) \
+    X(DO,               NONE) \
+    X(QDO,              NONE) \
+    X(LOOP,             NONE) \
+    X(PLOOP,            NONE) \
+    X(QUIT,             NONE)  /* Drop everything and bail to the host loop. */ \
+    X(ABORT,            NONE)  /* Reset the engine state. */ \
+    X(THROW,            NONE)  /* ANS THROW: pop n; if non-zero, unwind to the most recent CATCH. */ \
+    X(CATCH,            NONE)  /* ANS CATCH: execute xt; push 0, or the THROW code. */ \
+    X(ABORTQ,           NONE)  /* `abort"` — compile a -2 THROW with the string that follows. */ \
+    /* --- Definitions --- */ \
+    X(CREATE,           NONE)  /* Make a data word named by the next token. */ \
+    X(FORGET,           NONE)  /* Remove the next-token-named word and every later one. */ \
+    X(VARIABLE,         NONE)  /* Create + reserve one cell. */ \
+    X(CONSTANT,         NONE)  /* Create a word whose runtime pushes a stored value. */ \
+    X(DEFER,            NONE)  /* Create a deferred word (ANS DEFER); next token names it. */ \
+    X(IS,               NONE)  /* Pop xt and store into next-token-named deferred word (ANS IS). */ \
+    /* --- Heap --- */ \
+    X(HERE,             NONE)  /* Push a pointer to the next free heap slot. */ \
+    X(STORE,            NONE)  /* ( v a -- ) — store v at address a. */ \
+    X(FETCH,            NONE)  /* ( a -- v ) — fetch from address a. */ \
+    X(PLUS_STORE,       NONE)  /* ( v a -- ) — `*a += v`. */ \
+    X(ALLOT,            NONE)  /* Reserve n cells in the current heap. */ \
+    X(COMMA,            NONE)  /* Append TOS to the heap. */ \
+    X(C_STORE,          NONE)  /* Byte store. */ \
+    X(C_FETCH,          NONE)  /* Byte fetch. */ \
+    X(C_COMMA,          NONE)  /* Append TOS as a single byte. */ \
+    X(C_ALIGN,          NONE)  /* Align current heap to a cell boundary. */ \
+    /* --- Strings --- */ \
+    X(STRING,           NONE)  /* Reserve a string buffer of TOS bytes. */ \
+    X(S_STORE,          NONE)  /* Copy string @ source → dest. */ \
+    X(S_CAT,            NONE)  /* Concatenate strings. */ \
+    X(STRLEN,           NONE)  /* Replace TOS-string with its length. */ \
+    X(STRCMP,           NONE)  /* Pop two strings, push -1/0/+1. */ \
+    /* --- Evaluation --- */ \
+    X(EVALUATE,         NONE)  /* ff_eval() on TOS-string. */ \
+    X(LOAD,             NONE)  /* ff_load() on TOS-path. */ \
+    X(PARSE_WORD,       NONE)  /* `parse-word` — next whitespace token as a C string. */ \
+    X(PARSE,            NONE)  /* `parse` — text up to a delimiter char as a C string. */ \
+    /* --- Word-field introspection --- */ \
+    X(FIND,             NONE)  /* Look up a word by name; push word_ptr or 0. */ \
+    X(TO_NAME,          NONE)  /* Word_ptr → name-cstr. */ \
+    X(TO_BODY,          NONE)  /* Word_ptr → heap.data pointer. */ \
+    /* --- Arrays --- */ \
+    X(ARRAY,            NONE)  /* Reserve N cells under a named word. */ \
+    /* --- File I/O --- */ \
+    X(SYSTEM,           NONE) \
+    X(STDIN,            NONE) \
+    X(STDOUT,           NONE) \
+    X(STDERR,           NONE) \
+    X(FOPEN,            NONE) \
+    X(FCLOSE,           NONE) \
+    X(FGETS,            NONE) \
+    X(FPUTS,            NONE) \
+    X(FGETC,            NONE) \
+    X(FPUTC,            NONE) \
+    X(FTELL,            NONE) \
+    X(FSEEK,            NONE) \
+    X(SEEK_SET,         NONE) \
+    X(SEEK_CUR,         NONE) \
+    X(SEEK_END,         NONE) \
+    X(ERRNO,            NONE)  /* Push current C @c errno. */ \
+    X(STRERROR,         NONE)  /* Translate errno on TOS to a message pointer. */ \
+    /* --- Debug --- */ \
+    X(TRACE,            NONE)  /* Toggle FF_STATE_TRACE. */ \
+    X(BACKTRACE,        NONE)  /* Toggle FF_STATE_BACKTRACE. */ \
+    X(DUMP,             NONE)  /* Hex+ASCII memory dump. */ \
+    X(MEMSTAT,          NONE)  /* Print process memory stats (UNIX only). */ \
+    /* --- Dictionary introspection --- */ \
+    X(WORDS,            NONE)  /* List every word. */ \
+    X(WORDSUSED,        NONE)  /* List words that have been looked up at least once. */ \
+    X(WORDSUNUSED,      NONE)  /* Complement of FF_OP_WORDSUSED. */ \
+    X(MAN,              NONE)  /* Print manual entry for next-token word. */ \
+    X(DUMP_WORD,        NONE)  /* Print raw heap of next-token word. */ \
+    X(SEE,              NONE)  /* Decompile next-token word back to Forth syntax. */
+
+/**
  * @enum ff_opcode
  * @brief Identifier carried in each compiled cell.
  *
- * Numbered explicitly: @c FF_OP_NONE is -1 (sentinel) and the regular
- * opcodes start at 0 so they index a virtual jump table cleanly. The
- * trailing @c FF_OP_COUNT records the count for diagnostics.
+ * @c FF_OP_NONE is -1 (sentinel) and the regular opcodes, generated from
+ * FF_OPCODES, start at 0 so they index a virtual jump table cleanly. The
+ * trailing @c FF_OP_COUNT records the count.
  */
 typedef enum ff_opcode
 {
     FF_OP_NONE = -1,            /**< Sentinel: word has no opcode assigned (e.g. external native). */
-
-    /* --- Structural / control flow --- */
-
-    FF_OP_CALL = 0,             /**< + fn_ptr — external native word escape hatch. */
-    FF_OP_NEST,                 /**< + word_ptr — colon-def invocation; pushes return frame. */
-    FF_OP_TNEST,                /**< + word_ptr — tail-call NEST that replaces caller's frame. */
-    FF_OP_EXIT,                 /**< Pop return stack and resume; falls out of ff_exec when sentinel-NULL is popped. */
-
-    FF_OP_LIT,                  /**< + value — push an inline cell. */
-    FF_OP_LIT0,                 /**< Push 0 — specialized for the most common literal. */
-    FF_OP_LIT1,                 /**< Push 1. */
-    FF_OP_LITM1,                /**< Push -1. */
-    FF_OP_LITADD,               /**< + n — superinstruction: TOS += n. */
-    FF_OP_LITSUB,               /**< + n — superinstruction: TOS -= n. */
-    FF_OP_FLIT,                 /**< + value — push an inline real. */
-    FF_OP_STRLIT,               /**< + skip count + packed bytes — push a pointer to the inline string. */
-    FF_OP_PRINT_STR,            /**< + skip count + packed bytes — print the inline string (runtime of `."`). */
-    FF_OP_ABORTQ_RUNTIME,       /**< + skip count + packed bytes — THROW -2 with the inline string as its
-                                     message (runtime of `abort"`). */
-
-    FF_OP_BRANCH,               /**< + offset — unconditional jump. */
-    FF_OP_QBRANCH,              /**< + offset — jump if TOS is zero (consumes TOS). */
-
-    /* --- Scopes: `{ ( a b -- c ) … }` --- */
-
-    FF_OP_SCOPE_ENTER,          /**< + packed — install the data-stack barrier. See FF_SCOPE_PACK_ENTER. */
-    FF_OP_SCOPE_EXIT,           /**< + packed — check arity, slide outputs over inputs, restore barrier. */
-    FF_OP_SCOPE_UNWIND,         /**< + packed — SCOPE_EXIT compiled ahead of an `exit` or `leave` that
-                                     leaves the scope early. Runs identically; a separate opcode only so
-                                     `see` can tell it from a `}`. */
-    FF_OP_ARG,                  /**< + k — push data[floor - k]: a named scope input (k = 1..nargs). */
-
-    /* --- Runtimes for words made with create / does> / constant / array --- */
-
-    FF_OP_DOES_RUNTIME,         /**< + word_ptr — DOES>-clause entry. */
-    FF_OP_CREATE_RUNTIME,       /**< + word_ptr — push word's heap.data pointer. */
-    FF_OP_CONSTANT_RUNTIME,     /**< + word_ptr — push word's heap.data[0]. */
-    FF_OP_ARRAY_RUNTIME,        /**< + word_ptr — index into word's heap (TOS = base + idx). */
-    FF_OP_DEFER_RUNTIME,        /**< + word_ptr — call through xt stored at heap.data[0] (ANS DEFER). */
-    FF_OP_VAR_FETCH,            /**< + word_ptr — push word's heap.data[0] (peephole `v @`). */
-    FF_OP_VAR_STORE,            /**< + word_ptr — pop, store at word's heap.data[0] (peephole `v !`). */
-    FF_OP_VAR_PLUS_STORE,       /**< + word_ptr — pop, add to word's heap.data[0] (peephole `v +!`). */
-
-    /* --- Stack manipulation --- */
-
-    FF_OP_DUP,    /**< ( a -- a a ) */
-    FF_OP_DROP,   /**< ( a -- ) */
-    FF_OP_SWAP,   /**< ( a b -- b a ) */
-    FF_OP_OVER,   /**< ( a b -- a b a ) */
-    FF_OP_ROT,    /**< ( a b c -- b c a ) */
-    FF_OP_NROT,   /**< ( a b c -- c a b ) */
-    FF_OP_PICK,   /**< ( … n -- … item-at-depth-n ) */
-    FF_OP_ROLL,   /**< Rotate item at depth n to TOS. */
-    FF_OP_DEPTH,  /**< ( -- n ) push current data-stack depth. */
-    FF_OP_CLEAR,  /**< Drop every data-stack item. */
-    FF_OP_TO_R,   /**< ( a -- )  R: ( -- a ) — move TOS to return stack. */
-    FF_OP_FROM_R, /**< Inverse of FF_OP_TO_R. */
-    FF_OP_FETCH_R,/**< Copy R's TOS to data stack. */
-
-    /* --- Double-cell stack ops --- */
-
-    FF_OP_2DUP,   /**< ( a b -- a b a b ) */
-    FF_OP_2DROP,  /**< ( a b -- ) */
-    FF_OP_2SWAP,  /**< ( a b c d -- c d a b ) */
-    FF_OP_2OVER,  /**< ( a b c d -- a b c d a b ) */
-
-    /* --- Integer math and comparisons --- */
-
-    FF_OP_ADD, FF_OP_SUB, FF_OP_MUL, FF_OP_DIV, FF_OP_MOD, FF_OP_DIVMOD,
-    FF_OP_MIN, FF_OP_MAX, FF_OP_NEGATE, FF_OP_ABS,
-    FF_OP_AND, FF_OP_OR, FF_OP_XOR, FF_OP_NOT, FF_OP_SHIFT,
-    FF_OP_EQ, FF_OP_NEQ, FF_OP_LT, FF_OP_GT, FF_OP_LE, FF_OP_GE,
-    FF_OP_ZERO_EQ, FF_OP_ZERO_NEQ, FF_OP_ZERO_LT, FF_OP_ZERO_GT,
-    FF_OP_INC, FF_OP_DEC, FF_OP_INC2, FF_OP_DEC2, FF_OP_MUL2, FF_OP_DIV2,
-    FF_OP_SET_BASE,             /**< Pop n, set the print/parse base to n (10 or 16). */
-
-    /* --- Floating-point --- */
-
-    FF_OP_FADD, FF_OP_FSUB, FF_OP_FMUL, FF_OP_FDIV,
-    FF_OP_FNEGATE, FF_OP_FABS, FF_OP_FSQRT,
-    FF_OP_FSIN, FF_OP_FCOS, FF_OP_FTAN,
-    FF_OP_FASIN, FF_OP_FACOS, FF_OP_FATAN, FF_OP_FATAN2,
-    FF_OP_FEXP, FF_OP_FLOG, FF_OP_FPOW,
-    FF_OP_F_DOT,                /**< Print top-of-stack as a real (`f.`). */
-    FF_OP_FLOAT,                /**< Convert TOS int → real bit-pattern. */
-    FF_OP_FIX,                  /**< Convert TOS real → truncated int. */
-    FF_OP_PI,                   /**< Push PI. */
-    FF_OP_E_CONST,              /**< Push e. */
-    FF_OP_FEQ, FF_OP_FNEQ, FF_OP_FLT, FF_OP_FGT, FF_OP_FLE, FF_OP_FGE,
-
-    /* --- Console I/O --- */
-
-    FF_OP_DOT,                  /**< Print TOS as integer in current base. */
-    FF_OP_QUESTION,             /**< Print value at the address on TOS. */
-    FF_OP_CR,                   /**< Print newline. */
-    FF_OP_EMIT,                 /**< Print TOS as a single byte. */
-    FF_OP_TYPE,                 /**< Print NUL-terminated string at TOS. */
-    FF_OP_DOT_S,                /**< Print full data stack as a table. */
-    FF_OP_DOT_PAREN,            /**< `.(` — print the string that follows at once, in a definition too. */
-    FF_OP_DOTQUOTE,             /**< `."` — compile a print of the string that follows. */
-
-    /* --- Counted loops --- */
-
-    FF_OP_XDO,                  /**< + offset — runtime DO entry. */
-    FF_OP_XQDO,                 /**< + offset — runtime ?DO entry (skip body if start==limit). */
-    FF_OP_XLOOP,                /**< + offset — runtime LOOP back-edge. */
-    FF_OP_PXLOOP,               /**< + offset — runtime +LOOP back-edge. */
-    FF_OP_LOOP_I,               /**< Push current loop index (`i`). */
-    FF_OP_LOOP_J,               /**< Push outer loop index (`j`). */
-    FF_OP_LEAVE,                /**< Exit innermost counted loop early. */
-    FF_OP_UNLOOP,               /**< Drop the innermost loop's parameters: compiled ahead of an `exit`
-                                     from inside a loop. */
-    FF_OP_I_ADD,                /**< Superinstruction: i + (add the loop index to TOS). */
-    FF_OP_I_ADD_LOOP,           /**< Superinstruction: i + loop (fused index+ and loop back-edge). */
-    FF_OP_NIP,                  /**< ( a b -- b ) — drop the second-from-top item. */
-    FF_OP_TUCK,                 /**< ( a b -- b a b ) — copy TOS under NOS. */
-    FF_OP_OVER_PLUS,            /**< Superinstruction: over + (TOS += NOS). */
-    FF_OP_R_PLUS,               /**< Superinstruction: r@ + (add return-stack TOS to data TOS). */
-    FF_OP_DUP_ADD,              /**< Superinstruction: dup + (TOS *= 2). */
-
-    /* --- Compile-time / immediate --- */
-
-    FF_OP_COLON,                /**< Begin a colon-def. */
-    FF_OP_SEMICOLON,            /**< End a colon-def (emits EXIT or folds tail-NEST). */
-    FF_OP_LBRACE,               /**< Immediate `{` — open a scope; starts signature collection. */
-    FF_OP_RBRACE,               /**< Immediate `}` — close a scope; emits FF_OP_SCOPE_EXIT. */
-    FF_OP_IMMEDIATE,            /**< Mark just-defined word immediate. */
-    FF_OP_LBRACKET,             /**< Switch to interpret mode inside a colon-def. */
-    FF_OP_RBRACKET,             /**< Resume compile mode. */
-    FF_OP_TICK,                 /**< `'` — push xt of next word. */
-    FF_OP_BRACKET_TICK,         /**< `[']` — compile-time tick. */
-    FF_OP_EXECUTE,              /**< Pop xt, recursively call ff_exec on it. */
-    FF_OP_STATE,                /**< Push 0 / true depending on FF_STATE_COMPILING. */
-    FF_OP_BRACKET_COMPILE,      /**< `[compile]` — compile next word non-immediate. */
-    FF_OP_LITERAL,              /**< Pop, compile a literal of that value. */
-    FF_OP_COMPILE,              /**< `compile` — parse next word; compile code that compiles a call to it. */
-    FF_OP_POSTPONE,             /**< `postpone` — parse next word; defer its compilation semantics. */
-    FF_OP_POSTPONE_RUNTIME,     /**< + word_ptr — compile a call to the word into the def then in progress. */
-    FF_OP_RECURSE,              /**< `recurse` — compile a call to the definition being compiled. */
-    FF_OP_DOES,                 /**< `DOES>` — install runtime body for the just-created word. */
-
-    /* --- Control flow (immediate) --- */
-
-    FF_OP_QDUP,                 /**< ( n -- n n | 0 -- 0 ) — dup if non-zero. */
-    FF_OP_IF, FF_OP_ELSE, FF_OP_THEN,
-    FF_OP_BEGIN, FF_OP_UNTIL, FF_OP_AGAIN,
-    FF_OP_WHILE, FF_OP_REPEAT,
-    FF_OP_DO, FF_OP_QDO, FF_OP_LOOP, FF_OP_PLOOP,
-    FF_OP_QUIT,                 /**< Drop everything and bail to the host loop. */
-    FF_OP_ABORT,                /**< Reset the engine state. */
-    FF_OP_THROW,                /**< ANS Forth THROW: pop n; if non-zero, unwind to the most recent CATCH. */
-    FF_OP_CATCH,                /**< ANS Forth CATCH: execute xt, push 0 on clean return or n on THROW. */
-    FF_OP_ABORTQ,               /**< `abort"` — compile a -2 THROW with the string that follows. */
-
-    /* --- Definitions --- */
-
-    FF_OP_CREATE,               /**< Create an unnamed placeholder; next token names it. */
-    FF_OP_FORGET,               /**< Mark the next token to be forgotten. */
-    FF_OP_VARIABLE,             /**< Create + reserve one cell. */
-    FF_OP_CONSTANT,             /**< Create a word whose runtime pushes a stored value. */
-    FF_OP_DEFER,                /**< Create a deferred word (ANS DEFER); next token names it. */
-    FF_OP_IS,                   /**< Pop xt and store into next-token-named deferred word (ANS IS). */
-
-    /* --- Heap --- */
-
-    FF_OP_HERE,                 /**< Push a pointer to the next free heap slot. */
-    FF_OP_STORE,                /**< ( v a -- ) — store v at address a. */
-    FF_OP_FETCH,                /**< ( a -- v ) — fetch from address a. */
-    FF_OP_PLUS_STORE,           /**< ( v a -- ) — `*a += v`. */
-    FF_OP_ALLOT,                /**< Reserve n cells in the current heap. */
-    FF_OP_COMMA,                /**< Append TOS to the heap. */
-    FF_OP_C_STORE,              /**< Byte store. */
-    FF_OP_C_FETCH,              /**< Byte fetch. */
-    FF_OP_C_COMMA,              /**< Append TOS as a single byte. */
-    FF_OP_C_ALIGN,              /**< Align current heap to a cell boundary. */
-
-    /* --- Strings --- */
-
-    FF_OP_STRING,               /**< Reserve a string buffer of TOS bytes. */
-    FF_OP_S_STORE,              /**< Copy string @ source → dest. */
-    FF_OP_S_CAT,                /**< Concatenate strings. */
-    FF_OP_STRLEN,               /**< Replace TOS-string with its length. */
-    FF_OP_STRCMP,               /**< Pop two strings, push -1/0/+1. */
-
-    /* --- Evaluation --- */
-
-    FF_OP_EVALUATE,             /**< ff_eval() on TOS-string. */
-    FF_OP_LOAD,                 /**< ff_load() on TOS-path. */
-    FF_OP_PARSE_WORD,           /**< `parse-word` — next whitespace token as a C string. */
-    FF_OP_PARSE,                /**< `parse` — text up to a delimiter char as a C string. */
-
-    /* --- Word-field introspection --- */
-
-    FF_OP_FIND,                 /**< Look up a word by name; push word_ptr or 0. */
-    FF_OP_TO_NAME,              /**< Word_ptr → name-cstr. */
-    FF_OP_TO_BODY,              /**< Word_ptr → heap.data pointer. */
-
-    /* --- Arrays --- */
-
-    FF_OP_ARRAY,                /**< Reserve N cells under a named word. */
-
-    /* --- File I/O --- */
-
-    FF_OP_SYSTEM, FF_OP_STDIN, FF_OP_STDOUT, FF_OP_STDERR,
-    FF_OP_FOPEN, FF_OP_FCLOSE, FF_OP_FGETS, FF_OP_FPUTS,
-    FF_OP_FGETC, FF_OP_FPUTC, FF_OP_FTELL, FF_OP_FSEEK,
-    FF_OP_SEEK_SET, FF_OP_SEEK_CUR, FF_OP_SEEK_END,
-    FF_OP_ERRNO,                /**< Push current C @c errno. */
-    FF_OP_STRERROR,             /**< Translate errno on TOS to a message pointer. */
-
-    /* --- Debug --- */
-
-    FF_OP_TRACE,                /**< Toggle FF_STATE_TRACE. */
-    FF_OP_BACKTRACE,            /**< Toggle FF_STATE_BACKTRACE. */
-    FF_OP_DUMP,                 /**< Hex+ASCII memory dump. */
-    FF_OP_MEMSTAT,              /**< Print process memory stats (UNIX only). */
-
-    /* --- Dictionary introspection --- */
-
-    FF_OP_WORDS,                /**< List every word. */
-    FF_OP_WORDSUSED,            /**< List words that have been looked up at least once. */
-    FF_OP_WORDSUNUSED,          /**< Complement of FF_OP_WORDSUSED. */
-    FF_OP_MAN,                  /**< Print manual entry for next-token word. */
-    FF_OP_DUMP_WORD,            /**< Print raw heap of next-token word. */
-    FF_OP_SEE,                  /**< Decompile next-token word back to Forth syntax. */
-
+#define FF_OP_ENUM_(name, layout) FF_OP_##name,
+    FF_OPCODES(FF_OP_ENUM_)
+#undef FF_OP_ENUM_
     FF_OP_COUNT                 /**< Count of valid opcodes — keep last. */
 } ff_opcode_t;
 

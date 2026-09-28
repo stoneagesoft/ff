@@ -1,15 +1,13 @@
 /**
  * @file ff_opcode_meta_p.h
- * @brief Per-opcode metadata: operand layout and Forth-syntax name.
+ * @brief Per-opcode operand layout.
  *
  * The dispatch loop in ff_exec doesn't consult this table — its switch
- * is hand-written for performance. This data is for tooling: the `see`
- * decompiler, the bytecode walker that backs `dump-word`, and any
- * future packed-encoding rewrite or disassembly export.
- *
- * One source of truth means adding a new opcode (especially a peephole
- * superinstruction) updates this table once instead of touching
- * see_opcode_len, see_decompile_body, and any other tooling switch.
+ * is hand-written for performance. It is for code that walks or emits
+ * bytecode: the `see` decompiler, `dump-word`, the tail-call check in
+ * `;`, the execution stubs, and compiling a call to a word. The table
+ * is generated from FF_OPCODES (ff_opcode_p.h), so adding an opcode there
+ * gives it a layout here. Names come from the built-in word tables.
  */
 
 #pragma once
@@ -36,25 +34,11 @@ typedef enum ff_op_layout
 } ff_op_layout_t;
 
 /**
- * @struct ff_opcode_meta
- * @brief Layout and identifier information for one opcode.
+ * @brief Operand layout of @p op: what follows it in compiled code.
+ *        FF_OP_LAYOUT_NONE for FF_OP_NONE or a value that isn't an
+ *        opcode.
  */
-typedef struct ff_opcode_meta
-{
-    /** Forth-source spelling, or NULL when the opcode has no surface
-     *  syntax (control-flow internals like XDO/XLOOP, runtime entries). */
-    const char *name;
-    ff_op_layout_t layout;
-} ff_opcode_meta_t;
-
-/**
- * @brief Look up metadata for @p op.
- *
- * Returns a pointer to a static table entry. Callers can read
- * .layout to size the encoded form (see @ref ff_opcode_encoded_cells)
- * or .name for a default-case spelling.
- */
-const ff_opcode_meta_t *ff_opcode_meta(ff_opcode_t op);
+ff_op_layout_t ff_opcode_layout(ff_opcode_t op);
 
 /**
  * @brief Encoded cell count for @p op at heap @p cells, position @p pos.

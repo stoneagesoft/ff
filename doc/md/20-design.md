@@ -252,25 +252,20 @@ allocation.
 
 ## State flags
 
-`ff_state_t` (in `ff_state.h`) is a bitmask that governs the current
+`ff_state_t` (in `ff_state_p.h`) is a bitmask that governs the current
 interpreter mode:
 
 | Flag | Meaning |
 |---|---|
 | `FF_STATE_COMPILING` | Compile state: tokens are compiled into `ff->compiling`. `[` clears it while the definition stays open |
-| `FF_STATE_DEF_PENDING` | Next token becomes the new word's name |
-| `FF_STATE_FORGET_PENDING` | Next token is a word name to delete |
-| `FF_STATE_IS_PENDING` | Next token names the deferred word `is` stores into |
-| `FF_STATE_TICK_PENDING` | Next token is pushed as a word address (`'`) |
-| `FF_STATE_CTICK_PENDING` | Compile-time `[']` pending |
-| `FF_STATE_CBRACK_PENDING` | `[compile]`: compile the next word even if it is immediate |
-| `FF_STATE_POSTPONE_PENDING` | `postpone`: next token names the word whose compilation to append |
-| `FF_STATE_COMPILE_PENDING` | `compile`: next token names the word a call to which the definition will compile when it runs |
-| `FF_STATE_STRLIT_ANTIC` | Next token must be a string, for `."`, `.(` or `abort"`; `ff->strlit_op` says what it is for |
 | `FF_STATE_SIG_PENDING` | Collecting a scope signature — the evaluator routes tokens to the signature parser, not the kind dispatch |
 | `FF_STATE_TRACE` | Print each word name before executing it |
 | `FF_STATE_BACKTRACE` | Maintain a call-chain for debugging |
 | `FF_STATE_THROWN` | An exception is in flight (code in `ff->throw_code`); see *Error handling* |
+
+No flag carries a request over to the next token: a word that takes a
+name or a string reads it itself (see *Eval loop*). Only a `{`
+signature, which may span lines, keeps a mode between tokens.
 
 
 ## Tokenizer
@@ -324,14 +319,18 @@ mode evaluation inside a definition. `]` restores compile mode.
 definition across lines and errors is described under *Compiling a
 definition*.
 
-Several single-token look-ahead effects are implemented through pending
-flags: setting `FF_STATE_TICK_PENDING` before returning from the current
-token causes the *next* token's name to be resolved to a word address
-instead of executed.
-
-After `ff_exec` returns, `pos` is refreshed from `ff->input_pos` because
-a word may have consumed additional input tokens (e.g. `."` reads the
-following string literal directly).
+**Parsing words** — `:`, `create`, `variable`, `'`, `[']`, `postpone`,
+`forget`, `is`, `see`, `."`, `.(`, `abort"` and the others that take a
+name or a string — read it from the input themselves when they run,
+through `ff_parse()`, as standard Forth words parse the input stream.
+Before running a word the evaluator leaves its place in `ff->input` /
+`ff->input_pos`, and afterwards carries on from `ff->input_pos`, past
+whatever the word read. A word run from compiled code reads the same
+input, so `: mk create ;  mk name` names the word `mk` makes, and a
+word that runs `create` twice makes two. The name or string must follow
+on the same line — `ff_parse()` raises `FF_ERR_MISSING` at the end of
+the input, as it does for a token of the wrong kind — and a word run by
+the host's `ff_exec()` outside any evaluation has no input to read.
 
 
 ## Word structure
@@ -342,9 +341,10 @@ struct ff_word
     char             *name;        /* null-terminated; strdup'd or aliased literal */
     ff_opcode_t       opcode;      /* assigned opcode, or FF_OP_NONE */
     ff_word_flags_t   flags;       /* IMMEDIATE, USED, HIDDEN, STATIC, NATIVE */
+    ff_word_fn        fn;          /* external native's C function, else NULL */
     ff_int_t          stub[3];     /* executable form: call sequence, then EXIT */
     ff_int_t         *does;        /* DOES> clause start (NULL if none) */
-    ff_heap_t         heap;        /* compiled body, or [fn_ptr] for natives */
+    ff_heap_t         heap;        /* compiled body, or the data of create & co. */
     ff_sig_t         *sigs;        /* scope signatures by bytecode offset (see); NULL if none */
     size_t            sigs_len;    /* count of sigs */
     const char       *manual;      /* help text string (may be NULL) */
@@ -353,8 +353,7 @@ struct ff_word
 };
 ~~~
 
-There is no `code` field. Every word is dispatched through its
-`opcode`:
+Every word is dispatched through its `opcode`:
 
 - **Built-in words** carry a real opcode (`FF_OP_DUP`, `FF_OP_ADD`,
   `FF_OP_NEST`, `FF_OP_DOES_RUNTIME`, …) and the case body lives in
@@ -363,9 +362,9 @@ There is no `code` field. Every word is dispatched through its
 
 - **External native words** added by an embedder use the `FF_OP_CALL`
   escape hatch. They carry `opcode = FF_OP_NONE`, the `FF_WORD_NATIVE`
-  flag, and stash their `void (*)(ff_t *)` function pointer in
-  `heap.data[0]`. A compiled caller emits the two-cell sequence
-  `FF_OP_CALL`, `fn_ptr`.
+  flag, and their `void (*)(ff_t *)` function in `fn`; their heap stays
+  empty. A compiled caller emits the two-cell sequence `FF_OP_CALL`,
+  `fn`.
 
 - **Colon-definitions** carry `FF_OP_NEST` (or `FF_OP_TNEST` after
   tail-call peephole optimisation) and a real bytecode body in `heap`.
@@ -378,7 +377,7 @@ There is no `code` field. Every word is dispatched through its
 `flags` carries OR-able bits including `FF_WORD_IMMEDIATE` (compile-
 time word), `FF_WORD_USED` (set on lookup; reported by `wordsunused`),
 `FF_WORD_HIDDEN` (omit from `words` listing), `FF_WORD_NATIVE` (call
-through `heap.data[0]`), and `FF_WORD_STATIC` (struct + name belong to
+through `fn`), and `FF_WORD_STATIC` (struct + name belong to
 the dict's static pool — `ff_word_free` skips the alloc).
 
 
@@ -533,9 +532,7 @@ evaluation depth: `:` records `ff->eval_depth` in `ff->def_depth`, and an
 exception that ends an `ff_eval` at that depth or a shallower one
 abandons the definition. One caught deeper leaves it open, so
 `: w [ "zork" evaluate ] literal ;` compiles the -13 that `evaluate`
-pushes. An uncaught `abort` and `ff_abort()` abandon it too. A word that
-`create`, `variable` and the other defining words made and whose name
-never came (`ff->unnamed`) is removed the same way.
+pushes. An uncaught `abort` and `ff_abort()` abandon it too.
 
 **Control structures** are kept on a stack of their own, `ff->cf`, not
 on the data stack as ANS permits. Each record (`ff_cf_p.h`) holds its
@@ -565,19 +562,29 @@ inside a loop or a scope.
 **Parsing words** only parse. `."` and `abort"` in a definition compile
 their string after a run-time primitive, `FF_OP_PRINT_STR` or
 `FF_OP_ABORTQ_RUNTIME`; `.(` prints its string at once, in a definition
-too; `abort"` at the prompt throws at once. What to do with the string is
-decided when the parsing word runs (`ff->strlit_op`), not from the state
-when the string arrives. `compile w` compiles `FF_OP_POSTPONE_RUNTIME w`,
-which compiles a call to `w` when the definition runs.
+too; `abort"` at the prompt throws at once. `compile w` compiles
+`FF_OP_POSTPONE_RUNTIME w`, which compiles a call to `w` when the
+definition runs.
+
+**`forget`** is refused while a definition is open, and while any word
+it would remove is running — `ff->cur_word`, or a caller saved in a
+return frame, including a word that called `evaluate` or `catch`: its
+code would be freed under it. Words defined after the running ones can
+still be forgotten, from inside `evaluate` as anywhere else.
 
 
 ## Opcode set
 
 Every built-in word — including the structural ones, the `does>` /
 `create` / `constant` / `array` runtimes, and every immediate compiler
-word — has a dedicated opcode. The full set has grown to roughly 130
-entries (the canonical list is `FF_OP_*` in
-[ff_opcode_p.h](src/ff_opcode_p.h)), grouped as follows:
+word — has a dedicated opcode. The full set has grown to over 200
+entries, grouped as follows. The canonical list is `FF_OPCODES` in
+[ff_opcode_p.h](src/ff_opcode_p.h): one `X(name, layout)` line per
+opcode, from which both the `ff_opcode_t` enum and the operand-layout
+table (`ff_opcode_layout`, used by `see`, `dump-word`, the stubs and the
+compiler) are generated. A built-in word's name, immediacy and manual
+live in its registration table (`words/ff_words_*.c`), and `see` names an
+opcode after the word registered for it.
 
 | Group | Examples |
 |---|---|
@@ -775,7 +782,7 @@ cell, with their fields bit-packed (`FF_SCOPE_PACK_ENTER` /
 `;` reads `data[size - 2]` expecting an opcode, and a two-cell operand
 encoding would leave a small integer there that aliases `FF_OP_NEST`
 (== 1) for a one-input scope. The peephole was made operand-aware to
-match — it now consults `ff_opcode_meta` (via `ff_heap_op_starts_at`) to
+match — it now consults `ff_opcode_layout` (via `ff_heap_op_starts_at`) to
 confirm `data[size - 2]` actually begins an instruction before rewriting
 it, rather than assuming a fixed stride.
 
@@ -826,17 +833,16 @@ C:
 
 - **`parse-word ( -- c-addr )`** returns the next whitespace-delimited
   token as a NUL-terminated string in the pad arena (`ff_pad_intern`).
-  Unlike `'`, it does *not* look the token up — it hands back raw text.
-  The read-ahead mechanism is the same one `'` uses: sync, call
-  `ff_tokenizer_next` against `ff->input` / `ff->input_pos`, restore. The
-  evaluator picks up the advanced `input_pos` after the word returns.
+  Unlike `'`, it does *not* look the token up — it hands back raw text,
+  and at the end of the input an empty string rather than an error. It
+  reads `ff->input` / `ff->input_pos` as the other parsing words do (see
+  *Eval loop*).
 - **`parse ( char -- c-addr )`** scans `ff->input` from the current
   position to the next occurrence of the delimiter character, consuming
   it, and returns the text before it. It bypasses the tokenizer and does
   not skip leading delimiters — standard `parse` semantics.
 - **`postpone`** appends a word's *compilation* semantics to the current
-  definition. It runs as an immediate word that sets
-  `FF_STATE_POSTPONE_PENDING`; the evaluator then resolves the next token
+  definition. An immediate word, it parses the next token, looks it up
   and, knowing its immediacy, either compiles a direct call (immediate
   target — it should run when the new definition runs) or emits
   `FF_OP_POSTPONE_RUNTIME` carrying the word pointer (non-immediate
@@ -1116,7 +1122,7 @@ hash index for O(1) name lookup:
 ~~~{.c}
 struct ff_dict
 {
-    /* Ordered array (newest at end). Used by ff_dict_top, ff_dict_forget,
+    /* Ordered array (newest at end). Used by ff_dict_top, ff_dict_truncate,
        and introspection (`words`, `see`, …). */
     ff_word_t **words;
     size_t      count;
@@ -1136,9 +1142,11 @@ struct ff_dict
 };
 ~~~
 
-**Lookup** hashes the (case-insensitive) name into a bucket and walks
-the bucket list newest-first, so a newly defined word shadows an older
-one with the same name. On a hit the word's `FF_WORD_USED` flag is set
+**Lookup** hashes the name into a bucket and walks the bucket list
+newest-first, so a newly defined word shadows an older one with the same
+name. Names are hashed and compared with ASCII letters folded to lower
+case and every other byte as it is, so `Dup` finds `dup` but `É` is not
+`é`. On a hit the word's `FF_WORD_USED` flag is set
 — `wordsunused` consults it to report dead definitions.
 
 **Append** (`ff_dict_append`) puts the word at the end of `words` and
@@ -1154,7 +1162,7 @@ word was created between its `[` and `]` has its heap past that point.
 after it in place. The compiler uses it to drop a definition that failed:
 nothing older can refer to it.
 
-The static pool is filled at init time by `ff_dict_define_words`,
+The static pool is filled once per process by `ff_builtins_init`,
 which walks the per-category `FF_*_WORDS` registration tables and
 stamps the corresponding pool slots. Built-in word names are taken by
 reference from the def-table string literals (no `strdup`).
@@ -1297,11 +1305,9 @@ NULL dispatch, no segfault.
 **`' xt-source is name`** pops the xt left on the data stack by `'`,
 parses `name` from the input stream, looks it up, verifies it's a
 deferred word (`opcode == FF_OP_DEFER_RUNTIME`), and stores the xt
-into `name->heap.data[0]`. The token-resolution side of `is` lives in
-the `ff_eval` parser loop alongside the existing `'` and `forget`
-look-ahead handlers; the dispatch-time half is just a setter that
-flips `FF_STATE_IS_PENDING` so the next token gets routed to the
-assignment path.
+into `name->heap.data[0]`, all when `is` runs. `is` isn't immediate: in
+a definition it is compiled like any other word, and reads its name from
+the input when the definition runs.
 
 The runtime arm is a thin shim that dispatches through the slot:
 
@@ -1470,12 +1476,12 @@ The tracked regions are the data and return stacks, the live part of
 each string-arena slab, and every word's heap. Of the heaps, only data
 words' — `create`, `variable`, `constant`, `array`, `string`, `defer`,
 `does>` words (`ff_word_holds_data`) — are writable. A colon
-definition's heap is its bytecode, the definition being compiled is
-bytecode in the making, and a native word's holds its function
-pointer: a program that could write there could forge a word pointer
-for `NEST` or a function for `CALL`, and take control of the host.
-They can be read — `see`-style inspection and string literals compiled
-into a definition both need that — but not written or extended.
+definition's heap is its bytecode, and the definition being compiled is
+bytecode in the making: a program that could write there could forge a
+word pointer for `NEST` or a function for `CALL`, and take control of
+the host. Bytecode can be read — `see`-style inspection and string
+literals compiled into a definition both need that — but not written or
+extended.
 
 `>name` and `strerror` hand out a copy of the name or message in the
 string arena, so the checks recognise it; the original is memory they

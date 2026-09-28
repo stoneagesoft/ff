@@ -137,21 +137,9 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
 
 void ff_w_man_impl(ff_t *ff)
 {
-    ff_token_t tok = ff_tokenizer_next(&ff->tokenizer, ff->input, &ff->input_pos);
-    if (tok != FF_TOKEN_WORD)
-    {
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                  "'%s' is not a word.", ff->tokenizer.token);
-        return;
-    }
-
-    const ff_word_t *w = ff_dict_lookup(&ff->dict, ff->tokenizer.token);
+    const ff_word_t *w = ff_parse_word(ff, "man");
     if (!w)
-    {
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                  "'%s' undefined.", ff->tokenizer.token);
         return;
-    }
 
     ff_print_manual(ff, w);
 }
@@ -160,21 +148,9 @@ void ff_dump_heap_cells(ff_t *ff, const ff_heap_t *h);
 
 void ff_w_dump_word_impl(ff_t *ff)
 {
-    ff_token_t tok = ff_tokenizer_next(&ff->tokenizer, ff->input, &ff->input_pos);
-    if (tok != FF_TOKEN_WORD)
-    {
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                  "'%s' is not a word.", ff->tokenizer.token);
-        return;
-    }
-
-    const ff_word_t *w = ff_dict_lookup(&ff->dict, ff->tokenizer.token);
+    const ff_word_t *w = ff_parse_word(ff, "dump-word");
     if (!w)
-    {
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                  "'%s' undefined.", ff->tokenizer.token);
         return;
-    }
 
     ft_table_t *table = ft_create_table();
     ft_set_border_style(table, FT_SOLID_ROUND_STYLE);
@@ -258,16 +234,14 @@ void ff_dump_heap_cells(ff_t *ff, const ff_heap_t *h)
     ft_destroy_table(table);
 }
 
-static const ff_word_t *ff_see_opcode_to_word(ff_dict_t *d, ff_opcode_t opcode)
+/* The built-in word @p opcode runs as, for naming it; NULL for an
+   internal opcode no word carries. */
+static const ff_word_t *ff_see_opcode_to_word(const ff_dict_t *d,
+                                              ff_opcode_t opcode)
 {
-    size_t total = ff_dict_total_count(d);
-    for (size_t i = 0; i < total; ++i)
-    {
-        const ff_word_t *w = ff_dict_word_at(d, i);
-        if (w && w->opcode == opcode)
-            return w;
-    }
-    return NULL;
+    if (!d->builtins || opcode < 0 || opcode >= FF_OP_COUNT)
+        return NULL;
+    return d->builtins->by_opcode[opcode];
 }
 
 /* ---------------------------------------------------------------------
@@ -404,8 +378,8 @@ static void see_uncover(see_printer_t *p, see_frame_t *stack, int top)
 }
 
 /* Length of an opcode's encoded form (opcode cell + any inline operand
-   cells). Reads from the central metadata table so adding a new
-   peephole opcode only updates ff_opcode_meta.c, not this site. */
+   cells), from the layout FF_OPCODES gives it: a new opcode needs no
+   change here. */
 static size_t see_opcode_len(const ff_int_t *cells, size_t pos, size_t end)
 {
     if (pos >= end)
@@ -943,22 +917,14 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
 
             default:
             {
-                /* Default render: read the surface-syntax name from the
-                   central metadata table. Falls back to the dict-walk
-                   only when the opcode has no canonical name there
-                   (mostly internal flow opcodes that should be handled
-                   by an explicit case above). */
-                const ff_opcode_meta_t *m = ff_opcode_meta(op);
-                if (m->name)
-                    see_text(pr, "%s", m->name);
+                /* Default render: the name of the built-in word the
+                   opcode runs as. Internal opcodes with no word should
+                   have an explicit case above. */
+                const ff_word_t *ow = ff_see_opcode_to_word(d, op);
+                if (ow)
+                    see_text(pr, "%s", ow->name);
                 else
-                {
-                    const ff_word_t *ow = ff_see_opcode_to_word(d, op);
-                    if (ow)
-                        see_text(pr, "%s", ow->name);
-                    else
-                        see_text(pr, "<%d>", op);
-                }
+                    see_text(pr, "<%d>", op);
                 /* Step over any operand cells too: advancing one cell
                    decoded operands — inline strings, word pointers — as
                    opcodes, and a string or pointer that happened to look
@@ -1003,21 +969,9 @@ static const ff_word_t *see_word_for_pointer(const ff_t *ff, const ff_int_t *p)
 
 void ff_w_see_impl(ff_t *ff)
 {
-    ff_token_t tok = ff_tokenizer_next(&ff->tokenizer, ff->input, &ff->input_pos);
-    if (tok != FF_TOKEN_WORD)
-    {
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                  "'%s' is not a word.", ff->tokenizer.token);
-        return;
-    }
-
-    const ff_word_t *w = ff_dict_lookup(&ff->dict, ff->tokenizer.token);
+    const ff_word_t *w = ff_parse_word(ff, "see");
     if (!w)
-    {
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                  "'%s' undefined.", ff->tokenizer.token);
         return;
-    }
 
     if (ff_word_is_native(w))
     {

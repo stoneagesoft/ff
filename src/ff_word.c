@@ -45,12 +45,12 @@ static void ff_word_build_stub(ff_word_t *w)
         if (w->flags & FF_WORD_NATIVE)
         {
             s[0] = FF_OP_CALL;
-            s[1] = w->heap.data[0];
+            s[1] = (ff_int_t)(intptr_t)w->fn;
         }
         return;
     }
 
-    switch (ff_opcode_meta(w->opcode)->layout)
+    switch (ff_opcode_layout(w->opcode))
     {
         case FF_OP_LAYOUT_NONE:
             s[0] = w->opcode;
@@ -70,9 +70,9 @@ static void ff_word_build_stub(ff_word_t *w)
 /**
  * Set up everything that doesn't depend on the storage strategy.
  *
- * Initializes the heap, stashes the external native fn pointer (if
- * any) at heap.data[0] and raises FF_WORD_NATIVE, and parses the
- * manual entry into a separate prototype/description split.
+ * Initializes the heap, records the external native fn pointer (if
+ * any) and raises FF_WORD_NATIVE, and parses the manual entry into a
+ * separate prototype/description split.
  *
  * @param w      Word being initialized; @c name and @c flags must
  *               already be set by the caller.
@@ -89,15 +89,12 @@ static void ff_word_init_common(ff_word_t *w, ff_word_fn code,
 
     ff_heap_init(&w->heap);
 
-    /* External native words go through the FF_OP_CALL escape hatch. We
-       stash the function pointer at heap.data[0] and tag the word with
-       FF_WORD_NATIVE so callers (ff_exec direct entry, ff_heap_compile_word)
-       can retrieve it without a separate side table. */
+    /* External native words go through the FF_OP_CALL escape hatch
+       with this function. */
     if (code)
     {
-        ff_heap_compile_int(&w->heap, (ff_int_t)(intptr_t)code);
-        if (w->heap.size)
-            w->flags |= FF_WORD_NATIVE;
+        w->fn = code;
+        w->flags |= FF_WORD_NATIVE;
     }
 
     ff_word_build_stub(w);
@@ -133,12 +130,6 @@ ff_word_t *ff_word_new(const char *name, ff_word_fn code,
         return NULL;
     }
     ff_word_init_common(w, code, opcode, manual);
-    if (code && !(w->flags & FF_WORD_NATIVE))
-    {
-        /* No room for the fn pointer. */
-        ff_word_free(w);
-        return NULL;
-    }
     return w;
 }
 
@@ -213,8 +204,7 @@ void ff_word_free(ff_word_t *w)
     w->sigs_len = 0;
     /* FF_WORD_STATIC words live in the dict's pre-allocated pool with
        their names pointing into string literals — neither the struct
-       nor the name is freed here; the heap may still hold an external
-       native's fn pointer (single allocation) which we do release. */
+       nor the name is freed here. */
     ff_heap_destroy(&w->heap);
     if (w->flags & FF_WORD_STATIC)
         return;
@@ -234,9 +224,8 @@ void ff_word_set_opcode(ff_word_t *w, ff_opcode_t op)
  */
 bool ff_word_is_native(const ff_word_t *w)
 {
-    /* Built-ins have an empty heap; external natives stash their fn
-       pointer at heap.data[0] and carry FF_WORD_NATIVE. Colon-defs and
-       DOES>/CREATE-runtime words have non-empty heaps without the flag. */
+    /* Built-ins and external natives have an empty heap; colon-defs
+       and DOES>/CREATE-runtime words have non-empty ones. */
     return w->heap.size == 0 || (w->flags & FF_WORD_NATIVE);
 }
 
@@ -261,5 +250,5 @@ bool ff_word_holds_data(const ff_word_t *w)
  */
 ff_word_fn ff_word_native_fn(const ff_word_t *w)
 {
-    return (ff_word_fn)(intptr_t)w->heap.data[0];
+    return w->fn;
 }

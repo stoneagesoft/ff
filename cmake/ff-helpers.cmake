@@ -85,24 +85,6 @@ macro(ff_files output_var)
     set(${output_var} ${files_list})
 endmacro()
 
-macro(ff_rc root)
-    file(
-        GLOB_RECURSE list
-        "${root}/*.rc"
-    )
-
-    set(FF_RC "tools/ffrc.py")
-
-    foreach (file_path ${list})
-        execute_process(COMMAND ${FF_RC} ${file_path} "${PROJECT_BINARY_DIR}"
-                        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-                        RESULT_VARIABLE FF_EXIT_CODE)
-        if(FF_EXIT_CODE)
-            message(FATAL_ERROR "Failed to process ${file_path} with Resource Compiler.")
-        endif()
-    endforeach()
-endmacro()
-
 macro(ff_build_time output_time)
     string(TIMESTAMP ${output_time} "%Y-%m-%d %H:%M %Z")
 endmacro()

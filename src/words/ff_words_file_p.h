@@ -199,6 +199,12 @@ case FF_OP_SEEK_END:
     _FF_NEXT();
 #endif
 
+/** ( -- errno )  `ERRNO` — push the C library errno value. */
+case FF_OP_ERRNO:
+    _FF_SO(1);
+    _FF_PUSH((ff_int_t)errno);
+    _FF_NEXT();
+
 /** ( errno -- s )  `strerror` — translate errno into a message pointer. */
 case FF_OP_STRERROR:
     _FF_SL(1);

@@ -167,14 +167,10 @@ void ff_heap_compile_word(ff_heap_t *h, const ff_word_t *w)
     assert(w);
     ff_heap_align(h);
 
-    /* Opcodes that need a word pointer to access per-word data at runtime
-       (heap.data, does pointer, etc.). */
-    if (w->opcode == FF_OP_NEST
-            || w->opcode == FF_OP_DOES_RUNTIME
-            || w->opcode == FF_OP_CREATE_RUNTIME
-            || w->opcode == FF_OP_CONSTANT_RUNTIME
-            || w->opcode == FF_OP_ARRAY_RUNTIME
-            || w->opcode == FF_OP_DEFER_RUNTIME)
+    /* A runtime that reaches its word's data (heap.data, the does>
+       pointer, …) carries the word: opcode + word pointer — its layout
+       says so, as it does for the stub (ff_word.c) and `see`. */
+    if (ff_opcode_layout(w->opcode) == FF_OP_LAYOUT_WORD)
     {
         ff_heap_push(h, w->opcode);
         ff_heap_push(h, (ff_int_t)(intptr_t)w);
@@ -199,8 +195,8 @@ void ff_heap_compile_word(ff_heap_t *h, const ff_word_t *w)
     }
     else
     {
-        /* Native without opcode: external escape hatch. The fn pointer
-           is at w->heap.data[0] (see ff_word_native_fn). */
+        /* Native without opcode: external escape hatch through its
+           C function. */
         ff_heap_push(h, FF_OP_CALL);
         ff_heap_push(h, (ff_int_t)(intptr_t)ff_word_native_fn(w));
     }

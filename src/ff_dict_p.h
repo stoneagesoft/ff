@@ -20,6 +20,7 @@
 
 #include <ff_heap_p.h>
 #include <ff_mem_p.h>
+#include <ff_opcode_p.h>
 #include <ff_word_def_p.h>
 
 #include <stdbool.h>
@@ -90,7 +91,7 @@ ff_word_t *ff_dict_lookup(ff_dict_t *d, const char *name);
  *
  * @param d Dictionary.
  * @param w Word to append (may be NULL, from a failed ff_word_new());
- *          must outlive @p d unless freed via ff_dict_forget() /
+ *          must outlive @p d unless freed via ff_dict_truncate() /
  *          ff_dict_remove() / ff_dict_destroy().
  * @return @p w, or NULL — with @p w freed — if the word table couldn't
  *         grow.
@@ -105,30 +106,26 @@ ff_word_t *ff_dict_append(ff_dict_t *d, ff_word_t *w);
 size_t ff_dict_word_cost(const char *name);
 
 /**
- * Atomically rename a word and re-bucket it under the new name. Used
- * by the compiler when the placeholder name (`" "`) for a fresh
- * colon-def is replaced with the user-supplied identifier.
- *
- * @param d        Dictionary.
- * @param w        Word to rename. Must not be FF_WORD_STATIC.
- * @param new_name Replacement name; @c strdup'd into @p w.
+ * @param d    Dictionary.
+ * @param name Name to find, case-insensitively.
+ * @return Index in @ref ff_dict::words of the newest user word named
+ *         @p name, or (size_t)-1 (built-ins are never found).
  */
-void ff_dict_rename(ff_dict_t *d, ff_word_t *w, const char *new_name);
+size_t ff_dict_index(const ff_dict_t *d, const char *name);
 
 /**
- * Remove @p name and every later-defined word from the dictionary
- * (Forth's FORGET). Rebuilds the bucket index after truncation, and
- * hands the arena back from where the forgotten word began.
+ * Remove the user word at @p index and every later-defined one (Forth's
+ * FORGET, once ff_dict_index() has found the word). Rebuilds the bucket
+ * index, and hands the arena back from where the removed words began.
  *
- * @param d    Dictionary.
- * @param name Name of the word marking the cut point.
- * @return true on success, false if @p name was not found.
+ * @param d     Dictionary.
+ * @param index Index in @ref ff_dict::words; out of range is a no-op.
  */
-bool ff_dict_forget(ff_dict_t *d, const char *name);
+void ff_dict_truncate(ff_dict_t *d, size_t index);
 
 /**
  * Remove the single word @p w from the dictionary and free it, leaving
- * every other word in place — unlike ff_dict_forget(), which cuts off
+ * every other word in place — unlike ff_dict_truncate(), which cuts off
  * everything defined after it too. Used to drop a definition that failed
  * to compile: nothing compiled before it can refer to it. The arena is
  * handed back from where @p w began, short of any remaining word's heap.
@@ -160,8 +157,8 @@ typedef struct ff_interval
 {
     const char *lo;        /**< First byte (inclusive). */
     const char *hi;        /**< One past the last byte. */
-    bool writable;         /**< A data word's heap (ff_word_holds_data()); bytecode and native
-                                fn pointers can be read but not written. */
+    bool writable;         /**< A data word's heap (ff_word_holds_data()); bytecode can be read
+                                but not written. */
 } ff_interval_t;
 
 /**
@@ -169,7 +166,7 @@ typedef struct ff_interval
  *
  * Bumps `used` forward as words allocate. When the next allocation
  * doesn't fit, a new slab is linked in. Removing words hands back the
- * slabs allocated after them (see ff_dict_forget()); the rest are freed
+ * slabs allocated after them (see ff_dict_truncate()); the rest are freed
  * by @ref ff_dict_destroy.
  */
 typedef struct ff_arena_slab
@@ -245,6 +242,10 @@ struct ff_builtins
     size_t      static_pool_size;  /**< Number of valid entries in @ref static_pool. */
     ff_word_t **buckets;           /**< Power-of-two hash buckets over the pool. */
     size_t      bucket_count;
+    /** The built-in word each opcode runs as (the first registered), or
+        NULL for internal opcodes with no word — for naming an opcode, as
+        `see` does. */
+    const ff_word_t *by_opcode[FF_OP_COUNT];
 };
 
 /** @brief Populate @p b with every FF_*_WORDS table; thread-unsafe. */

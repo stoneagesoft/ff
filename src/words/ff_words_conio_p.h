@@ -90,17 +90,28 @@ case FF_OP_DOT_S:
 /** ( -- )  `.(` — print the string that follows at once. Immediate, so
     inside a definition it prints while compiling and compiles nothing. */
 case FF_OP_DOT_PAREN:
-    ff->state |= FF_STATE_STRLIT_ANTIC;
-    ff->strlit_op = FF_OP_PRINT_STR;
-    ff->strlit_compile = false;
+    _FF_SYNC();
+    {
+        const char *str = ff_parse(ff, ".(", FF_TOKEN_STRING);
+        if (!str)
+            goto done;
+        ff_printf(ff, "%s", str);
+    }
     _FF_NEXT();
 
 /** ( -- )  `."` — compile a print of the string that follows. */
 case FF_OP_DOTQUOTE:
     _FF_COMPILING;
-    ff->state |= FF_STATE_STRLIT_ANTIC;
-    ff->strlit_op = FF_OP_PRINT_STR;
-    ff->strlit_compile = true;
+    _FF_SYNC();
+    {
+        const char *str = ff_parse(ff, ".\"", FF_TOKEN_STRING);
+        if (!str)
+            goto done;
+        ff_heap_compile_op(&ff->compiling->heap, FF_OP_PRINT_STR);
+        ff_heap_compile_str(&ff->compiling->heap, str,
+                            (size_t)ff->tokenizer.token_len);
+        _FF_CHECK_MEM();
+    }
     _FF_NEXT();
 
 /** ( -- )  Runtime of `."`: print the inline string and step over it. */

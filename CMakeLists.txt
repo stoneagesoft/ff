@@ -126,8 +126,6 @@ set(FF_VERSION_MINOR ${PROJECT_VERSION_MINOR})
 set(FF_VERSION_PATCH ${PROJECT_VERSION_PATCH})
 configure_file("${CMAKE_SOURCE_DIR}/src/ff_version.h.in" "${PROJECT_BINARY_DIR}/ff_version.h")
 
-ff_rc(src)
-
 ff_files(ff_c_src
     "src/*.c"
 )

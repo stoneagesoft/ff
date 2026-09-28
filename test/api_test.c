@@ -285,6 +285,14 @@ static void test_host_exec(void)
     CHECK(ff_exec(ff, ff_dict_lookup(&ff->dict, "dup")));
     CHECK(ff_depth(ff) == 2);
 
+    /* Words that parse have no input to parse here: `see` and `parse-word`
+       read through a NULL pointer. */
+    CHECK(!ff_exec(ff, ff_dict_lookup(&ff->dict, "see")));
+    CHECK(ff_errno(ff) == FF_ERR_MISSING);
+    size_t depth = ff_depth(ff);
+    CHECK(ff_exec(ff, ff_dict_lookup(&ff->dict, "parse-word")));
+    CHECK(ff_depth(ff) == depth + 1);
+
     /* An uncaught ABORT resets the engine at the host boundary too. */
     CHECK(!ff_exec(ff, ff_dict_lookup(&ff->dict, "ab")));
     CHECK(ff_errno(ff) == FF_ERR_ABORTED);
@@ -299,8 +307,8 @@ static void test_host_exec(void)
 
 /* A definition that never reaches `;` leaves nothing in the dictionary:
    not one an error ended, not one the host abandons with ff_abort(), and
-   not the nameless word `:` or `create` made when its name never came.
-   Each used to stay behind, half-built. */
+   no word at all when the name is missing. Each used to stay behind,
+   half-built or nameless. */
 static void test_definitions(void)
 {
     ff_t *ff = new_engine(10000000);
@@ -310,8 +318,9 @@ static void test_definitions(void)
     CHECK(ff_eval(ff, ": 42") == FF_ERR_MISSING);
     CHECK(ff_eval(ff, "create 42") == FF_ERR_MISSING);
     CHECK(ff_eval(ff, "5 constant \"x\"") == FF_ERR_MISSING);
+    CHECK(ff_eval(ff, "variable") == FF_ERR_MISSING);
     CHECK(ff->dict.count == base);
-    CHECK(ff->compiling == NULL && ff->unnamed == NULL);
+    CHECK(ff->compiling == NULL);
     CHECK(!(ff->state & FF_STATE_COMPILING));
 
     /* Left open across calls, then abandoned by the host. */

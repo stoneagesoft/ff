@@ -40,8 +40,10 @@ case FF_OP_EVALUATE:
 case FF_OP_PARSE_WORD:
     _FF_SYNC();
     {
-        ff_token_t tok = ff_tokenizer_next(&ff->tokenizer, ff->input,
-                                           &ff->input_pos);
+        ff_token_t tok = ff->input
+                             ? ff_tokenizer_next(&ff->tokenizer, ff->input,
+                                                 &ff->input_pos)
+                             : FF_TOKEN_NULL;
         char *s = ff_pad_intern(ff,
                                 tok == FF_TOKEN_NULL ? "" : ff->tokenizer.token,
                                 tok == FF_TOKEN_NULL ? 0

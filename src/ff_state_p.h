@@ -2,11 +2,12 @@
  * @file ff_state_p.h
  * @brief Engine-wide state flags stored in @ref ff::state.
  *
- * Each flag tracks one mode bit or pending-token signal. Flags are
- * OR'd into @ref ff::state and consulted by the inner interpreter,
- * the tokenizer, and individual word case bodies. Pending-* flags
- * survive only until the next consumed token; mode flags
- * (`COMPILING`, `TRACE`, `BACKTRACE`) persist across tokens.
+ * Each flag tracks one mode bit. Flags are OR'd into @ref ff::state and
+ * consulted by the inner interpreter, the tokenizer, and individual word
+ * case bodies. Words that take a name or a string from the input stream
+ * (`:`, `'`, `."`, …) read it themselves when they run, so no flag
+ * carries a request over to the next token; only a `{` signature, which
+ * may span lines, keeps a mode between tokens.
  */
 
 #pragma once
@@ -19,37 +20,11 @@ typedef enum ff_state
 {
     FF_STATE_COMPILING      = 1 <<  0,  /**< Compile state: tokens are compiled into ff::compiling. `[`
                                              clears it while the definition stays open. */
-    FF_STATE_DEF_PENDING    = 1 <<  1,  /**< Next token is a name to assign to the just-created definition placeholder. */
-    FF_STATE_FORGET_PENDING = 1 <<  2,  /**< Next token names a word to remove via FORGET. */
-    FF_STATE_IS_PENDING     = 1 << 12,  /**< `is`: pop xt from data stack and store at next-token-named deferred word. */
-    FF_STATE_TICK_PENDING   = 1 <<  3,  /**< Top-level `'` is waiting for the next-line word name. */
-    FF_STATE_CTICK_PENDING  = 1 <<  4,  /**< Compile-time `[']`: emit the next word's address as a literal. */
-    FF_STATE_CBRACK_PENDING = 1 <<  5,  /**< Compile-time `[compile]`: compile the next word non-immediate. */
-    FF_STATE_STRLIT_ANTIC   = 1 <<  6,  /**< The next token must be a string, for `."`, `.(` or `abort"`;
-                                             ff::strlit_op says what it is for. */
     FF_STATE_TRACE          = 1 <<  7,  /**< Trace each word entry through ff_tracef(). */
     FF_STATE_BACKTRACE      = 1 <<  8,  /**< Push to the back-trace stack on every word entry. */
-    FF_STATE_COMPILE_PENDING = 1 << 9,  /**< `compile`: next token names a word whose call the definition
-                                             being compiled will itself compile when it runs. */
     FF_STATE_THROWN         = 1 << 13,  /**< An exception is in flight (an error, THROW, ABORT, QUIT or a
                                              watchdog abort; code in ff::throw_code). Execution unwinds until
                                              a `catch`, `evaluate` / `load`, or the outermost API call
                                              settles it. */
-    FF_STATE_SIG_PENDING    = 1 << 14,  /**< `{` is collecting its `( a b -- c )` signature tokens. */
-    FF_STATE_POSTPONE_PENDING = 1 << 15 /**< `postpone`: next token names the word whose compilation to defer. */
+    FF_STATE_SIG_PENDING    = 1 << 14   /**< `{` is collecting its `( a b -- c )` signature tokens. */
 } ff_state_t;
-
-/**
- * @brief One-shot flags whose trigger word consumes the *next token as a
- *        name* (a WORD). Grouped so the evaluator can (a) reject a
- *        wrong-kind following token before the kind switch and (b) clear
- *        them all on any error path.
- */
-#define FF_STATE_NAME_PENDING \
-    (FF_STATE_DEF_PENDING | FF_STATE_FORGET_PENDING | FF_STATE_IS_PENDING \
-     | FF_STATE_TICK_PENDING | FF_STATE_CTICK_PENDING | FF_STATE_CBRACK_PENDING \
-     | FF_STATE_POSTPONE_PENDING | FF_STATE_COMPILE_PENDING)
-
-/** @brief Every one-shot next-token flag (name-consumers, string, signature). */
-#define FF_STATE_PENDING_ALL \
-    (FF_STATE_NAME_PENDING | FF_STATE_STRLIT_ANTIC | FF_STATE_SIG_PENDING)

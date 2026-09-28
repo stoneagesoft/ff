@@ -1,0 +1,52 @@
+\ ff-test: lines
+\ Words that take a name or a string from the input - `:`, `create`, `'`,
+\ `forget`, `is`, `postpone`, `."`, ... - read it themselves when they run,
+\ from the same line, as standard Forth words parse the input stream.
+\
+\ They used to set a flag for the interpreter to act on at the next token,
+\ wherever it came from: a word that ran `create` twice could only name
+\ the second word, and a name could turn up lines later.
+
+: p 32 emit . ;
+
+\ A word that parses, run inside another, reads what follows the call.
+: two-creates create create ;
+two-creates first second
+' first ' second <> p cr
+: tick ' ;
+tick dup ' dup = p cr
+
+\ The name or string has to follow on the same line.
+:
+create
+'
+: late ."
+3 p cr
+
+\ And be the right kind of token.
+' 42
+: 42
+.( 42
+clear
+
+\ `is` and `postpone` read theirs the same way.
+defer hook
+: ten 10 ;
+' ten is hook hook p cr
+: my-then postpone then ; immediate
+: absval dup 0< if negate my-then ;
+-7 absval p cr
+
+\ `forget` can run inside a word, but not remove one that is running:
+\ its code would be freed under it.
+: forgetter "forget victim" evaluate ;
+: victim 1 ;
+forgetter p cr
+victim
+: self-forget "forget self-forget" evaluate ;
+self-forget p cr
+
+\ A `{` signature may span lines, but not outlive the input an error
+\ discards: `--` here is a word again.
+: sig-part "{ a 5" evaluate p ; immediate
+: sig-rest sig-part -- b } ;

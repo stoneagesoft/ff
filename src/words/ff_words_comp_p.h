@@ -117,16 +117,30 @@ case FF_OP_STATE:
     _FF_PUSH((ff->state & FF_STATE_COMPILING) ? FF_TRUE : FF_FALSE);
     _FF_NEXT();
 
-/** ( -- )  `[']` — anticipate next-token tick (compile-time literal address). */
+/** ( -- )  `[']` — compile the xt of the word that follows as a literal. */
 case FF_OP_BRACKET_TICK:
     _FF_COMPILING;
-    ff->state |= FF_STATE_CTICK_PENDING;
+    _FF_SYNC();
+    {
+        ff_word_t *w = ff_parse_word(ff, "[']");
+        if (!w)
+            goto done;
+        ff_heap_compile_op(&ff->compiling->heap, FF_OP_LIT);
+        ff_heap_compile_int(&ff->compiling->heap, (ff_int_t)(intptr_t)w);
+        _FF_CHECK_MEM();
+    }
     _FF_NEXT();
 
-/** ( -- )  `[compile]` — compile next word non-immediate. */
+/** ( -- )  `[compile]` — compile a call to the word that follows, even an
+    immediate one. */
 case FF_OP_BRACKET_COMPILE:
     _FF_COMPILING;
-    ff->state |= FF_STATE_CBRACK_PENDING;
+    _FF_SYNC();
+    {
+        ff_word_t *w = ff_parse_word(ff, "[compile]");
+        if (!w || !ff_compile_call(ff, w))
+            goto done;
+    }
     _FF_NEXT();
 
 /** ( v -- )  `literal` — pop and compile a literal of that value. */
@@ -145,15 +159,18 @@ case FF_OP_LITERAL:
     half an instruction for any word that compiles to two. */
 case FF_OP_COMPILE:
     _FF_COMPILING;
-    ff->state |= FF_STATE_COMPILE_PENDING;
+    _FF_SYNC();
+    if (!ff_postpone(ff, "compile", true))
+        goto done;
     _FF_NEXT();
 
 /** ( -- )  `postpone` — parse the next word and append its compilation
-    semantics to the current definition. Immediate — sets a pending flag
-    consumed by the evaluator, which knows the word's immediacy. */
+    semantics to the current definition (see ff_postpone). */
 case FF_OP_POSTPONE:
     _FF_COMPILING;
-    ff->state |= FF_STATE_POSTPONE_PENDING;
+    _FF_SYNC();
+    if (!ff_postpone(ff, "postpone", false))
+        goto done;
     _FF_NEXT();
 
 /** ( -- )  Runtime of a postponed non-immediate word: compile a call to
@@ -244,49 +261,17 @@ case FF_OP_SEMICOLON:
     ff->compiling = NULL;
     _FF_NEXT();
 
-/** ( -- xt )  `'` — read next word, push its xt (or defer across input lines). */
+/** ( -- xt )  `'` — push the xt of the word that follows. Parsed when
+    `'` runs: in a definition, from the input at run time. */
 case FF_OP_TICK:
     _FF_SO(1);
     _FF_SYNC();
     {
-        ff_token_t tok = ff_tokenizer_next(&ff->tokenizer, ff->input, &ff->input_pos);
-        if (tok == FF_TOKEN_WORD)
-        {
-            const ff_word_t *tw = ff_dict_lookup(&ff->dict, ff->tokenizer.token);
-            if (tw)
-            {
-                /* Synced section: push via memory; _FF_RESTORE reloads tos. */
-                ff_stack_push_ptr(S, tw);
-            }
-            else
-            {
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                          "'%s' undefined.", ff->tokenizer.token);
-                goto done;
-            }
-        }
-        else if (tok == FF_TOKEN_NULL)
-        {
-            /* No token on current line. Run straight from the interpreter,
-               the name may come on the next input line; from compiled code
-               it has to be on this one. */
-            if (_FF_RUNNING_DIRECT)
-            {
-                ff->state |= FF_STATE_TICK_PENDING;
-            }
-            else
-            {
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
-                          "Word requested by ' not on same input line.");
-                goto done;
-            }
-        }
-        else
-        {
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
-                      "Word not specified when expected.");
+        ff_word_t *tw = ff_parse_word(ff, "'");
+        if (!tw)
             goto done;
-        }
+        /* Synced section: push via memory; _FF_RESTORE reloads tos. */
+        ff_stack_push_ptr(S, tw);
     }
     _FF_RESTORE();
     _FF_NEXT();

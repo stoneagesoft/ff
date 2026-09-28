@@ -57,11 +57,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 - **Error codes are usable again:** `ff_eval` / `ff_exec` / `ff_errno`
   return the bare `FF_ERR_*` code, so `ff_errno(ff) == FF_ERR_DIV_ZERO`
   works (they previously carried the severity bit and never matched).
-- **State-machine leaks:** a wrong-kind token after `:` / `'` / `["]` /
+- **State-machine leaks:** a wrong-kind token after `:` / `'` / `[']` /
   `."` / `postpone` now errors instead of leaking the pending flag onto
-  a later token and silently miscompiling; all pending flags are cleared
-  on any error; `abort` inside a scope no longer leaves stale scope
-  records that could hijack later interpretation.
+  a later token and silently miscompiling; `abort` inside a scope no
+  longer leaves stale scope records that could hijack later
+  interpretation.
 - **Diagnostics instead of silence:** an unterminated string literal, a
   token longer than `FF_TOKEN_SIZE`, and an over-range integer literal
   are now reported rather than silently dropped, truncated, or clamped.
@@ -140,9 +140,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   run between `[` and `]` — left the word in the dictionary half-compiled
   and without an `EXIT`, so calling it ran off the end of its body. The
   word is now removed, as is one that `ff_abort()` or an uncaught `abort`
-  interrupts, and the nameless word that `create`, `variable`, … made
-  when its name never came. An error that an `evaluate` inside `[ ]`
-  catches leaves the definition open.
+  interrupts, and `create`, `variable`, … no longer leave a nameless
+  word behind when the name doesn't come. An error that an `evaluate`
+  inside `[ ]` catches leaves the definition open.
 - **Control-structure mismatches are compile errors** (-22). The
   compiler kept `if` / `begin` / `do` bookkeeping as bare heap offsets
   on the data stack: `[ 100000 ] then` wrote far outside the word,
@@ -194,7 +194,20 @@ the project follows [Semantic Versioning](https://semver.org/).
   native fn pointers are now read-only to Forth code.
 - A word that ran `create` (or `variable` …) twice made a second word
   before the first got its name; the first could never be named and
-  piled up. The second now raises an error.
+  piled up. Each now reads its own name: `: two create create ;  two a b`
+  makes `a` and `b`.
+- `forget` inside `evaluate` could remove the word running it, or that
+  word's caller, and free its code under it. It now raises -15 when a
+  word it would remove is running.
+- A word name ending in a cut-off UTF-8 sequence (`ab\xDA`) was read
+  past its end whenever it was looked up or defined again, and never
+  matched. Names are now compared the way they are hashed: ASCII letters
+  regardless of case, every other byte exactly. (Non-ASCII letters of
+  another case matched only when both spellings happened to hash alike.)
+- `see`, `man`, `dump-word` and `parse-word` read through a NULL pointer
+  when the host ran them with `ff_exec()` outside any evaluation. The
+  first three now raise `FF_ERR_MISSING`; `parse-word` returns an empty
+  string, as at the end of a line.
 - `s!` and `s+` with overlapping strings (`s dup s+`) no longer use
   `memcpy` on overlapping ranges.
 - The fuzzing harness ran with `system` and the file words live, so a
@@ -234,6 +247,18 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `compile` is immediate and parses the word it compiles: `compile w` in
   an immediate word compiles a call to `w` when that word runs — like
   `postpone`, but also for an immediate `w`.
+- **Parsing words read their input when they run.** `:`, `create`,
+  `variable`, `constant`, `defer`, `array`, `string`, `'`, `[']`,
+  `[compile]`, `postpone`, `compile`, `forget`, `is`, `."`, `.(` and
+  `abort"` read the name or string that follows them themselves, as in
+  standard Forth, instead of setting a flag for the interpreter to act
+  on at the next token, wherever that came from. The name or string must
+  now be on the same line: `:` at the end of one raises `FF_ERR_MISSING`
+  rather than taking its name from the next. A parsing word run from
+  compiled code reads the input after its caller (`: tick ' ;  tick dup`
+  pushes `dup`'s xt). A missing name after `see`, `man` or `dump-word`
+  raises `FF_ERR_MISSING` too. The pending flags other than
+  `FF_STATE_SIG_PENDING` are gone.
 - Control structures are tracked on a compile-time stack of their own
   instead of the data stack. `while` follows ANS: a loop may have several,
   each after the first closed by a `then` after the `repeat`
@@ -256,6 +281,15 @@ the project follows [Semantic Versioning](https://semver.org/).
 - A failed allocation no longer crashes on the spot (the old "fail-fast"
   policy): the operation that needed it does nothing and the engine
   raises the error at its next check.
+- Opcodes are listed once, as `FF_OPCODES` in `ff_opcode_p.h`; the enum
+  and the operand-layout table are generated from it, and `see` names
+  an opcode after its built-in word. `ff_opcode_layout()` replaces
+  `ff_opcode_meta()`.
+- An external native word keeps its C function in `ff_word_t::fn`
+  (`ff_word_native_fn()` returns it) instead of in a heap allocation of
+  64 cells holding the one pointer.
+- Removed: the second registration of `ERRNO`, and the `ff_rc` CMake
+  hook, whose resource-compiler script isn't in the repository.
 
 - `abort` / `abort"` now discard the rest of the input line and return
   `FF_ERR_ABORTED` (ANS `ABORT` semantics) instead of running on.

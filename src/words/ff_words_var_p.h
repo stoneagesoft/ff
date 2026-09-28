@@ -65,15 +65,46 @@ case FF_OP_CONSTANT_RUNTIME:
     }
     _FF_NEXT();
 
-/** ( -- )  `forget` — mark next token to be removed via ff_dict_forget(). */
+/** ( -- )  `forget` — remove the word that follows and every later one,
+    unless one of them is running: its code would be freed under it. */
 case FF_OP_FORGET:
-    ff->state |= FF_STATE_FORGET_PENDING;
+    _FF_SYNC();
+    {
+        const char *name = ff_parse(ff, "forget", FF_TOKEN_WORD);
+        if (!name)
+            goto done;
+        if (ff->compiling)
+        {
+            /* It would cut the open definition out from under the
+               compiler too. */
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FORGET_PROT,
+                      "Can't forget while '%s' is being defined.",
+                      ff->compiling->name);
+            goto done;
+        }
+        size_t at = ff_dict_index(&ff->dict, name);
+        if (at == (size_t)-1)
+        {
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+                      "'%s' undefined.", name);
+            goto done;
+        }
+        const ff_word_t *running = ff_word_running_from(ff, at);
+        if (running)
+        {
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FORGET_PROT,
+                      "Can't forget '%s' while '%s' is running.",
+                      name, running->name);
+            goto done;
+        }
+        ff_dict_truncate(&ff->dict, at);
+    }
     _FF_NEXT();
 
-/** ( -- )  `create` — start a new no-data definition; next token names it. */
+/** ( -- )  `create` — make a data word named by the token that follows. */
 case FF_OP_CREATE:
     _FF_SYNC();
-    if (!ff_def_new(ff, FF_OP_CREATE_RUNTIME))
+    if (!ff_def_new(ff, "create", FF_OP_CREATE_RUNTIME))
         goto done;
     _FF_NEXT();
 
@@ -81,11 +112,11 @@ case FF_OP_CREATE:
 case FF_OP_VARIABLE:
     _FF_SYNC();
     {
-        ff_word_t *nw = ff_def_new(ff, FF_OP_CREATE_RUNTIME);
+        ff_word_t *nw = ff_def_new(ff, "variable", FF_OP_CREATE_RUNTIME);
         if (!nw)
             goto done;
         ff_heap_compile_int(&nw->heap, 0);
-        _FF_CHECK_MEM();
+        _FF_CHECK_MEM_NEW(nw);
         /* The variable's heap is exactly one cell — trim the doubling
            overhead from the initial allocation. */
         ff_heap_trim(&nw->heap);
@@ -97,11 +128,11 @@ case FF_OP_CONSTANT:
     _FF_SL(1);
     _FF_SYNC();
     {
-        ff_word_t *nw = ff_def_new(ff, FF_OP_CONSTANT_RUNTIME);
+        ff_word_t *nw = ff_def_new(ff, "constant", FF_OP_CONSTANT_RUNTIME);
         if (!nw)
             goto done;
         ff_heap_compile_int(&nw->heap, tos);
-        _FF_CHECK_MEM();
+        _FF_CHECK_MEM_NEW(nw);
         ff_heap_trim(&nw->heap);
     }
     _FF_DROP();
@@ -136,20 +167,34 @@ case FF_OP_DEFER_RUNTIME:
 case FF_OP_DEFER:
     _FF_SYNC();
     {
-        ff_word_t *nw = ff_def_new(ff, FF_OP_DEFER_RUNTIME);
+        ff_word_t *nw = ff_def_new(ff, "defer", FF_OP_DEFER_RUNTIME);
         if (!nw)
             goto done;
         /* Reserve a single cell holding the target xt; NULL until `is` sets
            it. The xt slot is mutated by `is` later but the cell count is
            fixed, so the trim is safe. */
         ff_heap_compile_int(&nw->heap, 0);
-        _FF_CHECK_MEM();
+        _FF_CHECK_MEM_NEW(nw);
         ff_heap_trim(&nw->heap);
     }
     _FF_NEXT();
 
-/** ( xt -- )  `is` — store xt into the next-token-named deferred word. */
+/** ( xt -- )  `is` — make the deferred word that follows call xt
+    (ANS 6.2.1725). The xt is checked when the deferred word runs. */
 case FF_OP_IS:
     _FF_SL(1);
-    ff->state |= FF_STATE_IS_PENDING;
+    _FF_SYNC();
+    {
+        ff_word_t *w = ff_parse_word(ff, "is");
+        if (!w)
+            goto done;
+        if (w->opcode != FF_OP_DEFER_RUNTIME)
+        {
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED,
+                      "'%s' is not a deferred word.", w->name);
+            goto done;
+        }
+        w->heap.data[0] = tos;
+    }
+    _FF_DROP();
     _FF_NEXT();

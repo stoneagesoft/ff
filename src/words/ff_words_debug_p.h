@@ -29,12 +29,6 @@ case FF_OP_BACKTRACE:
     _FF_DROP();
     _FF_NEXT();
 
-/** ( -- errno )  `ERRNO` — push the C library errno value. */
-case FF_OP_ERRNO:
-    _FF_SO(1);
-    _FF_PUSH((ff_int_t)errno);
-    _FF_NEXT();
-
 /** ( a n -- )  `dump` — hex+ASCII print of n bytes starting at a. */
 case FF_OP_DUMP:
     _FF_SL(2);
