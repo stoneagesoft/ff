@@ -196,7 +196,7 @@ case FF_OP_SEMICOLON:
         ff_heap_trim(h);
     }
     ff->state &= ~FF_STATE_COMPILING;
-    ff_dict_top(&ff->dict)->opcode = FF_OP_NEST;
+    ff_word_set_opcode(ff_dict_top(&ff->dict), FF_OP_NEST);
     _FF_NEXT();
 
 /** ( -- xt )  `'` — read next word, push its xt (or defer across input lines). */
@@ -222,17 +222,17 @@ case FF_OP_TICK:
         }
         else if (tok == FF_TOKEN_NULL)
         {
-            /* No token on current line. If we're at top-level interpret mode,
-               defer to the next input line. */
-            if (ip >= &exec_scratch[0] && ip <= &exec_scratch[3])
+            /* No token on current line. Run straight from the interpreter,
+               the name may come on the next input line; from compiled code
+               it has to be on this one. */
+            if (_FF_RUNNING_DIRECT)
             {
                 ff->state |= FF_STATE_TICK_PENDING;
             }
             else
             {
-                ff_tracef(ff, FF_ERR_MALFORMED,
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
                           "Word requested by ' not on same input line.");
-                ff_abort(ff);
                 goto done;
             }
         }
@@ -240,28 +240,30 @@ case FF_OP_TICK:
         {
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
                       "Word not specified when expected.");
-            ff_abort(ff);
             goto done;
         }
     }
     _FF_RESTORE();
     _FF_NEXT();
 
-/** ( xt -- )  `execute` — recursively run the word identified by xt.
-    ff_exec sets ff->ip to NULL on its way out (the sentinel that
-    terminates an interpreter run); we save the outer ip across the
-    nested call so the caller resumes at the next opcode. */
+/** ( xt -- )  `execute` — run the word identified by xt. Enters the
+    word's stub under a return frame, as NEST enters a body: no C
+    recursion, so the call depth is bounded by the return stack, and an
+    error, THROW or QUIT inside it unwinds through the caller like any
+    other. */
 case FF_OP_EXECUTE:
     _FF_SL(1);
+    _FF_RSO(2);
     {
         ff_word_t *tw = (ff_word_t *)(intptr_t)tos;
         _FF_CHECK_XT(tw);
         _FF_DROP();
-        _FF_SYNC();
-        ff_int_t *saved_ip = ip;
-        ff_exec(ff, tw);
-        ff->ip = saved_ip;
-        _FF_RESTORE();
+        if (ff->state & FF_STATE_BACKTRACE)
+            ff_bt_stack_push(BT, ff->cur_word);
+        ff_stack_push(R, (ff_int_t)(intptr_t)ip);
+        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
+        ff->cur_word = tw;
+        ip = tw->stub;
     }
     _FF_NEXT();
 
@@ -271,19 +273,21 @@ case FF_OP_EXECUTE:
  */
 case FF_OP_DOES:
     _FF_NEED_DEF;
-    /* does> ends the defining word, so that word's NEST frame must sit
-       above this invocation's sentinel frame. Run any other way — at the
-       prompt, or through `execute` — ip points into exec_scratch, and the
-       created word would keep a pointer into a dead C stack frame. */
-    if (ff_unlikely(R->top < r_base + 4))
+    /* does> ends the defining word, whose compiled body holds the
+       runtime code that follows it. Run straight from its own stub — at
+       the prompt, or through `execute` — there is no such body: the
+       created word would get the stub as its runtime, and the frame
+       popped below would be the caller's, not a defining word's. */
+    if (ff_unlikely(_FF_RUNNING_DIRECT))
     {
         _FF_SYNC();
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
                   "does> used outside a defining word.");
         goto done;
     }
+    _FF_RSL_T(2);
     ff_dict_top(&ff->dict)->does = ip;
-    ff_dict_top(&ff->dict)->opcode = FF_OP_DOES_RUNTIME;
+    ff_word_set_opcode(ff_dict_top(&ff->dict), FF_OP_DOES_RUNTIME);
     /* Simulate EXIT to bail out of the definition: pop the 2-cell
        return frame (cur_word on top, ip below). */
     ff->cur_word = (ff_word_t *)(intptr_t)*ff_tos(R);

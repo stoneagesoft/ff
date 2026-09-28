@@ -227,15 +227,16 @@ static char *ff_pad_intern(ff_t *ff, const char *s, size_t len)
  * Enter an evaluation (ff_eval or ff_load).
  *
  * The watchdog state belongs to the outermost evaluation. Resetting it on
- * a nested entry (`evaluate`, `load`) would restart the opcode budget and
- * drop a pending ff_request_abort() on every pass through a loop around
- * them, so untrusted code could never be stopped.
+ * a nested entry (`evaluate`, `load`, or a native word evaluating source
+ * inside a host's ff_exec) would restart the opcode budget and drop a
+ * pending ff_request_abort() on every pass through a loop around them,
+ * so untrusted code could never be stopped.
  *
  * @param ff Engine.
  */
 static void ff_eval_enter(ff_t *ff)
 {
-    if (ff->eval_depth++ > 0)
+    if (ff->eval_depth++ > 0 || ff->exec_depth > 0)
         return;
 
     FF_ABORT_CLEAR(&ff->abort_requested);
@@ -272,6 +273,255 @@ static bool ff_eval_room(ff_t *ff, ff_error_t *ec)
         return false;
     }
     return true;
+}
+
+
+/* ===================================================================
+ * Exceptions.
+ *
+ * Every error is an exception. Raising one records its THROW code (ANS
+ * numbering, see ff_throw_p.h) and, for an error, the message and source
+ * location, then sets FF_STATE_THROWN. Execution stops at once: the
+ * dispatch loop leaves ff_exec, and each C frame that re-entered the
+ * interpreter checks the flag on the way out — a native word's
+ * FF_OP_CALL, `catch`, `evaluate`, `load` — and keeps unwinding unless it
+ * settles the exception there.
+ * =================================================================== */
+
+static void ff_error_locate(const ff_t *ff, int *line, int *pos);
+
+/**
+ * THROW code for an engine error: its ANS Forth code (Table 9.1) where
+ * one exists, so `catch` sees the standard values, and `-(256 + code)`
+ * from the system-defined range otherwise.
+ *
+ * @param code Bare FF_ERR_* code.
+ * @return THROW code.
+ */
+static ff_int_t ff_throw_from_error(ff_error_t code)
+{
+    switch (code)
+    {
+        case FF_ERR_STACK_OVER:   return FF_THROW_STACK_OVER;
+        case FF_ERR_STACK_UNDER:  return FF_THROW_STACK_UNDER;
+        case FF_ERR_RSTACK_OVER:  return FF_THROW_RSTACK_OVER;
+        case FF_ERR_RSTACK_UNDER: return FF_THROW_RSTACK_UNDER;
+        case FF_ERR_HEAP_OVER:    return FF_THROW_DICT_OVER;
+        case FF_ERR_BAD_PTR:      return FF_THROW_BAD_ADDRESS;
+        case FF_ERR_DIV_ZERO:     return FF_THROW_DIV_ZERO;
+        case FF_ERR_UNDEFINED:    return FF_THROW_UNDEFINED;
+        case FF_ERR_NOT_IN_DEF:   return FF_THROW_COMPILE_ONLY;
+        case FF_ERR_FORGET_PROT:  return FF_THROW_BAD_FORGET;
+        case FF_ERR_UNSUPPORTED:  return FF_THROW_UNSUPPORTED;
+        case FF_ERR_SCOPE_RSTACK: return FF_THROW_RSTACK_IMBAL;
+        case FF_ERR_ABORTED:      return FF_THROW_INTERRUPT;
+        case FF_ERR_FILE_IO:      return FF_THROW_FILE_IO;
+        case FF_ERR_OOM:          return FF_THROW_ALLOCATE;
+        default:                  return FF_THROW_SYSTEM_BASE - (ff_int_t)code;
+    }
+}
+
+/**
+ * FF_ERR_* an API call reports for an uncaught THROW code — the inverse
+ * of ff_throw_from_error(), with ABORT / ABORT" reported as
+ * FF_ERR_ABORTED and any code the engine doesn't define as
+ * FF_ERR_APPLICATION.
+ *
+ * @param n THROW code.
+ * @return Bare FF_ERR_* code.
+ */
+static ff_error_t ff_error_from_throw(ff_int_t n)
+{
+    switch (n)
+    {
+        case FF_THROW_ABORT:
+        case FF_THROW_ABORTQ:
+        case FF_THROW_INTERRUPT:     return FF_ERR_ABORTED;
+        case FF_THROW_STACK_OVER:    return FF_ERR_STACK_OVER;
+        case FF_THROW_STACK_UNDER:   return FF_ERR_STACK_UNDER;
+        case FF_THROW_RSTACK_OVER:   return FF_ERR_RSTACK_OVER;
+        case FF_THROW_RSTACK_UNDER:  return FF_ERR_RSTACK_UNDER;
+        case FF_THROW_DICT_OVER:     return FF_ERR_HEAP_OVER;
+        case FF_THROW_BAD_ADDRESS:   return FF_ERR_BAD_PTR;
+        case FF_THROW_DIV_ZERO:      return FF_ERR_DIV_ZERO;
+        case FF_THROW_UNDEFINED:     return FF_ERR_UNDEFINED;
+        case FF_THROW_COMPILE_ONLY:  return FF_ERR_NOT_IN_DEF;
+        case FF_THROW_BAD_FORGET:    return FF_ERR_FORGET_PROT;
+        case FF_THROW_UNSUPPORTED:   return FF_ERR_UNSUPPORTED;
+        case FF_THROW_RSTACK_IMBAL:  return FF_ERR_SCOPE_RSTACK;
+        case FF_THROW_FILE_IO:       return FF_ERR_FILE_IO;
+        case FF_THROW_ALLOCATE:      return FF_ERR_OOM;
+        default:
+            if (n < FF_THROW_SYSTEM_BASE
+                    && n >= FF_THROW_SYSTEM_BASE - FF_ERR_APPLICATION)
+                return (ff_error_t)(FF_THROW_SYSTEM_BASE - n);
+            return FF_ERR_APPLICATION;
+    }
+}
+
+/**
+ * @param code THROW code.
+ * @return true for the exceptions `catch` must not stop: the host's abort
+ *         (watchdog, ff_request_abort) — or untrusted code could swallow
+ *         it and run on — and QUIT, which returns to the host by design.
+ */
+static bool ff_throw_is_fatal(ff_int_t code)
+{
+    return code == FF_THROW_INTERRUPT || code == FF_THROW_QUIT;
+}
+
+/**
+ * Put an exception carrying THROW code @p code in flight.
+ *
+ * While another exception is already in flight, that one stands — unless
+ * the new one is uncatchable and the old one isn't, so nothing raised
+ * while unwinding can hide a host abort.
+ *
+ * @param ff   Engine.
+ * @param code THROW code.
+ * @return false if an earlier exception stands.
+ */
+static bool ff_exc_begin(ff_t *ff, ff_int_t code)
+{
+    if ((ff->state & FF_STATE_THROWN)
+            && (ff_throw_is_fatal(ff->throw_code) || !ff_throw_is_fatal(code)))
+        return false;
+
+    ff->state |= FF_STATE_THROWN;
+    ff->throw_code = code;
+    return true;
+}
+
+/**
+ * Raise an exception carrying THROW code @p code, recording @p e
+ * (severity | FF_ERR_*), the message and the source location for the
+ * host.
+ *
+ * @param ff   Engine.
+ * @param code THROW code.
+ * @param e    Severity and FF_ERR_* code for the host.
+ * @param fmt  printf format of the message.
+ * @param args Format arguments.
+ */
+static void ff_raisev(ff_t *ff, ff_int_t code, ff_error_t e,
+                      const char *fmt, va_list args)
+{
+    if (!ff_exc_begin(ff, code))
+        return;
+
+    ff->error = e;
+    ff_error_locate(ff, &ff->error_line, &ff->error_pos);
+    vsnprintf(ff->error_msg, sizeof(ff->error_msg), fmt, args);
+}
+
+/**
+ * printf-style ff_raisev().
+ * @param ff   Engine.
+ * @param code THROW code.
+ * @param e    Severity and FF_ERR_* code for the host.
+ * @param fmt  printf format of the message.
+ * @param ...  Format arguments.
+ */
+static void ff_raise(ff_t *ff, ff_int_t code, ff_error_t e,
+                     const char *fmt, ...) FF_PRINTF_FMT(4, 5);
+
+static void ff_raise(ff_t *ff, ff_int_t code, ff_error_t e,
+                     const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    ff_raisev(ff, code, e, fmt, args);
+    va_end(args);
+}
+
+/**
+ * THROW @p code on behalf of Forth code (`throw`, `quit`). QUIT records no
+ * error; any other code is described as an uncaught exception, which is
+ * the only way the host ever sees it.
+ *
+ * @param ff   Engine.
+ * @param code Non-zero THROW code.
+ */
+static void ff_throw(ff_t *ff, ff_int_t code)
+{
+    if (code == FF_THROW_QUIT)
+        (void)ff_exc_begin(ff, code);
+    else
+        ff_raise(ff, code, FF_SEV_ERROR | ff_error_from_throw(code),
+                 "Uncaught exception %" FF_PRIdCELL ".", code);
+}
+
+/**
+ * Reset the engine's transient state: the work of an uncaught ABORT, and
+ * of ff_abort() between evaluations. Word definitions are kept.
+ *
+ * @param ff Engine.
+ */
+static void ff_reset(ff_t *ff)
+{
+    ff->stack.top = 0;
+    ff->r_stack.top = 0;
+    ff->ip = NULL;
+    ff->state = 0;
+    ff->tokenizer.state = 0;
+    ff->cur_word = NULL;
+
+    /* Tear down any open `{` scope records. Without this, an abort that
+       fires while a signature/scope is open leaves n_csig > 0 with live
+       arg-name strings; ff_scope_arg() is consulted for every subsequent
+       word token, so a later interpreted word matching a leftover name
+       would compile FF_OP_ARG into the top dictionary word. Free the
+       names and reset the compile-time scope stack. */
+    while (ff->n_csig > 0)
+    {
+        ff_csig_t *cs = &ff->csig[--ff->n_csig];
+        for (int i = 0; i < cs->nargs; i++)
+            free(cs->names[i]);
+    }
+    ff->n_scopes = 0;
+    ff->stack.floor = 0;
+    /* Reset the transient-string arena by freeing all slabs. Anything
+       still pointing into the pad becomes garbage — but we just cleared
+       the data and return stacks, so there is nothing to dangle. */
+    for (ff_pad_slab_t *sl = ff->pad; sl; )
+    {
+        ff_pad_slab_t *next = sl->next;
+        free(sl);
+        sl = next;
+    }
+    ff->pad = NULL;
+}
+
+/**
+ * Settle the in-flight exception, if any, at an API boundary (ff_eval,
+ * ff_load, or ff_exec called by the host) and return what the call
+ * reports.
+ *
+ * A catchable exception stops at every boundary. An uncatchable one (host
+ * abort, watchdog, QUIT) stops only at the outermost, so the evaluation
+ * that re-entered the interpreter below it keeps unwinding. QUIT ends the
+ * evaluation without being an error, so it reports FF_OK; an ABORT that
+ * nothing caught resets the engine once it reaches the top.
+ * ff::throw_code keeps the settled code for `evaluate` / `load` to push.
+ *
+ * @param ff        Engine.
+ * @param outermost No evaluation or execution encloses this call.
+ * @return Bare FF_ERR_* code for the call to return.
+ */
+static ff_error_t ff_settle(ff_t *ff, bool outermost)
+{
+    if (!(ff->state & FF_STATE_THROWN))
+        return FF_OK;
+
+    ff_int_t code = ff->throw_code;
+    ff_error_t ec = code == FF_THROW_QUIT ? FF_OK : FF_ERR_CODE(ff->error);
+    if (ff_throw_is_fatal(code) && !outermost)
+        return ec;
+
+    ff->state &= ~FF_STATE_THROWN;
+    if (outermost && (code == FF_THROW_ABORT || code == FF_THROW_ABORTQ))
+        ff_reset(ff);
+    return ec;
 }
 
 /**
@@ -501,6 +751,12 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
             || !*src)
         return FF_OK;
 
+    /* Nothing new runs while an exception unwinds — possible only if a
+       native word raised an error and then evaluated more source. The
+       exception carries on once the native returns. */
+    if (ff->state & FF_STATE_THROWN)
+        return ff->throw_code == FF_THROW_QUIT ? FF_OK : FF_ERR_CODE(ff->error);
+
     /* The tokenizer's token-start offset indexes ff->input (it locates
        errors), so it is saved and restored with it: after a nested
        `evaluate` returns, errors must point into the outer source again. */
@@ -510,8 +766,6 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     ff->input = src;
     ff->input_pos = 0;
     ff->tokenizer.pos = 0;
-
-    ff->state &= ~(FF_STATE_BROKEN | FF_STATE_ERROR | FF_STATE_ABORTED);
 
     /* Watchdog state is per outermost evaluation: a stale abort request
        from a previous run is dropped and the opcode count starts at zero. */
@@ -740,30 +994,11 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                         {
                             ff->input = src;
                             ff->input_pos = pos;
+                            /* An exception — error, THROW, ABORT, QUIT —
+                               discards the rest of the input: `out`
+                               settles it into the return code. */
                             if (!ff_exec(ff, w))
-                            {
-                                /* A recorded error (watchdog abort, bad
-                                   opcode) names the cause; only an
-                                   uncaught THROW has none to report. */
-                                ec = (ff->state & FF_STATE_ERROR)
-                                         ? ff->error
-                                         : FF_ERR_BROKEN;
                                 goto out;
-                            }
-                            if ((ff->state & FF_STATE_ERROR))
-                            {
-                                ec = ff->error;
-                                goto out;
-                            }
-                            /* `abort` / `abort"` fired: discard the rest of
-                               the input and return to the caller, as ANS
-                               ABORT does, instead of running on. */
-                            if ((ff->state & FF_STATE_ABORTED))
-                            {
-                                ff->state &= ~FF_STATE_ABORTED;
-                                ec = FF_ERR_ABORTED;
-                                goto out;
-                            }
                             /* Restore --- word may have consumed more input. */
                             pos = ff->input_pos;
                         }
@@ -838,13 +1073,13 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     }
 
 out:
-    /* Any error abandons the definition being compiled, so open scope
+    /* Any exception abandons the definition being compiled, so open scope
        records go with it. Catches the paths that raise from inside a
        case body (`;` with a scope still open, `}` without `{`) and so
        never reach ff_sig_abort. Harmless on the clean-exit path, where
        an open `{` simply means the definition continues in the next
-       ff_eval call and ec is FF_OK. */
-    if (ec != FF_OK)
+       ff_eval call. */
+    if (ff->state & FF_STATE_THROWN)
         ff_sig_abort(ff);
 
     /* Single restore-and-return point: every clean exit (FF_TOKEN_NULL)
@@ -858,22 +1093,32 @@ out:
     if (ff->tokenizer.state & FF_TOK_STATE_STRING)
     {
         ff->tokenizer.state &= ~FF_TOK_STATE_STRING;
-        if (ec == FF_OK)
-            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_STRING,
-                           "Unterminated string literal.");
+        if (!(ff->state & FF_STATE_THROWN))
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_STRING,
+                      "Unterminated string literal.");
     }
 
     ff->input = prev_input;
     ff->input_pos = prev_pos;
     ff->tokenizer.pos = prev_tok_pos;
+
+    /* Every error was raised as an exception; this boundary turns it into
+       the return code (or, for an uncatchable one inside a nested call,
+       reports it and lets it keep unwinding). */
+    ec = ff_settle(ff, ff->eval_depth == 1 && ff->exec_depth == 0);
     ff_eval_leave(ff);
-    return FF_ERR_CODE(ec);
+    return ec;
 }
 
 /** @copydoc ff_exec */
 bool ff_exec(ff_t *ff, ff_word_t *w)
 {
     assert(w);
+
+    /* Nothing new starts while an exception unwinds (a native word that
+       raised an error and then called back in). */
+    if (ff->state & FF_STATE_THROWN)
+        return false;
 
     ff_stack_t *S = &ff->stack;
     ff_stack_t *R = &ff->r_stack;
@@ -901,7 +1146,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     const size_t r_base      = R->top;
     const size_t floor_base  = S->floor;
     const size_t scopes_base = ff->n_scopes;
-    bool ok = true;
+    ++ff->exec_depth;
 
     if (ff->state & (FF_STATE_TRACE | FF_STATE_BACKTRACE))
     {
@@ -911,63 +1156,20 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             ff_bt_stack_push(BT, w);
     }
 
-    /* Prepare dispatch.
-       - Opcoded built-in  → synthesize a tiny bytecode [opcode, (word_ptr),
-         FF_OP_EXIT]. Push a NULL return sentinel on R so EXIT terminates
-         cleanly.
-       - External FF_OP_NONE word with a fn pointer → call it directly
-         (it may set ff->ip to continue in bytecode).
-       - Otherwise nothing to run. */
-    ff_int_t exec_scratch[3];
-    ff_int_t *ip;
-
-    if (w->opcode != FF_OP_NONE)
-    {
-        exec_scratch[0] = w->opcode;
-        int n = 1;
-        if (w->opcode == FF_OP_NEST
-                || w->opcode == FF_OP_TNEST
-                || w->opcode == FF_OP_DOES_RUNTIME
-                || w->opcode == FF_OP_CREATE_RUNTIME
-                || w->opcode == FF_OP_CONSTANT_RUNTIME
-                || w->opcode == FF_OP_ARRAY_RUNTIME
-                || w->opcode == FF_OP_DEFER_RUNTIME)
-            exec_scratch[n++] = (ff_int_t)(intptr_t)w;
-        exec_scratch[n] = FF_OP_EXIT;
-        /* Two-cell return frame: [saved_ip, saved_cur_word]. The
-           outermost ip is NULL — the EXIT case detects that and goes
-           to `done`. The cur_word slot carries the caller's value so
-           a nested ff_exec (e.g. via EXECUTE) restores it cleanly.
-           Checked like any other push: `execute` and deferred words
-           re-enter here once per level, so deep recursion through them
-           would otherwise run straight off the end of R. */
-        if (ff_unlikely(R->top + 2 > FF_STACK_SIZE))
-        {
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER,
-                      "Return stack overflow: %d item(s) would not fit.", 2);
-            ip = NULL;
-        }
-        else
-        {
-            ff_stack_push(R, 0);
-            ff_stack_push(R, (ff_int_t)(intptr_t)prev_cur_word);
-            ip = exec_scratch;
-        }
-    }
-    else if (w->flags & FF_WORD_NATIVE)
-    {
-        /* Default ip to NULL so a plain leaf native word (the common case
-           — pop args, push results, return) falls through to `done`. Only
-           a word that deliberately installs bytecode sets ff->ip; without
-           this reset a leaf word would inherit a stale ip and the dispatch
-           loop would run garbage. */
-        ff->ip = NULL;
-        ff_word_native_fn(w)(ff);
-        ip = ff->ip;
-    }
+    /* Run the word's stub — its call sequence then EXIT (ff_word_t::stub)
+       — under a two-cell return frame [saved_ip, saved_cur_word] whose ip
+       is NULL: the stub's EXIT pops it and lands on `done`. The cur_word
+       slot hands the caller's value back. The push is checked like any
+       other: `catch` and native words re-enter here once per level. */
+    ff_int_t *ip = NULL;
+    if (ff_unlikely(R->top + 2 > FF_STACK_SIZE))
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER,
+                  "Return stack overflow: %d item(s) would not fit.", 2);
     else
     {
-        ip = NULL;
+        ff_stack_push(R, 0);
+        ff_stack_push(R, (ff_int_t)(intptr_t)prev_cur_word);
+        ip = w->stub;
     }
 
     /* Top-of-stack register cache. While dispatching, the topmost data
@@ -978,11 +1180,10 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
        still have to write the displaced TOS back, so the optimization
        targets compute-heavy bytecode rather than push-heavy code.
 
-       Initialised *before* the `if (!ip) goto done` early exit: a native
-       word (ip == NULL) may have just pushed a result, and `done` writes
-       `tos` back to S->data[top - 1]. Reading the current top here makes
-       that write-back a harmless no-op; the old order left `tos`
-       uninitialised on that path and clobbered the pushed value. */
+       Initialised *before* the `if (!ip) goto done` early exit (the
+       return frame was refused): `done` writes `tos` back to
+       S->data[top - 1], and reading the current top here makes that
+       write-back a harmless no-op. */
     ff_int_t tos = S->top
                         ? S->data[S->top - 1]
                         : 0;
@@ -1104,6 +1305,20 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             } \
         } while (0)
 
+    /* After a call out to C that can raise — a native word, a nested
+       evaluation, a helper that reports through ff_tracef — stop at once
+       if it did: the exception unwinds through this word too. */
+    #define _FF_CHECK_THROWN() \
+        do { \
+            if (ff_unlikely(ff->state & FF_STATE_THROWN)) \
+                goto done; \
+        } while (0)
+
+    /* True while an operand-free opcode runs straight from a word's stub —
+       the interpreter (via ff_exec) or `execute` running the word itself —
+       rather than from compiled code. Valid only before any `ip++`. */
+    #define _FF_RUNNING_DIRECT  (ip == ff->cur_word->stub + 1)
+
     /* Dispatch-context address check; gated by FF_SAFE_MEM. Compiles
        to nothing in the default build. See ff_p.h:FF_CHECK_ADDR for
        the word-fn variant. */
@@ -1208,6 +1423,9 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                     fn(ff);
                     _FF_RESTORE();
                 }
+                /* An error the native raised (ff_tracef) stops the word
+                   that called it, as any other error does. */
+                _FF_CHECK_THROWN();
                 if (!ip)
                     goto done;
                 _FF_NEXT();
@@ -1215,9 +1433,8 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             /* Built-in word bodies live in per-category headers that
                are included here so each case is inline. The headers
                reference the macros (_FF_NEXT, _FF_SYNC, _FF_RESTORE, _FF_SO,
-               _FF_RSO, …), labels (done, broken), and local variables
-               (S, R, BT, ip, tos, floor, ff, exec_scratch, r_base) in
-               this scope. */
+               _FF_RSO, …), the `done` label, and local variables
+               (S, R, BT, ip, tos, floor, ff) in this scope. */
             /* FF_IN_EXEC gates the dispatch fragments: each #error's out
                if included anywhere but here. */
             #define FF_IN_EXEC 1
@@ -1251,7 +1468,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_OPCODE,
                           "Bad opcode 0x%llx.",
                           (unsigned long long)*(ip - 1));
-                goto broken;
+                goto done;
 #else
                 FF_UNREACHABLE();
 #endif
@@ -1262,20 +1479,15 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     /* --- Exit points --- */
 
 _watchdog_abort:
-    /* Watchdog or async ff_request_abort fired. Surface it as a
-       FF_SEV_ERROR | FF_ERR_ABORTED, clear the flag (so the next
-       ff_eval call starts fresh), and join the broken-state cleanup
-       path. */
+    /* Watchdog or async ff_request_abort fired. Clear the flag (so the
+       next evaluation starts fresh) and raise the one exception `catch`
+       can't stop: it unwinds to the outermost evaluation, which returns
+       FF_ERR_ABORTED. */
     _FF_SYNC();
-    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_ABORTED,
-              "Aborted after %llu opcodes.",
-              (unsigned long long)ff->opcodes_run);
     FF_ABORT_CLEAR(&ff->abort_requested);
-    ff->state |= FF_STATE_BROKEN;
-    goto broken;
-
-broken:
-    ok = false;
+    ff_raise(ff, FF_THROW_INTERRUPT, FF_SEV_ERROR | FF_ERR_ABORTED,
+             "Aborted after %llu opcodes.",
+             (unsigned long long)ff->opcodes_run);
 
 done:
     /* Flush the local watchdog batch counter back into the engine's
@@ -1284,8 +1496,8 @@ done:
     ff->opcodes_run += (uint64_t)(FF_WD_BATCH - wd_tick);
     ff->ip = ip;
     if (S->top) S->data[S->top - 1] = tos;
-    /* Cut back to the entry state (see r_base). Only ever lowers R:
-       QUIT and ABORT empty it on purpose. */
+    /* Cut back to the entry state (see r_base). Only ever lowers R: a
+       native word that popped below it is left to its own devices. */
     if (R->top > r_base)
         R->top = r_base;
     if (ff->n_scopes > scopes_base)
@@ -1295,6 +1507,14 @@ done:
     }
     ff->cur_word = prev_cur_word;
     BT->top = bt_size;
+    --ff->exec_depth;
+
+    /* The run failed iff an exception is unwinding out of it. A host
+       that called ff_exec directly has nothing above it to settle that
+       exception, so it is settled here and the next call starts clean. */
+    bool ok = !(ff->state & FF_STATE_THROWN);
+    if (!ok && ff->exec_depth == 0 && ff->eval_depth == 0)
+        (void)ff_settle(ff, true);
     return ok;
 
     #undef _FF_NEXT
@@ -1317,6 +1537,8 @@ done:
     #undef _FF_RSL_T
     #undef _FF_COMPILING
     #undef _FF_NEED_DEF
+    #undef _FF_CHECK_THROWN
+    #undef _FF_RUNNING_DIRECT
 }
 
 /**
@@ -1366,47 +1588,62 @@ ff_error_t ff_load(ff_t *ff, const char *path)
     if (!path || !*path)
         return FF_OK;
 
-    FILE *f = fopen(path, "r");
-    if (!f)
-        return FF_ERR_CODE(ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
-                                     "Failed to open file '%s': %s.",
-                                     path, strerror(errno)));
+    /* As in ff_eval: nothing new runs while an exception unwinds. */
+    if (ff->state & FF_STATE_THROWN)
+        return ff->throw_code == FF_THROW_QUIT ? FF_OK : FF_ERR_CODE(ff->error);
 
     ff_error_t ec = FF_OK;
     int line_no = 0;
     /* A nested `load` must hand its caller's line count back intact. */
     int prev_line = ff->tokenizer.line;
     ff_int_t *prev_ip = ff->ip;
-    char *line = NULL;
-    size_t cap = 0;
-    bool oom = false;
 
-    /* The whole file is one evaluation as far as the watchdog goes. */
+    /* The whole file is one evaluation as far as the watchdog goes, and
+       one exception boundary: a failing line ends the load. */
     ff_eval_enter(ff);
-    while (ff_load_line(f, &line, &cap, &oom))
+
+    FILE *f = fopen(path, "r");
+    if (!f)
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
+                  "Failed to open file '%s': %s.", path, strerror(errno));
+    else
     {
-        ff->tokenizer.line = ++line_no;
-        if ((ec = ff_eval(ff, line)) != FF_OK)
-            break;
+        char *line = NULL;
+        size_t cap = 0;
+        bool oom = false;
+
+        /* Each line's ff_eval settles a catchable error itself and
+           returns it; an uncatchable one (host abort, QUIT) is still in
+           flight when it returns. Either ends the load. */
+        while (ff_load_line(f, &line, &cap, &oom))
+        {
+            ff->tokenizer.line = ++line_no;
+            if ((ec = ff_eval(ff, line)) != FF_OK
+                    || (ff->state & FF_STATE_THROWN))
+                break;
+        }
+        fclose(f);
+        free(line);
+
+        if (ec == FF_OK && !(ff->state & FF_STATE_THROWN))
+        {
+            if (oom)
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
+                          "Out of memory reading '%s'.", path);
+            /* A runaway comment. The comment state is dropped once
+               reported: left set, it would swallow whatever the caller
+               evaluates next. */
+            else if (ff->tokenizer.state & FF_TOK_STATE_COMMENT)
+            {
+                ff->tokenizer.state &= ~FF_TOK_STATE_COMMENT;
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_COMMENT,
+                          "Runaway ( comment.");
+            }
+        }
     }
-    fclose(f);
-    free(line);
 
-    if (ec == FF_OK && oom)
-        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
-                       "Out of memory reading '%s'.", path);
-
-    /* If there were no other errors, check for a runaway comment. The
-       comment state is dropped once reported: left set, it would swallow
-       whatever the caller evaluates next. */
-    if (ec == FF_OK
-            && (ff->tokenizer.state & FF_TOK_STATE_COMMENT))
-    {
-        ff->tokenizer.state &= ~FF_TOK_STATE_COMMENT;
-        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_COMMENT,
-                       "Runaway ( comment.");
-    }
-
+    if (ff->state & FF_STATE_THROWN)
+        ec = ff_settle(ff, ff->eval_depth == 1 && ff->exec_depth == 0);
     ff_eval_leave(ff);
     ff->ip = prev_ip;
     ff->tokenizer.line = prev_line;
@@ -1496,42 +1733,16 @@ bool ff_word_valid(const ff_t *ff, const ff_word_t *w)
 /** @copydoc ff_abort */
 void ff_abort(ff_t *ff)
 {
-    ff->stack.top = 0;
-    ff->r_stack.top = 0;
-    ff->ip = NULL;
-    ff->state = 0;
-    /* Mark ABORTED *after* wiping state, so ff_eval sees it and stops the
-       current line (ANS ABORT returns to the terminal) rather than the old
-       behaviour where `|= ABORTED` was immediately clobbered by `= 0` and
-       evaluation ran on. ff_eval clears this flag on entry. */
-    ff->state |= FF_STATE_ABORTED;
-    ff->tokenizer.state = 0;
-    ff->cur_word = NULL;
-
-    /* Tear down any open `{` scope records. Without this, an abort that
-       fires while a signature/scope is open leaves n_csig > 0 with live
-       arg-name strings; ff_scope_arg() is consulted for every subsequent
-       word token, so a later interpreted word matching a leftover name
-       would compile FF_OP_ARG into the top dictionary word. Free the
-       names and reset the compile-time scope stack. */
-    while (ff->n_csig > 0)
+    /* Called from inside a running word (a native), the engine can't be
+       torn down under its callers: unwind as the ABORT word does, and the
+       reset happens when the exception reaches the outermost call. */
+    if (ff->exec_depth > 0 || ff->eval_depth > 0)
     {
-        ff_csig_t *cs = &ff->csig[--ff->n_csig];
-        for (int i = 0; i < cs->nargs; i++)
-            free(cs->names[i]);
+        ff_raise(ff, FF_THROW_ABORT, FF_SEV_ERROR | FF_ERR_ABORTED,
+                 "Aborted.");
+        return;
     }
-    ff->n_scopes = 0;
-    ff->stack.floor = 0;
-    /* Reset the transient-string arena by freeing all slabs. Anything
-       still pointing into the pad becomes garbage — but we just cleared
-       the data and return stacks, so there is nothing to dangle. */
-    for (ff_pad_slab_t *sl = ff->pad; sl; )
-    {
-        ff_pad_slab_t *next = sl->next;
-        free(sl);
-        sl = next;
-    }
-    ff->pad = NULL;
+    ff_reset(ff);
 }
 
 /** @copydoc ff_request_abort */
@@ -1657,14 +1868,10 @@ ff_error_t ff_tracef(ff_t *ff, ff_error_t e, const char *fmt, ...)
 {
     if ((e & FF_SEV_ERROR))
     {
-        ff->error = e;
-        ff_error_locate(ff, &ff->error_line, &ff->error_pos);
-
-        ff->state |= FF_STATE_ERROR;
-
+        /* An error is an exception: record it and start unwinding. */
         va_list args;
         va_start(args, fmt);
-        vsnprintf(ff->error_msg, sizeof(ff->error_msg), fmt, args);
+        ff_raisev(ff, ff_throw_from_error(FF_ERR_CODE(e)), e, fmt, args);
         va_end(args);
     }
     else if (ff->platform.vtracef)

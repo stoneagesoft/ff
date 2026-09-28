@@ -102,8 +102,49 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `<ff_p.h>` compiles under `-Wall -Werror`: it declared four `static`
   functions it never defined.
 - Removed the leftover `(nest)` native word, which crashed when run.
+- **Errors stop the code that raised them.** An error inside a word run
+  by `execute`, a deferred word, `catch` or a native word used to let its
+  caller carry on running, and only the outer interpreter noticed; code
+  after a `throw` inside an `execute`d word ran too. Errors now unwind
+  like `throw`.
+- An uncaught `throw` left a flag set that made the next, unrelated
+  `catch` report the old code instead of 0; it also returned
+  `FF_ERR_BROKEN` with no message.
+- `quit` inside `execute` or `catch` emptied the return stack under the
+  running words, which then carried on.
+- `abort` inside a nested run reset the stacks under the words still
+  running above it.
+- Recursion through `execute` or a deferred word no longer uses the C
+  stack.
+- Running an internal word such as `branch`, `(xdo)` or `(strlit)`
+  directly no longer jumps into memory past its operand; it does nothing.
 
 ### Changed
+
+- **One exception mechanism.** Every error is an exception carrying an
+  ANS THROW code (-4 stack underflow, -10 division by zero, -13 undefined
+  word, …), so `catch` catches errors as well as `throw`s. `abort` and
+  `abort"` are `-1 throw` / `-2 throw`: catchable, and an uncaught one
+  resets the engine and returns `FF_ERR_ABORTED`. `abort"` now makes its
+  text the error message instead of printing it. `quit` (-56) and the
+  watchdog / `ff_request_abort()` abort (-28) can't be caught.
+- `quit` discards the rest of the input line and returns `FF_OK`;
+  previously the line ran on.
+- `evaluate` and `load` push the THROW code that stopped them (0 on
+  success), as `catch` would — for example -13 for an undefined word —
+  and the error goes no further. They used to push a positive `FF_ERR_*`
+  code and let the error surface again when the outer line finished.
+- `ff_exec()` returns false for any exception that escapes the word
+  (errors used to return true), and settles it when the host called it
+  directly. `ff_abort()` called from inside a running word raises ABORT
+  instead of resetting the engine under its callers.
+- An uncaught `throw` of a code the engine doesn't define returns
+  `FF_ERR_APPLICATION` with the message "Uncaught exception N.".
+- `execute` and deferred words run the target inside the dispatch loop,
+  through a per-word executable stub (`ff_word_t::stub`), instead of
+  calling `ff_exec` recursively.
+- `FF_STATE_BROKEN`, `FF_STATE_ABORTED` and `FF_STATE_ERROR` are gone;
+  `FF_STATE_THROWN` marks an exception in flight.
 
 - `abort` / `abort"` now discard the rest of the input line and return
   `FF_ERR_ABORTED` (ANS `ABORT` semantics) instead of running on.

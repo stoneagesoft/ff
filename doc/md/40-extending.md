@@ -259,7 +259,12 @@ Available severities are in `ff_error.h`: `FF_SEV_TRACE`, `FF_SEV_DEBUG`,
 Only `FF_SEV_ERROR` makes `ff_eval` stop; lower severities are informational.
 
 After calling `ff_tracef` with an `FF_SEV_ERROR` level, return from the
-word — the state is marked as errored and the interpreter will unwind.
+word. The error is raised as an exception: the word that called yours
+stops too, and execution unwinds to the nearest `catch` — which sees the
+error's ANS THROW code, `-4` for `FF_ERR_STACK_UNDER` and so on, or
+`-(256 + code)` for a code with no standard equivalent such as
+`FF_ERR_APPLICATION` — or, if nothing catches it, ends the evaluation with
+your message.
 
 
 ## Complete example

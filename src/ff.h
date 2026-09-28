@@ -72,8 +72,10 @@ void ff_free(ff_t *ff);
  *
  * Each token is dispatched: integers/reals/strings push to the data
  * stack (or compile a literal during a colon-def), and word names are
- * looked up and executed (or compiled). On error the engine's error
- * fields are populated and the appropriate code is returned.
+ * looked up and executed (or compiled). Every error is an exception: it
+ * stops execution wherever it is raised, unwinds to the nearest `catch`
+ * and, if nothing catches it, ends the evaluation — the rest of @p src is
+ * discarded and the error fields are populated.
  *
  * @param ff  Engine instance.
  * @param src Source text. NULL or empty input returns FF_OK without
@@ -82,23 +84,28 @@ void ff_free(ff_t *ff);
  *         declared in ff_error.h — directly comparable, e.g.
  *         `if (ff_eval(ff, s) == FF_ERR_DIV_ZERO)`. The severity bit is
  *         masked off the return; recover it, if ever needed, from the
- *         value passed to a `vtracef` callback via FF_ERR_SEV().
+ *         value passed to a `vtracef` callback via FF_ERR_SEV(). An
+ *         uncaught `abort` / `abort"` returns FF_ERR_ABORTED after
+ *         resetting the engine (as ff_abort() does); an uncaught THROW of
+ *         a code the engine doesn't define returns FF_ERR_APPLICATION.
+ *         `quit` ends the evaluation early and returns FF_OK.
  */
 ff_error_t ff_eval(ff_t *ff, const char *src);
 
 /**
  * Execute a single dictionary entry directly.
  *
- * Used for the immediate path in ff_eval (when not compiling) and by
- * the EXECUTE word. Synthesizes a tiny `[opcode, …, EXIT]` scratch
- * buffer for opcoded built-ins, falls through to the FF_OP_CALL escape
- * hatch for external natives, and steps the inner interpreter for
- * colon-defs.
+ * Used for the immediate path in ff_eval (when not compiling). Runs the
+ * word's executable stub — its call sequence then EXIT — in the inner
+ * interpreter.
  *
  * @param ff Engine instance.
  * @param w  Word to execute. Must not be NULL.
- * @return true on normal completion, false if the BROKEN flag was
- *         raised mid-execution.
+ * @return true on normal completion, false if an exception (an error,
+ *         THROW, ABORT, QUIT, or a watchdog abort) escaped the word;
+ *         ff_errno() and ff_strerror() describe it. Called by the host
+ *         outside any evaluation, ff_exec settles the exception itself, so
+ *         the engine is ready for the next call either way.
  */
 bool ff_exec(ff_t *ff, ff_word_t *w);
 
@@ -110,14 +117,20 @@ bool ff_exec(ff_t *ff, ff_word_t *w);
  * @return FF_OK on success, FF_ERR_FILE_IO if the file cannot be
  *         opened, or whatever code the first failing ff_eval() call
  *         produces. A run-away `(` comment that survives the last line
- *         is reported as FF_ERR_RUN_COMMENT.
+ *         is reported as FF_ERR_RUN_COMMENT. `quit` ends the load early
+ *         and returns FF_OK.
  */
 ff_error_t ff_load(ff_t *ff, const char *path);
 
 /**
  * Reset the engine's transient state: clears both stacks, drops the
- * current IP, raises the ABORTED flag, and clears the tokenizer's
- * comment state. Word definitions and the dictionary are preserved.
+ * current IP, leaves compile mode, and clears the tokenizer's comment
+ * state. Word definitions and the dictionary are preserved.
+ *
+ * Called from inside a running word (a native word), it can't tear the
+ * engine down under its callers: it raises ABORT instead, which unwinds
+ * like the `abort` word and resets the engine when it reaches the
+ * outermost evaluation.
  *
  * @param ff Engine instance.
  */
@@ -128,9 +141,10 @@ void ff_abort(ff_t *ff);
  *
  * Sets a `sig_atomic_t` flag that the inner interpreter polls at
  * every back-branch and word call. Once detected, the running
- * `ff_eval` / `ff_exec` unwinds and returns FF_ERR_ABORTED. Safe to
- * call from a signal handler or another thread — it does no I/O,
- * no allocation, and no engine state mutation beyond the flag store.
+ * `ff_eval` / `ff_exec` unwinds and returns FF_ERR_ABORTED; no `catch`
+ * in the Forth code can stop it. Safe to call from a signal handler or
+ * another thread — it does no I/O, no allocation, and no engine state
+ * mutation beyond the flag store.
  *
  * Pairs with the polling watchdog callback in @ref ff_platform_t,
  * which is what most embeddings should reach for first; this
@@ -212,7 +226,11 @@ int ff_printf(ff_t *ff, const char *fmt, ...) FF_PRINTF_FMT(2, 3);
 /**
  * Record a diagnostic and route it to the appropriate channel:
  * - When @p e carries FF_SEV_ERROR: stash the formatted message in
- *   ff_strerror()-readable storage, set FF_STATE_ERROR, and return @p e.
+ *   ff_strerror()-readable storage and raise the error as an exception.
+ *   A native word should return right after: the word that called it
+ *   stops too, and the error unwinds to the nearest `catch` (which sees
+ *   its ANS THROW code — -4 for FF_ERR_STACK_UNDER, and so on) or ends
+ *   the evaluation.
  * - Otherwise (warning/trace): forward through the platform's vtracef
  *   callback (if any) — non-error severities are not retained.
  *

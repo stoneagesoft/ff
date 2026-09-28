@@ -129,6 +129,16 @@ bool ff_word_add_sig(ff_word_t *w, size_t off, const char *text);
 const char *ff_word_sig_at(const ff_word_t *w, size_t off);
 
 /**
+ * Change the opcode that drives @p w, rebuilding its execution stub to
+ * match. Use this rather than assigning ff_word::opcode directly: a stale
+ * stub would run the word's old behaviour under `execute`.
+ *
+ * @param w  Word.
+ * @param op New opcode.
+ */
+void ff_word_set_opcode(ff_word_t *w, ff_opcode_t op);
+
+/**
  * Test whether @p w has no compiled Forth body. True for built-ins
  * (empty heap) and external natives (FF_WORD_NATIVE flag); false for
  * colon-defs and DOES>/CREATE-runtime words that store data or
@@ -161,8 +171,12 @@ ff_word_fn ff_word_native_fn(const ff_word_t *w);
 struct ff_word
 {
     char *name;                 /**< Word name (strdup'd, or aliasing a literal for static words). */
-    ff_opcode_t opcode;         /**< Engine opcode driving execution; FF_OP_NONE = no opcode. */
+    ff_opcode_t opcode;         /**< Engine opcode driving execution; FF_OP_NONE = no opcode. Set via
+                                     ff_word_set_opcode(). */
     ff_word_flags_t flags;      /**< OR of FF_WORD_* flags. */
+    ff_int_t stub[3];           /**< Executable form: the word's call sequence, then EXIT. ff_exec()
+                                     and `execute` run the word by entering this under a return frame,
+                                     so neither builds code on the fly or recurses in C. */
     ff_int_t *does;             /**< DOES> clause IP (NULL if none). */
     ff_heap_t heap;             /**< Compiled bytecode (colon-defs) or fn pointer (natives). */
     ff_sig_t *sigs;             /**< Scope signatures by bytecode offset, for `see`; NULL if none. */

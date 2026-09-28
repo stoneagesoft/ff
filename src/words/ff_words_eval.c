@@ -20,13 +20,18 @@ const ff_word_def_t FF_EVAL_WORDS[] =
 {
     _FF_W("evaluate", FF_OP_EVALUATE,
       "( s -- stat )  Evaluate string\n"
-      "Gets string from stack and leaves its evaluation status."),
+      "Evaluates the source text *s* and leaves its status: zero if it ran\n"
+      "to the end, otherwise the code of the exception that stopped it, as\n"
+      "**catch** would leave (-13 for an undefined word, -10 for division\n"
+      "by zero, the value given to **throw**, ...). The exception goes no\n"
+      "further. **quit** and the host's watchdog abort do."),
     _FF_W("load", FF_OP_LOAD,
       "( path -- stat )  Load file\n"
       "The source program is loaded from the file as if its text\n"
       "appeared at the current character position in the input stream.\n"
       "The status resulting from the evaluation is left on the stack,\n"
-      "zero if normal, negative in case of error.\n"
+      "zero if normal, negative in case of error (-37 if the file can't\n"
+      "be opened), as for **evaluate**.\n"
       "\n"
       "See also: **evaluate**"),
     _FF_W("parse-word", FF_OP_PARSE_WORD,

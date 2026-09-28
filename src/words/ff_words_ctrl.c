@@ -116,26 +116,36 @@ const ff_word_def_t FF_CTRL_WORDS[] =
       "after the **loop** statement marking the end of the loop."),
     _FF_W("quit", FF_OP_QUIT,
       "( -- )  Quit execution\n"
-      "The return stack is cleared and control is returned to the interpreter.\n"
-      "The stack is not disturbed."),
+      "The return stack is cleared and control is returned to the interpreter,\n"
+      "discarding the rest of the input. The stack is not disturbed.\n"
+      "No **catch** stops it."),
     _FF_W("abort", FF_OP_ABORT,
       "( -- )  Abort\n"
-      "Clears the stack and performs a **quit**."),
+      "Performs `-1 throw`. If nothing catches it, the stacks are cleared\n"
+      "and control returns to the interpreter, as with **quit**."),
     _FF_WI("abort\"", FF_OP_ABORTQ,
       "s ( -- )  Abort with message\n"
-      "Prints the string literal *s* that follows in line, then aborts,\n"
-      "clearing all execution state to return to the interpreter."),
+      "Performs `-2 throw` with the string literal *s* that follows in line\n"
+      "as the error message. If nothing catches it, it aborts like **abort**."),
     _FF_W("throw", FF_OP_THROW,
       "( n -- )  Raise exception\n"
-      "If *n* is zero, **throw** is a no-op. Otherwise the data and\n"
-      "return stacks are snapshot-restored to the state captured by the\n"
-      "most recent **catch**, and *n* is pushed for **catch** to read."),
+      "If *n* is zero, **throw** is a no-op. Otherwise execution stops and\n"
+      "unwinds to the most recent **catch**, which restores the stacks it\n"
+      "saved and pushes *n*. If nothing catches it, the evaluation ends\n"
+      "with an error.\n"
+      "\n"
+      "Errors are exceptions too, with the standard codes: -4 for stack\n"
+      "underflow, -10 for division by zero, -13 for an undefined word, and\n"
+      "so on."),
     _FF_W("catch", FF_OP_CATCH,
       "( xt -- 0 | n )  Catch exception\n"
       "Executes *xt*. If it returns normally, **catch** pushes 0.\n"
-      "If a **throw** raises an exception during execution, the stacks\n"
-      "are restored to the snapshot taken at this **catch** call and the\n"
-      "throw code *n* is left on the data stack instead."),
+      "If an exception is raised during execution — a **throw**, an error,\n"
+      "**abort** — the stacks are restored to the snapshot taken at this\n"
+      "**catch** call and its code *n* is left on the data stack instead\n"
+      "(-4 for stack underflow, -1 for **abort**, and so on).\n"
+      "\n"
+      "**quit** and the host's watchdog abort pass through every **catch**."),
     FF_WEND
 };
 

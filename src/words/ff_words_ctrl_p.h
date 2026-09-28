@@ -50,8 +50,6 @@ case FF_OP_EXIT:
     R->top--;
     if (!ip)
         goto done;
-    if (ff->state & FF_STATE_BROKEN)
-        goto broken;
     _FF_NEXT();
 
 /** ( -- )  Unconditional jump by the inline offset cell. */
@@ -211,17 +209,19 @@ case FF_OP_LOOP_J:
     _FF_PUSH(*ff_sat(R, 3));
     _FF_NEXT();
 
-/** ( -- )  `quit` — clear return stack and exit ff_exec. */
+/** ( -- )  `quit` — stop running and return to the host: an exception
+    (-56) that no `catch` stops. The outermost evaluation discards the rest
+    of its input and returns FF_OK; the data stack is left as it is. */
 case FF_OP_QUIT:
-    R->top = 0;
-    ip = NULL;
+    _FF_SYNC();
+    ff_throw(ff, FF_THROW_QUIT);
     goto done;
 
-/** ( -- )  `abort` — reset engine state and exit ff_exec. */
+/** ( -- )  `abort` — THROW -1. If nothing catches it, the outermost
+    evaluation resets the engine and returns FF_ERR_ABORTED. */
 case FF_OP_ABORT:
     _FF_SYNC();
-    ff_abort(ff);
-    _FF_RESTORE();
+    ff_raise(ff, FF_THROW_ABORT, FF_SEV_ERROR | FF_ERR_ABORTED, "Aborted.");
     goto done;
 
 /** ( n -- | i*x n -- )  `throw` — non-zero raises an exception; the
@@ -231,19 +231,20 @@ case FF_OP_THROW:
     if (tos == 0)
     {
         _FF_DROP();
+        _FF_NEXT();
     }
-    else
     {
-        ff->throw_code = tos;
+        ff_int_t code = tos;
         _FF_DROP();
-        ff->state |= FF_STATE_BROKEN | FF_STATE_THROWN;
         _FF_SYNC();
-        goto broken;
+        ff_throw(ff, code);
     }
-    _FF_NEXT();
+    goto done;
 
 /** ( i*x xt -- j*x 0 | i*x n )  `catch` — execute xt; push 0 on clean
-    return, or restore stacks and push the THROW code on exception. */
+    return, or restore stacks and push the THROW code on exception. Engine
+    errors arrive as their ANS codes (-4 stack underflow, …). The host's
+    abort and `quit` go past every catch. */
 case FF_OP_CATCH:
     _FF_SL(1);
     {
@@ -266,13 +267,15 @@ case FF_OP_CATCH:
         ff_int_t   *saved_outer_ip = ip;
         ff_word_t  *saved_cur      = ff->cur_word;
         _FF_SYNC();
-        ff_exec(ff, xt);
+        bool ran = ff_exec(ff, xt);
         ff->ip = saved_outer_ip;
         _FF_RESTORE();
-        if (ff->state & FF_STATE_THROWN)
+        if (!ran)
         {
-            /* Unwind: roll the stacks back, clear the broken/thrown
-               flags, and push the throw code. */
+            if (ff_throw_is_fatal(ff->throw_code))
+                goto done;
+            /* Unwind: roll the stacks back, settle the exception, and
+               push its code. */
             S->top  = saved_s;
             R->top  = saved_r;
             BT->top = saved_bt;
@@ -280,7 +283,7 @@ case FF_OP_CATCH:
             S->floor     = saved_floor;   /* … and its memory copy */
             ff->n_scopes = saved_scopes;
             ff->cur_word = saved_cur;
-            ff->state &= ~(FF_STATE_BROKEN | FF_STATE_THROWN);
+            ff->state &= ~FF_STATE_THROWN;
             if (S->top > 0)
                 tos = S->data[S->top - 1];
             _FF_PUSH(ff->throw_code);
@@ -465,12 +468,13 @@ case FF_OP_PLOOP:
 
 /**
  * `abort"` — at compile-time set up the inline string anticipation;
- * at runtime print the inline string and abort the engine.
+ * at runtime THROW -2 with the inline string as its message.
  */
 case FF_OP_ABORTQ:
     /* If invoked at compile time (direct entry from ff_eval), set up to
        compile (abortq) + string. If invoked at runtime in compiled heap,
-       print the inline string and abort. */
+       raise -2: uncaught, it resets the engine like ABORT, and the host
+       gets the string as the error message. */
     if (ff->state & FF_STATE_COMPILING)
     {
         ff->state |= FF_STATE_STRLIT_ANTIC;
@@ -479,9 +483,8 @@ case FF_OP_ABORTQ:
     else
     {
         _FF_SYNC();
-        ff_printf(ff, "%s", (const char *)(ip + 1));
-        ff_abort(ff);
-        _FF_RESTORE();
+        ff_raise(ff, FF_THROW_ABORTQ, FF_SEV_ERROR | FF_ERR_ABORTED,
+                 "%s", (const char *)(ip + 1));
         goto done;
     }
     _FF_NEXT();

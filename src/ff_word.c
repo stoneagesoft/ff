@@ -13,9 +13,64 @@
 
 #include "ff_word_p.h"
 
+#include "ff_opcode_meta_p.h"
+
 #include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+
+
+/**
+ * Rebuild @p w's execution stub from its opcode: the call sequence the
+ * compiler emits for the word (see ff_heap_compile_word), then EXIT.
+ *
+ * Opcodes that take an inline operand other than the word itself —
+ * `branch`, `(xdo)`, `(strlit)` and the other internals that only make
+ * sense inside compiled code — get a stub that does nothing: run directly
+ * they would read the stub's EXIT as their operand and jump off into
+ * whatever follows it. `.(`, `."` and `abort"` are the exception: their
+ * inline string exists only in compiled code, and run directly they don't
+ * read one.
+ *
+ * @param w Word whose opcode (and native fn, if any) is already set.
+ */
+static void ff_word_build_stub(ff_word_t *w)
+{
+    ff_int_t *s = w->stub;
+    s[0] = s[1] = s[2] = FF_OP_EXIT;
+
+    if (w->opcode == FF_OP_NONE)
+    {
+        /* An external native runs through the FF_OP_CALL escape hatch;
+           anything else has nothing to run yet (a colon definition still
+           being compiled), so the stub is a bare EXIT. */
+        if (w->flags & FF_WORD_NATIVE)
+        {
+            s[0] = FF_OP_CALL;
+            s[1] = w->heap.data[0];
+        }
+        return;
+    }
+
+    switch (ff_opcode_meta(w->opcode)->layout)
+    {
+        case FF_OP_LAYOUT_NONE:
+            s[0] = w->opcode;
+            break;
+
+        case FF_OP_LAYOUT_WORD:
+            s[0] = w->opcode;
+            s[1] = (ff_int_t)(intptr_t)w;
+            break;
+
+        default:
+            if (w->opcode == FF_OP_DOT_PAREN
+                    || w->opcode == FF_OP_DOTQUOTE
+                    || w->opcode == FF_OP_ABORTQ)
+                s[0] = w->opcode;
+            break;
+    }
+}
 
 
 /**
@@ -49,6 +104,8 @@ static void ff_word_init_common(ff_word_t *w, ff_word_fn code,
         ff_heap_compile_int(&w->heap, (ff_int_t)(intptr_t)code);
         w->flags |= FF_WORD_NATIVE;
     }
+
+    ff_word_build_stub(w);
 
     /* Parse manual: find description after first newline. */
     if (manual)
@@ -154,6 +211,13 @@ void ff_word_free(ff_word_t *w)
         return;
     free(w->name);
     free(w);
+}
+
+/** @copydoc ff_word_set_opcode */
+void ff_word_set_opcode(ff_word_t *w, ff_opcode_t op)
+{
+    w->opcode = op;
+    ff_word_build_stub(w);
 }
 
 /**

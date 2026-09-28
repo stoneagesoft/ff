@@ -1,0 +1,38 @@
+\ ff-test: lines
+\ `execute` runs every kind of word from inside the dispatch loop.
+\
+\ It used to call back into the interpreter in C for each word, so errors
+\ inside escaped the caller and deep recursion used up the C stack. It
+\ now enters the word's executable stub under a return frame, as compiled
+\ code calls a word. This covers each shape of stub: primitive, colon
+\ definition, constant, variable, array, created and DOES> words, a
+\ deferred word, an immediate word, and the internals such as `branch`
+\ whose inline operand a stub can't supply (they now do nothing, rather
+\ than jumping off into memory).
+
+: p 32 emit . ;
+: sq dup * ;
+10 constant ten
+variable v
+5 array arr
+create buf 2 allot
+: const create , does> @ ;
+42 const answer
+defer hook
+' sq is hook
+
+3 ' dup execute p p cr
+7 ' sq execute p cr
+' ten execute p cr
+99 ' v execute ! v @ p cr
+123 2 ' arr execute ! 2 arr @ p cr
+' buf execute buf = p cr
+' answer execute p cr
+6 ' hook execute p cr
+: runner execute ;
+4 ' sq runner p cr
+' ten ' execute execute p cr
+: tp ['] .( execute ;
+tp "direct" cr
+5 ' literal execute
+clear ' (strlit) execute ' branch execute depth p cr

@@ -48,5 +48,6 @@ case FF_OP_DUMP:
 case FF_OP_MEMSTAT:
     _FF_SYNC();
     ff_print_memstat(ff);
+    _FF_CHECK_THROWN();
     _FF_NEXT();
 #endif

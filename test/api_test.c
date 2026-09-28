@@ -3,8 +3,9 @@
  *
  * Covers what a script test can't observe: the state an error leaves on
  * the return stack and the scope barrier, the location reported for an
- * error, ff_load()'s line handling, and the watchdog / abort flag across
- * nested evaluations. It includes <ff_p.h> the way a native-word author
+ * error, ff_load()'s line handling, the watchdog / abort flag across
+ * nested evaluations, errors raised by native words, and ff_exec() called
+ * directly by a host. It includes <ff_p.h> the way a native-word author
  * does, and is built with strict warnings, so it also checks that the
  * private headers compile cleanly.
  *
@@ -216,6 +217,104 @@ static void req_abort(ff_t *ff)
     ff_request_abort(ff);
 }
 
+static void nat_fail(ff_t *ff)
+{
+    FF_SL(ff, 1);
+    ff_stack_pop(&ff->stack);
+}
+
+static void nat_abort(ff_t *ff)
+{
+    ff_abort(ff);
+}
+
+/* An error raised inside a native word stops the word that called it and
+   reaches `catch` like any other; before, the caller ran on. ff_abort()
+   from inside a native unwinds first and resets only at the top, instead
+   of tearing the engine down under its callers. */
+static void test_native_errors(void)
+{
+    ff_t *ff = new_engine(10000000);
+
+    static const ff_native_word_t words[] =
+    {
+        FF_NATIVE("nat-fail", nat_fail, NULL),
+        FF_NATIVE("nat-abort", nat_abort, NULL),
+        FF_NATIVE_END
+    };
+    ff_register(ff, words);
+
+    ff_eval(ff, ": t nat-fail 99 . ;");
+    reset_output();
+    CHECK(ff_eval(ff, "t") == FF_ERR_STACK_UNDER);
+    CHECK(strcmp(g_out, "") == 0);
+
+    reset_output();
+    CHECK(ff_eval(ff, "' nat-fail catch .") == FF_OK);
+    CHECK(strcmp(g_out, "-4") == 0);
+
+    ff_eval(ff, ": t2 1 2 nat-abort 3 . ;");
+    reset_output();
+    CHECK(ff_eval(ff, "t2") == FF_ERR_ABORTED);
+    CHECK(strcmp(g_out, "") == 0);
+    CHECK(ff_depth(ff) == 0);
+
+    ff_free(ff);
+}
+
+/* A host calling ff_exec() directly gets false for a failed run, and the
+   engine is left clean: nothing is still unwinding into the next call. */
+static void test_host_exec(void)
+{
+    ff_t *ff = new_engine(10000000);
+
+    ff_eval(ff, ": bad drop ;  : ab abort ;");
+    CHECK(!ff_exec(ff, ff_dict_lookup(&ff->dict, "bad")));
+    CHECK(ff_errno(ff) == FF_ERR_STACK_UNDER);
+    CHECK(!(ff->state & FF_STATE_THROWN));
+    CHECK(ff->exec_depth == 0);
+
+    CHECK(ff_push_int(ff, 5));
+    CHECK(ff_exec(ff, ff_dict_lookup(&ff->dict, "dup")));
+    CHECK(ff_depth(ff) == 2);
+
+    /* An uncaught ABORT resets the engine at the host boundary too. */
+    CHECK(!ff_exec(ff, ff_dict_lookup(&ff->dict, "ab")));
+    CHECK(ff_errno(ff) == FF_ERR_ABORTED);
+    CHECK(ff_depth(ff) == 0);
+
+    reset_output();
+    CHECK(ff_eval(ff, "1 2 + .") == FF_OK);
+    CHECK(strcmp(g_out, "3") == 0);
+
+    ff_free(ff);
+}
+
+/* `load` pushes the THROW code that ended it, like `evaluate`, and QUIT
+   in a loaded file ends the load without an error. */
+static void test_load_codes(void)
+{
+    ff_t *ff = new_engine(10000000);
+
+    reset_output();
+    CHECK(ff_eval(ff, "\"api_no_such_file.ff\" load .") == FF_OK);
+    CHECK(strcmp(g_out, "-37") == 0);
+
+    write_file("api_div.ff", "1 0 /\n2 .\n");
+    reset_output();
+    CHECK(ff_eval(ff, "\"api_div.ff\" load .") == FF_OK);
+    CHECK(strcmp(g_out, "-10") == 0);
+    remove("api_div.ff");
+
+    write_file("api_quit.ff", "1 quit 2\n3\n");
+    ff_eval(ff, "clear");
+    CHECK(ff_load(ff, "api_quit.ff") == FF_OK);
+    CHECK(ff_depth(ff) == 1);
+    remove("api_quit.ff");
+
+    ff_free(ff);
+}
+
 /* An abort requested while nested evaluations run is honoured, not
    cleared by the next nested ff_eval entry. */
 static void test_abort_request_nested(void)
@@ -247,6 +346,9 @@ int main(void)
     test_load_errors();
     test_watchdog_across_load();
     test_abort_request_nested();
+    test_native_errors();
+    test_host_exec();
+    test_load_codes();
 
     if (g_failures)
         fprintf(stderr, "%d check(s) failed.\n", g_failures);

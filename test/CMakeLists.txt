@@ -65,6 +65,9 @@ foreach(case_file ${TEST_CASES})
     if(EXISTS "${out}")
         add_test(NAME ${case_name}
                  COMMAND ff_test_driver "${in}" "${out}")
+        # The driver's watchdog bounds a runaway loop, but not a regression
+        # that defeats the watchdog itself; fail fast rather than hang.
+        set_tests_properties(${case_name} PROPERTIES TIMEOUT 30)
     else()
         message(WARNING "Missing expected output: ${out}")
     endif()

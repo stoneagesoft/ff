@@ -121,8 +121,8 @@ Alongside these, the following `_p.h` files hold pure type/enum/macro
 definitions (no corresponding struct body):
 
 `ff_types_p.h`, `ff_config_p.h`, `ff_opcode_p.h`, `ff_state_p.h`,
-`ff_base_p.h`, `ff_token_p.h`, `ff_tok_state_p.h`, `ff_word_flags_p.h`,
-`ff_word_def_p.h`.
+`ff_throw_p.h`, `ff_base_p.h`, `ff_token_p.h`, `ff_tok_state_p.h`,
+`ff_word_flags_p.h`, `ff_word_def_p.h`.
 
 **Implementation files** in `src/` (one `.c` per subsystem):
 
@@ -260,9 +260,7 @@ interpreter mode:
 | `FF_STATE_SIG_PENDING` | Collecting a scope signature — the evaluator routes tokens to the signature parser, not the kind dispatch |
 | `FF_STATE_TRACE` | Print each word name before executing it |
 | `FF_STATE_BACKTRACE` | Maintain a call-chain for debugging |
-| `FF_STATE_BROKEN` | Execution halted; propagates through `ff_exec` callers |
-| `FF_STATE_ABORTED` | User abort — resets all state |
-| `FF_STATE_ERROR` | Sticky error flag; cleared by `ff_eval` on next call |
+| `FF_STATE_THROWN` | An exception is in flight (code in `ff->throw_code`); see *Error handling* |
 
 
 ## Tokenizer
@@ -332,6 +330,7 @@ struct ff_word
     char             *name;        /* null-terminated; strdup'd or aliased literal */
     ff_opcode_t       opcode;      /* assigned opcode, or FF_OP_NONE */
     ff_word_flags_t   flags;       /* IMMEDIATE, USED, HIDDEN, STATIC, NATIVE */
+    ff_int_t          stub[3];     /* executable form: call sequence, then EXIT */
     ff_int_t         *does;        /* DOES> clause start (NULL if none) */
     ff_heap_t         heap;        /* compiled body, or [fn_ptr] for natives */
     ff_sig_t         *sigs;        /* scope signatures by bytecode offset (see); NULL if none */
@@ -546,13 +545,14 @@ TOS) are emitted by the compiler's peephole pass — see
 `ff_exec(ff, w)` runs a single word to completion. It is the hot path
 of the interpreter and contains all performance-critical code.
 
-To start a word, `ff_exec` constructs a tiny scratch program rather
-than calling out through a function pointer. For an opcoded word
-(any built-in, including `NEST`, `DOES_RUNTIME`, `CREATE_RUNTIME`, …)
-it builds `[opcode (word_ptr?) FF_OP_EXIT]` in a small local array and
-points `ip` at it; for an external native it dispatches the function
-directly. A `NULL` return-stack sentinel terminates the run when the
-final `EXIT` pops it:
+Every word carries a tiny executable form of itself, its *stub*
+(`ff_word_t::stub`): the call sequence the compiler would emit for it,
+followed by `FF_OP_EXIT` — `[NEST w EXIT]` for a colon definition,
+`[DUP EXIT EXIT]` for a primitive, `[CALL fn EXIT]` for an external
+native. The stub is built when the word is created and rebuilt whenever
+its opcode changes (`ff_word_set_opcode`). To start a word, `ff_exec`
+pushes a return frame whose saved `ip` is `NULL` and points `ip` at the
+stub; the stub's final `EXIT` pops that frame and ends the run:
 
 ~~~{.c}
 bool ff_exec(ff_t *ff, ff_word_t *w)
@@ -564,26 +564,11 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     ff->cur_word = w;
     int bt_size = BT->top;
 
-    /* …trace / backtrace gating elided… */
+    /* …trace / backtrace gating, overflow check elided… */
 
-    ff_int_t exec_scratch[3];
-    ff_int_t *ip;
-
-    if (w->opcode != FF_OP_NONE)
-    {
-        exec_scratch[0] = w->opcode;
-        int n = 1;
-        if (opcode_takes_word_operand(w->opcode))
-            exec_scratch[n++] = (ff_int_t)(intptr_t)w;
-        exec_scratch[n] = FF_OP_EXIT;
-        ff_stack_push(R, 0);          /* NULL return sentinel */
-        ip = exec_scratch;
-    }
-    else if (w->flags & FF_WORD_NATIVE)
-    {
-        ff_word_native_fn(w)(ff);
-        ip = ff->ip;
-    }
+    ff_stack_push(R, 0);                /* NULL return sentinel */
+    ff_stack_push(R, (ff_int_t)(intptr_t)prev_cur_word);
+    ff_int_t *ip = w->stub;
 
     ff_int_t tos = S->top ? S->data[S->top - 1] : 0;
 
@@ -596,6 +581,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 fn(ff);
                 _FF_RESTORE();
             }
+            _FF_CHECK_THROWN();         /* the native raised an error */
             if (!ip) goto done;
             break;
 
@@ -621,6 +607,21 @@ the cached top-of-stack) and shared locals (`S`, `R`, `BT`, `ip`,
 GCC, Clang and MSVC while still giving the compiler enough visibility
 to compile the switch to a jump table — one indirect branch per
 opcode, branch-target predicted per case.
+
+`execute` and deferred words use the same stubs without leaving the
+loop: they push a return frame exactly as `NEST` does and jump to the
+target's stub. Neither re-enters `ff_exec` in C, so their call depth is
+bounded by the return stack like any other call, and an exception inside
+the target unwinds through the caller like any other. The only C
+re-entry left is where a word evaluates source (`evaluate`, `load`), runs
+an exception frame (`catch`), or calls a native word — each of which
+checks for an exception when the nested run returns.
+
+An operand-free opcode can tell whether it is running straight from a
+stub — the interpreter or `execute` running the word itself — rather
+than from compiled code: `ip` then sits just past the stub's first cell
+(`_FF_RUNNING_DIRECT`). `'`, `.(` and `does>` use that to choose between
+their interactive and compiled behaviour.
 
 
 ## Stack scopes
@@ -877,7 +878,7 @@ because other pointers may alias the struct.
 *ff* caches `ip` in a local pointer for the duration of `ff_exec`:
 
 ~~~{.c}
-ff_int_t *ip = /* …initialised from exec_scratch or ff->ip… */;
+ff_int_t *ip = w->stub;   /* …or wherever the word's stub leads… */
 
 #define _FF_SYNC()    do { ff->ip = ip; _SYNC_TOS(); } while (0)
 #define _FF_RESTORE() do { ip = ff->ip; _LOAD_TOS(); } while (0)
@@ -1000,28 +1001,15 @@ the chain. Custom immediate words that emit branch targets must do
 the same.
 
 
-### BROKEN check placement
+### Exceptions stay off the hot path
 
-`FF_STATE_BROKEN` is set when a fatal error occurs inside a running word.
-An early implementation checked this flag at every backward branch
-(`do_branch`, `do_xloop`, `do_pxloop`) to ensure the interpreter would not
-loop forever after an error. In practice, every execution path through
-which `FF_STATE_BROKEN` can be set ultimately reaches `do_exit`, so a
-single check there is both necessary and sufficient:
-
-~~~{.c}
-do_exit:
-    ip = (ff_int_t *)(intptr_t)*ff_tos(R);
-    R->top--;
-    if (!ip)
-        goto done;
-    if (ff->state & FF_STATE_BROKEN)
-        goto broken;
-    NEXT();
-~~~
-
-Removing the redundant checks from the branch and loop opcodes eliminates
-three conditional branches from the hot path.
+An error, `throw`, `abort` or `quit` stops execution at the point where
+it is raised — the case body jumps straight to `ff_exec`'s exit (see
+*Error handling*). Nothing in the dispatch loop has to poll for it:
+`EXIT`, branches and loops carry no error check at all. The only checks
+sit after the few calls out to C that can raise (`FF_OP_CALL`, `catch`,
+`evaluate`, `load`, the introspection helpers), which are off the hot
+path anyway.
 
 
 ### Unified trace gate
@@ -1238,11 +1226,11 @@ case FF_OP_DEFER_RUNTIME:
         ff_word_t *target = (ff_word_t *)(intptr_t)nw->heap.data[0];
         if (target == NULL)
             /* raise FF_ERR_BAD_PTR, goto done */;
-        _FF_SYNC();
-        ff_int_t *saved_ip = ip;    /* the nested run leaves ff->ip NULL */
-        ff_exec(ff, target);
-        ff->ip = saved_ip;
-        _FF_RESTORE();
+        _FF_RSO(2);
+        ff_stack_push(R, (ff_int_t)(intptr_t)ip);      /* return frame */
+        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
+        ff->cur_word = target;
+        ip = target->stub;                             /* run the target */
     }
     break;
 ~~~
@@ -1250,8 +1238,8 @@ case FF_OP_DEFER_RUNTIME:
 The slot is a plain cell, so `is` is just a store. There is no
 peephole-folding, no compile-time specialisation: every call to a
 deferred word is one indirection through `heap.data[0]` to the target
-word, then a normal `ff_exec`. The cost is the same as one extra
-`execute` per deferred call.
+word's stub, entered under a return frame inside the dispatch loop. The
+cost is the same as one extra `execute` per deferred call.
 
 The richer SwiftForth/Brodie-flavoured pair (`doer`/`make`/`;and`,
 where `make` compiles an inline action body inside the surrounding
@@ -1262,22 +1250,46 @@ becomes useful.
 
 ## Error handling
 
-Errors are reported through `ff_tracef(ff, severity | code, fmt, ...)`.
-At `FF_SEV_ERROR` level the function writes the message to
-`ff->error_msg`, stores `ff->error`, sets `FF_STATE_ERROR`, and returns
-the error code.
+Every error is an exception, and so are `throw`, `abort`, `abort"`,
+`quit` and a watchdog abort. An exception carries a THROW code in ANS
+numbering (`ff_throw_p.h`): an engine error raised through
+`ff_tracef(ff, FF_SEV_ERROR | code, fmt, ...)` gets the standard code for
+its `FF_ERR_*` where one exists (-4 stack underflow, -10 division by zero,
+-13 undefined word, …) and `-(256 + code)` otherwise; a `throw` from Forth
+code carries whatever value the program gave it.
 
-`ff_exec` propagates failures by jumping to the `broken:` label which
-sets `FF_STATE_BROKEN` and returns `false`. `ff_eval` detects the `false`
-return and unwinds to its caller.
+Raising records the code in `ff->throw_code` (plus, for an error, the
+message and source location) and sets `FF_STATE_THROWN`. The raising case
+body then jumps to `ff_exec`'s exit, which cuts the return stack and the
+scope barrier back to where that invocation started and returns `false`.
+Every place that re-entered the interpreter from C checks the flag when
+the nested run returns and keeps unwinding unless it can settle the
+exception:
 
-The `FF_STATE_BROKEN` flag survives through the stack until `ff_eval`
-clears it on the next call. Its purpose is distinct from `FF_STATE_ERROR`:
-broken means "stop executing the current chain", error means "there is a
-diagnostic message to retrieve".
+| Where | What happens to the exception |
+|---|---|
+| `catch` | Restores the depths it saved, pushes the code, clears the flag. |
+| `evaluate`, `load` | The nested `ff_eval` / `ff_load` stops; the code is pushed (0 on success). |
+| `FF_OP_CALL` (native word) | Keeps unwinding: the word that called the native stops too. |
+| `ff_eval`, `ff_load` | The evaluation ends; the call returns the `FF_ERR_*` code. |
+| `ff_exec` called by the host | Returns `false`, leaving the engine clean for the next call. |
 
-`ff_abort` resets all state flags, clears both stacks, and sets `ip` to
-NULL, returning the interpreter to a clean idle state.
+Two exceptions can't be caught: the watchdog / `ff_request_abort()`
+(-28), which untrusted code must not be able to swallow, and `quit`
+(-56), which exists to return to the host. They pass through `catch`,
+`evaluate` and `load` and stop only at the outermost API call — which
+returns `FF_ERR_ABORTED` for the former and `FF_OK` for `quit`.
+
+An uncaught `abort` (-1) or `abort"` (-2) resets the engine once it
+reaches the outermost call: both stacks are emptied, compile mode is
+left, and the transient string arena is released. `ff_abort()` does the
+same reset directly when nothing is running; called from inside a native
+word, it raises -1 instead, so that the reset happens after everything
+above it has unwound.
+
+`ff->error` and `ff->error_msg` always describe the most recent error
+raised, caught or not — they are what `ff_errno()` and `ff_strerror()`
+report after a failing call.
 
 
 ## Configuration
@@ -1465,11 +1477,11 @@ program can't iterate without going through one of those points.
 The cost in the common case is one increment plus one branch-
 predicted-not-taken per back-branch / word call.
 
-When either signal fires, the engine raises
-`FF_SEV_ERROR | FF_ERR_ABORTED` via `ff_tracef`, clears
-`abort_requested`, sets `FF_STATE_BROKEN`, and joins the existing
-broken-state cleanup. The host's `ff_eval` returns
-`FF_ERR_ABORTED` and the engine is ready for the next call.
+When either signal fires, the engine clears `abort_requested` and
+raises `FF_ERR_ABORTED` as THROW code -28 — the one exception `catch`
+can't stop — so it unwinds to the outermost evaluation. The host's
+`ff_eval` returns `FF_ERR_ABORTED` and the engine is ready for the next
+call.
 
 
 ## Markdown rendering for terminal output

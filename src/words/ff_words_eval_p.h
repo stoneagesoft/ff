@@ -9,7 +9,10 @@
  * It is NOT a standalone header — don't include it elsewhere.
  */
 
-/** ( s -- ec )  `evaluate` — ff_eval() the string at TOS, push the error code. */
+/** ( s -- n )  `evaluate` — ff_eval() the string at TOS. Like `catch`
+    around the evaluation: an exception inside it — an error, THROW,
+    ABORT — ends the evaluation and its THROW code is pushed (0 when it
+    ran to the end). Only the host's abort and `quit` keep unwinding. */
 case FF_OP_EVALUATE:
     _FF_SL(1);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
@@ -25,8 +28,9 @@ case FF_OP_EVALUATE:
         ff_error_t ec = ff_eval(ff, src);
         ff->ip = saved_ip;
         _FF_RESTORE();
+        _FF_CHECK_THROWN();
         _FF_SO(1);
-        _FF_PUSH((ff_int_t)ec);
+        _FF_PUSH(ec == FF_OK ? 0 : ff->throw_code);
     }
     _FF_NEXT();
 
@@ -84,7 +88,9 @@ case FF_OP_PARSE:
     }
     _FF_NEXT();
 
-/** ( s -- ec )  `load` — ff_load() the file at TOS, push the error code. */
+/** ( s -- n )  `load` — ff_load() the file at TOS, push the THROW code
+    of whatever ended it early (0 when it loaded completely), as
+    `evaluate` does. */
 case FF_OP_LOAD:
     _FF_SL(1);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, 1);
@@ -94,7 +100,8 @@ case FF_OP_LOAD:
         _FF_SYNC();
         ff_error_t ec = ff_load(ff, path);
         _FF_RESTORE();
+        _FF_CHECK_THROWN();
         _FF_SO(1);
-        _FF_PUSH((ff_int_t)ec);
+        _FF_PUSH(ec == FF_OK ? 0 : ff->throw_code);
     }
     _FF_NEXT();

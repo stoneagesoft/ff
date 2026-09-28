@@ -99,9 +99,9 @@ case FF_OP_CONSTANT:
     _FF_DROP();
     _FF_NEXT();
 
-/** ( -- )  Runtime entry for a DEFER-built word: call through stored xt.
-    cur_word is left untouched — the recursive ff_exec saves and
-    restores it via prev_cur_word, so the caller's value survives. */
+/** ( -- )  Runtime entry for a DEFER-built word: call through stored xt,
+    exactly as `execute` does — the target's stub runs under a return
+    frame, with no C recursion. */
 case FF_OP_DEFER_RUNTIME:
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
@@ -113,14 +113,14 @@ case FF_OP_DEFER_RUNTIME:
                       "Deferred word '%s' has no action assigned.", nw->name);
             goto done;
         }
-        _FF_SYNC();
-        /* As in EXECUTE: the nested run always ends with ff->ip NULL, so
-           the caller's ip is put back by hand. Restoring from ff->ip made
-           every call to a deferred word end its caller early. */
-        ff_int_t *saved_ip = ip;
-        ff_exec(ff, target);
-        ff->ip = saved_ip;
-        _FF_RESTORE();
+        _FF_CHECK_XT(target);
+        _FF_RSO(2);
+        if (ff->state & FF_STATE_BACKTRACE)
+            ff_bt_stack_push(BT, ff->cur_word);
+        ff_stack_push(R, (ff_int_t)(intptr_t)ip);
+        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
+        ff->cur_word = target;
+        ip = target->stub;
     }
     _FF_NEXT();
 

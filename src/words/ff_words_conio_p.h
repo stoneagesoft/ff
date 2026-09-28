@@ -91,7 +91,7 @@ case FF_OP_DOT_S:
  * from compiled heap (string follows inline).
  */
 case FF_OP_DOT_PAREN:
-    if (ip >= &exec_scratch[0] && ip <= &exec_scratch[2])
+    if (_FF_RUNNING_DIRECT)
     {
         ff->state |= FF_STATE_STRLIT_ANTIC;
     }

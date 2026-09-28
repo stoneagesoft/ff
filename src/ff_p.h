@@ -28,6 +28,7 @@
 #include <ff_scope_p.h>
 #include <ff_stack_p.h>
 #include <ff_state_p.h>
+#include <ff_throw_p.h>
 #include <ff_tok_state_p.h>
 #include <ff_token_p.h>
 #include <ff_tokenizer_p.h>
@@ -127,7 +128,8 @@ struct ff
 
     ff_word_t *cur_word;                /**< Word currently being executed (for diagnostics). */
 
-    ff_int_t throw_code;                /**< Exception code stashed by THROW; read by the matching CATCH. */
+    ff_int_t throw_code;                /**< Code of the exception in flight (FF_STATE_THROWN), or of the
+                                             last one settled — what `catch` / `evaluate` / `load` push. */
 
     /* Scope state. `scopes` is the run-time stack of open `{` barriers;
        it is indexed by call depth (a recursive scoped word holds one
@@ -151,10 +153,13 @@ struct ff
     uint64_t        opcodes_run;
     uint64_t        next_watchdog_at;
 
-    /* Nesting depth of ff_eval / ff_load. Only the outermost call resets
-       the watchdog state above: a nested reset (`evaluate`, `load`) would
-       let a loop around them run forever and drop a pending abort. */
+    /* Nesting depth of ff_eval / ff_load, and of ff_exec. Only the
+       outermost call resets the watchdog state above: a nested reset
+       (`evaluate`, `load`) would let a loop around them run forever and
+       drop a pending abort. Together they also tell where an exception
+       must stop: the outermost API call settles whatever reaches it. */
     int             eval_depth;
+    int             exec_depth;
 };
 
 

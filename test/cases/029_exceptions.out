@@ -1,0 +1,20 @@
+[STACK_UNDER]
+[STACK_UNDER]
+ 1
+ -4
+ -10
+ -10 0
+[APPLICATION]
+ 0 7
+[STACK_UNDER]
+ -1
+[ABORTED]
+ 0
+ -2
+[ABORTED]
+ 2
+ 1 5
+ -13
+ -10
+ 8
+ 0 -10

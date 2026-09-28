@@ -4,11 +4,17 @@
 \ Re-entering the interpreter (`evaluate`, `load`) used to restart the
 \ opcode count and drop any pending ff_request_abort(), so a loop around
 \ `evaluate` could never be stopped. The abort also now reports
-\ FF_ERR_ABORTED, as documented, instead of a generic FF_ERR_BROKEN.
+\ FF_ERR_ABORTED, as documented, instead of a generic FF_ERR_BROKEN. And
+\ it is the one exception `catch` can't stop: otherwise untrusted code
+\ could swallow it and spin on.
 
 1 . cr
 : spin begin again ;
 spin
 : respin begin "1 drop" evaluate drop again ;
 respin
+: guarded ['] spin catch ;
+guarded
+: guarded-loop begin ['] spin catch drop again ;
+guarded-loop
 2 . cr

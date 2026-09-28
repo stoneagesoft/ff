@@ -1,0 +1,67 @@
+\ ff-test: lines
+\ One exception mechanism: every error, THROW, ABORT and QUIT unwinds the
+\ same way — through `execute`, deferred words and nested evaluation.
+\
+\ Errors used to be flags only the outer interpreter looked at: a word
+\ that failed inside `execute` or a deferred word let its caller run on,
+\ `catch` saw THROW but no engine error, and an uncaught THROW left a flag
+\ behind that fooled the next, unrelated `catch`.
+
+: p 32 emit . ;
+: bad drop ;
+: via-execute ['] bad execute 99 p ;
+via-execute
+defer hook
+' bad is hook
+: via-defer hook 99 p ;
+via-defer
+
+\ A THROW skips the rest of every word it passes through.
+: t1 1 throw ;
+: u1 ['] t1 execute 55 p ;
+: v1 ['] u1 catch p cr ;
+v1
+
+\ Engine errors reach `catch` as their ANS codes, with the stack rolled
+\ back to where `catch` was.
+' bad catch p cr
+: dz 1 0 / ;
+' dz catch p cr
+: nest3 1 2 3 dz ;
+' nest3 catch p depth p cr
+
+\ Uncaught: the host gets FF_ERR_APPLICATION for a code the engine
+\ doesn't define, the mapped error for one it does — and nothing stale.
+5 throw
+: ok 7 ;
+' ok catch p p cr
+-4 throw
+
+\ ABORT and ABORT" are THROW -1 / -2: catchable, and an uncaught one
+\ resets the engine.
+: ab abort ;
+' ab catch p cr
+1 2 abort
+depth p cr
+: chk abort" "not now" ;
+' chk catch p cr
+chk
+
+\ QUIT ends the line without an error and passes every catch.
+1 2 quit 3 4
+depth p cr
+: q quit ;
+: tq ['] q execute 1 p ;
+tq
+: cq ['] q catch 1 p ;
+cq
+clear "5 quit 6" evaluate 7
+depth p p cr
+
+\ `evaluate` pushes the THROW code that ended it, as `catch` would, and
+\ the error goes no further.
+clear "zork" evaluate p cr
+"1 0 /" evaluate p cr
+"8 throw" evaluate p cr
+: ev "1 0 /" evaluate ;
+' ev catch p p cr
