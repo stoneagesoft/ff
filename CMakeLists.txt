@@ -27,11 +27,12 @@ if(FF_SAFE_MEM)
 endif()
 
 # Trusted-bytecode return-stack checks. When ON, the engine elides
-# the _FF_RSL/_FF_RSO checks inside opcodes that the compiler emits
-# in matched pairs (XLOOP, XDO, NEST, EXIT, …). The check guards an
-# engine-bug path, not a user-code path; embedder-facing FF_RSL
-# in custom native words is unaffected. ~5% on loop-heavy code.
-option(FF_R_TRUSTED "Drop redundant return-stack checks in matched-pair opcodes." OFF)
+# the _FF_RSL underflow checks inside opcodes that the compiler emits
+# in matched pairs (EXIT, XLOOP, LEAVE, I, J, …); `i` / `j` / `leave`
+# misused outside a loop then go unchecked. Overflow checks always stay:
+# recursion depth is up to the program. Embedder-facing FF_RSL in custom
+# native words is unaffected. ~5% on loop-heavy code.
+option(FF_R_TRUSTED "Drop redundant return-stack underflow checks in matched-pair opcodes." OFF)
 if(FF_R_TRUSTED)
     add_compile_definitions(FF_R_TRUSTED=1)
 endif()

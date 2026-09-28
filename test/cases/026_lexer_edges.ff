@@ -1,0 +1,25 @@
+\ ff-test: lines
+\ Hex literals and string escapes.
+\
+\ A hex literal is a cell bit pattern: all-ones is -1. Out of range, it
+\ used to be retried as a real - strtod reads hex floats - and pushed a
+\ double. A malformed \x / \u / \U escape is now an error rather than a
+\ silent substitute character, and it no longer consumes the character
+\ after it: `"\x"` used to swallow its own closing quote.
+
+0xFFFFFFFFFFFFFFFF . cr
+0x7FFFFFFFFFFFFFFF . cr
+0x8000000000000000 . cr
+-0x8000000000000000 . cr
+0x1FFFFFFFFFFFFFFFF
+-0x8000000000000001
+0x1p3
+99999999999999999999 f. cr
+
+"\x41\x42é\U0001F600" type cr
+"abc\x" 1 2 3
+"\x4"
+"\uD800"
+"\U00110000"
+"unterminated \x
+depth . cr

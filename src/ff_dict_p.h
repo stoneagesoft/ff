@@ -374,18 +374,3 @@ static inline const char *ff_tick(bool b)
                 ? "✓"
                 : "";
 }
-
-/**
- * @brief Grow the words array if it can't hold @p extra more entries.
- *
- * @param d     Dictionary.
- * @param extra Slots needed beyond current @ref ff_dict::count.
- */
-static void ff_dict_ensure(ff_dict_t *d, size_t extra);
-
-/**
- * @brief Internal: register every built-in word into the static pool.
- *
- * @param d Dictionary, freshly initialized by @ref ff_dict_init.
- */
-static void ff_dict_define_words(ff_dict_t *d);

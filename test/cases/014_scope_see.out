@@ -1,0 +1,9 @@
+: max2
+    { ( a b -- m )
+        a b > if
+            a
+        else
+            b
+        then
+    }
+;

@@ -56,3 +56,7 @@ obj_*
 *.exe
 *.out
 *.app
+
+# ...except the test suite's expected outputs, which are sources: without
+# them CMake registers no tests and ctest passes vacuously.
+!test/cases/*.out

@@ -1,0 +1,20 @@
+\ `evaluate` and deferred words resume the word that ran them.
+\
+\ Both re-enter the interpreter from inside a running word, and each used
+\ to reload the caller's instruction pointer from ff->ip after the nested
+\ run - which always leaves it NULL. `evaluate` crashed on every use; a
+\ call to a deferred word silently ended the word that made it.
+
+"1 2 +" evaluate . . cr                  \ 03: the error code 0, then 3
+: t "3 4 *" evaluate drop 1 + . cr ;
+t                                        \ 13
+: nested "\"5 6 +\" evaluate drop" evaluate drop . cr ;
+nested                                   \ 11
+
+defer d
+: seven 7 . ;
+' seven is d
+: x d 99 . cr ;
+x                                        \ 799
+: twice d d 1 . cr ;
+twice                                    \ 771

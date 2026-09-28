@@ -66,27 +66,12 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos);
 struct ff_tokenizer
 {
     ff_tok_state_t state;            /**< OR of FF_TOK_STATE_* flags (e.g. open `(` comment). */
-    int line;                        /**< Source line number (advanced by ff_load()). */
-    int pos;                         /**< Byte position of the most recent token's start. */
+    int line;                        /**< 1-based file line while ff_load() runs; 0 otherwise. */
+    int pos;                         /**< Byte offset of the most recent token's start within the source. */
     char token[FF_TOKEN_SIZE];       /**< NUL-terminated token text or string-literal payload. */
     size_t token_len;                /**< Length of @ref token, excluding the NUL. */
     ff_int_t integer_val;            /**< Decoded integer when token kind is FF_TOKEN_INTEGER. */
     ff_real_t real_val;              /**< Decoded real when token kind is FF_TOKEN_REAL. */
     bool truncated;                  /**< The just-scanned token/string overran FF_TOKEN_SIZE and was cut. */
+    bool bad_escape;                 /**< The just-scanned string held a malformed `\x` / `\u` / `\U` escape. */
 };
-
-/**
- * Read one byte from @p src at `*pos` and advance past it.
- * @param src Source text.
- * @param pos In/out cursor.
- * @return The byte read, cast through int (no sign extension).
- */
-static int ff_tok_get(const char *src, int *pos);
-
-/**
- * Test whether the cursor has reached end-of-input.
- * @param src Source text.
- * @param pos Cursor position.
- * @return true iff `src[pos]` is the terminating NUL.
- */
-static bool ff_tok_eof(const char *src, int pos);

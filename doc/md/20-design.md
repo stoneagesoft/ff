@@ -279,14 +279,19 @@ terminated C string `src` starting at byte offset `*pos`. It advances
 | `FF_TOKEN_REAL` | `t->real_val` (ff_real_t) |
 | `FF_TOKEN_STRING` | string content in `t->token`, length in `t->token_len` |
 
-The tokenizer handles nested parenthesis comments, tracks line and
-character position for error reporting, and understands the full set of
+The tokenizer handles parenthesis comments that span lines (they don't
+nest: the first `)` closes one), records each token's start offset in
+`t->pos` so errors can be located, and understands the full set of
 C-style backslash escape sequences plus Unicode escapes (`\uXXXX`,
-`\UXXXXXXXX`, `\xXX`). Unicode encoding is delegated to
+`\UXXXXXXXX`, `\xXX`). A malformed numeric escape — too few hex digits, a
+surrogate, a code point past U+10FFFF — sets `t->bad_escape`, which the
+evaluator reports as `FF_ERR_MALFORMED`. Unicode encoding is delegated to
 `utf8catcodepoint()` from the vendored `3rdparty/utf8/utf8.h` library.
 
-Number parsing attempts integer first, then real. Words that cannot be
-parsed as numbers are returned as `FF_TOKEN_WORD`.
+Number parsing attempts integer first, then real. A `0x` literal is a
+cell bit pattern (`0xFFFFFFFFFFFFFFFF` is -1) and is never retried as a
+real; a decimal integer that overflows falls back to a real. Words that
+cannot be parsed as numbers are returned as `FF_TOKEN_WORD`.
 
 
 ## Eval loop
@@ -1234,7 +1239,9 @@ case FF_OP_DEFER_RUNTIME:
         if (target == NULL)
             /* raise FF_ERR_BAD_PTR, goto done */;
         _FF_SYNC();
+        ff_int_t *saved_ip = ip;    /* the nested run leaves ff->ip NULL */
         ff_exec(ff, target);
+        ff->ip = saved_ip;
         _FF_RESTORE();
     }
     break;
@@ -1300,7 +1307,7 @@ engine is compiled:
 
 | Option | Effect |
 |---|---|
-| `FF_R_TRUSTED` | Drops the `_FF_RSL` checks inside opcodes the compiler emits in matched pairs (`XLOOP`, `XDO`, `NEST`, `EXIT`, `LOOP_I`, `LEAVE`). The check guards an engine-bug-only failure; the embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. |
+| `FF_R_TRUSTED` | Drops the `_FF_RSL` underflow checks inside opcodes the compiler emits in matched pairs (`EXIT`, `XLOOP`, `PXLOOP`, `LEAVE`, `LOOP_I`, `LOOP_J`, and the `i +` / `r@ +` superinstructions). Well-formed code can't fail them; `i`, `j` or `leave` misused outside a loop then go unchecked. Overflow checks are never dropped, since recursion depth is up to the program. The embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. |
 | `FF_LTO` | Enables link-time optimisation (`-flto` / `/GL` via CMake's `INTERPROCEDURAL_OPTIMIZATION`). Lets the compiler inline across translation-unit boundaries — particularly `ff_exec` ↔ `ff_dict_lookup` ↔ `ff_word_native_fn`. Typically 2-5 %. |
 | `FF_PGO=GENERATE` / `USE` | Profile-guided optimisation. Two-pass build: first an instrumented build that writes `*.profraw` when run against a representative workload, then `llvm-profdata merge`, then a second build with `FF_PGO=USE -DFF_PGO_DATA=path/to/merged.profdata`. Typical gain on dispatch-bound code: 5-15 %. |
 
@@ -1439,8 +1446,13 @@ loop polls at the same back-branch / call sites as the polling
 callback. Safe to call from a signal handler or another thread
 (per the C17 sig_atomic_t guarantees on the platforms ff targets);
 no I/O, no allocation, no engine state mutation beyond the flag.
-The flag is consumed at next `ff_eval` entry, so a stale request
-between evaluations is silently ignored.
+The flag is consumed when the next outermost `ff_eval` / `ff_load`
+starts, so a stale request between evaluations is silently ignored.
+
+Both the flag and the opcode count belong to the outermost evaluation.
+A nested one — `evaluate` or `load` running inside a word — leaves them
+alone; resetting them there would let a loop around `evaluate` restart
+its budget, and drop a pending request, on every pass.
 
 ### Where the check lives
 
@@ -1457,7 +1469,7 @@ When either signal fires, the engine raises
 `FF_SEV_ERROR | FF_ERR_ABORTED` via `ff_tracef`, clears
 `abort_requested`, sets `FF_STATE_BROKEN`, and joins the existing
 broken-state cleanup. The host's `ff_eval` returns
-`FF_ERR_BROKEN` and the engine is ready for the next call.
+`FF_ERR_ABORTED` and the engine is ready for the next call.
 
 
 ## Markdown rendering for terminal output

@@ -1,0 +1,28 @@
+\ `see` steps over every operand, and prints literals that read back.
+\
+\ The decompiler advanced one cell past any opcode it had no case for, so
+\ the inline string of `."` / `abort"`, and the word pointer carried by a
+\ reference to a constant, array, created, deferred or DOES> word, were
+\ decoded as opcodes: it printed whichever word first had the same
+\ runtime, then garbage - or crashed when string bytes looked like NEST.
+\ String and real literals didn't round-trip either (a stray leading
+\ space; 1.0 printed as the integer 1).
+
+10 constant ten
+5 array arr
+create buf 4 allot
+defer hook
+: noop ;
+' noop is hook
+: const create , does> @ ;
+3 const three
+
+: shout ." "Hi, \"you\"!\n" ;
+: guard abort" "no\tway" ;
+: refs ten 2 arr ! buf hook three + ;
+: lits "a\\b" 1.0 0.5 -2.25e-3 ;
+
+see shout
+see guard
+see refs
+see lits

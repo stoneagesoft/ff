@@ -23,6 +23,9 @@
 #define FF_DICT_ARENA_SLAB     (64 * 1024)
 
 
+static void ff_dict_ensure(ff_dict_t *d, size_t extra);
+
+
 /** @copydoc ff_arena_alloc */
 void *ff_arena_alloc(ff_arena_t *a, size_t bytes)
 {
@@ -438,7 +441,7 @@ void ff_dict_define(ff_dict_t *d, const ff_word_def_t *defs)
  * @param d     Dictionary.
  * @param extra Slots required beyond @ref ff_dict::count.
  */
-void ff_dict_ensure(ff_dict_t *d, size_t extra)
+static void ff_dict_ensure(ff_dict_t *d, size_t extra)
 {
     if (d->count + extra > d->capacity)
     {

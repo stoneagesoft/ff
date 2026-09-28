@@ -11,6 +11,7 @@
 
 /** ( -- a )  `here` — push a pointer to the next free heap slot. */
 case FF_OP_HERE:
+    _FF_NEED_DEF;
     _FF_SO(1);
     {
         ff_heap_t *h = &ff_dict_top(&ff->dict)->heap;
@@ -46,6 +47,7 @@ case FF_OP_PLUS_STORE:
 
 /** ( n -- )  `allot` — reserve n cells in the current heap. */
 case FF_OP_ALLOT:
+    _FF_NEED_DEF;
     _FF_SL(1);
     if (ff_unlikely(tos <= 0))
     {
@@ -62,6 +64,7 @@ case FF_OP_ALLOT:
 
 /** ( v -- )  `,` — append a single cell to the current heap. */
 case FF_OP_COMMA:
+    _FF_NEED_DEF;
     _FF_SL(1);
     ff_heap_compile_int(&ff_dict_top(&ff->dict)->heap, tos);
     _FF_DROP();
@@ -84,6 +87,7 @@ case FF_OP_C_FETCH:
 
 /** ( v -- )  `c,` — append a single byte to the current heap. */
 case FF_OP_C_COMMA:
+    _FF_NEED_DEF;
     _FF_SL(1);
     ff_heap_compile_char(&ff_dict_top(&ff->dict)->heap, (char)tos);
     _FF_DROP();
@@ -91,5 +95,6 @@ case FF_OP_C_COMMA:
 
 /** ( -- )  `align` — align current heap to a cell boundary. */
 case FF_OP_C_ALIGN:
+    _FF_NEED_DEF;
     ff_heap_align(&ff_dict_top(&ff->dict)->heap);
     _FF_NEXT();

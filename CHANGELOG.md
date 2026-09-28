@@ -53,6 +53,55 @@ the project follows [Semantic Versioning](https://semver.org/).
   `ff_new` returns `NULL` on allocation failure; `ff_heap_trim` bumps
   the safe-mem interval counter; `ff_dict_rename` tolerates a failed
   `strdup`; the watchdog now ticks through `does>`-built words.
+- **Resuming after a nested run:** `evaluate` crashed on every use, and a
+  call to a deferred word silently ended the word that made it. Both
+  reloaded the caller's instruction pointer from `ff->ip`, which the
+  nested run always leaves NULL.
+- **Stack overflow:** literals pushed by the evaluator, the return frame
+  `ff_exec` pushes for `execute` / deferred words / `catch`, and the
+  result `catch` pushes are now bounds-checked. Previously a long line of
+  literals overwrote the stack's own bookkeeping, and recursion through
+  `execute` or a deferred word ran off the end of the return stack. So
+  did any deep recursion under `FF_R_TRUSTED`, which also removed the
+  NEST / DO overflow checks; it now removes only underflow checks.
+- **State left behind by errors:** an error exit now cuts the return
+  stack and the `{ }` scope barrier back to where that `ff_exec` started.
+  Each runtime error used to leak return-stack cells until the array
+  overflowed, and an error (or `exit`) inside a scope left its barrier
+  raised, hiding the caller's cells.
+- **No current definition:** `immediate`, `here`, `,`, `c,`, `allot`,
+  `c=`, `]` and `does>` raise `FF_ERR_NOT_IN_DEF` on a fresh engine
+  instead of dereferencing NULL; `does>` also refuses to run outside a
+  defining word, where it recorded a pointer into a dead C stack frame.
+- **`see`** steps over every instruction's operands. It advanced one cell
+  past opcodes without a special case, so inline strings and the word
+  pointer of a constant / array / `create` / `defer` / `does>` reference
+  were decoded as opcodes — the wrong name, garbage, or a crash. String
+  and real literals now print in a form that reads back (escaped; `1.0`
+  rather than `1`).
+- **`+loop` with a negative step** terminates: it now ends when the index
+  crosses the limit in either direction (ANS 6.1.0140). Counting down
+  used to loop forever.
+- **Watchdog:** a nested `ff_eval` (`evaluate`, `load`) no longer resets
+  the opcode count or clears a pending `ff_request_abort()`, so a loop
+  around `evaluate` can be stopped. The abort is reported as
+  `FF_ERR_ABORTED`, as documented, instead of `FF_ERR_BROKEN`.
+- **Error location:** `ff_err_pos()` was always 0 and `ff_load()` lines
+  were numbered from 0; both now locate the offending token.
+- **`ff_load`:** lines longer than 4 KiB were split mid-token; a missing
+  file returned `FF_SEV_ERROR | FF_ERR_FILE_IO` rather than the bare
+  code; a runaway `(` comment kept swallowing the caller's next input;
+  and a nested `load` reset its caller's line count.
+- **String escapes:** a malformed `\x` / `\u` / `\U` escape consumed the
+  character after it (`"\x"` swallowed its own closing quote), and an
+  8-digit `\U` overflowed `int`. Such escapes are now rejected.
+- `0xFFFFFFFFFFFFFFFF` (any hex literal past the signed range) pushed a
+  hex-float double; hex literals are now cell bit patterns.
+- `clear` and `depth` inside a `{ }` scope work on the cells above the
+  barrier only; `clear` there used to crash the closing `}`.
+- `<ff_p.h>` compiles under `-Wall -Werror`: it declared four `static`
+  functions it never defined.
+- Removed the leftover `(nest)` native word, which crashed when run.
 
 ### Changed
 
@@ -63,6 +112,16 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `.(`, `."`, and `abort"` are correctly tagged `FF_OP_LAYOUT_STR` in the
   opcode metadata, so `see` / `dump-word` no longer mis-decode a word's
   body after an inline string.
+- `ff_err_line()` is 1-based for `ff_eval()` input too (the line within
+  the evaluated string), and 0 only when there is no source position.
+- A malformed string escape is an error (`FF_ERR_MALFORMED`) instead of
+  being replaced by `0xFF` / U+FFFD. Hex floats such as `0x1p3` are no
+  longer accepted as numbers.
+- Test driver: a `\ ff-test: lines [budget=N]` first line evaluates the
+  file line by line and records each failure as `[ERROR_NAME]`. New
+  `ff_api_test` covers engine state across calls. CI fails if no tests
+  are found; the expected-output files were being excluded by
+  `.gitignore`, so CI had run no tests at all.
 
 ### Added (language)
 
@@ -149,9 +208,10 @@ the project follows [Semantic Versioning](https://semver.org/).
     `_FF_CHECK_ADDR`/`_FF_CHECK_XT`/`abort_requested`) so the
     rare error path moves to a cold section.
   - `FF_R_TRUSTED` build flag (default OFF) elides the
-    bytecode-internal `_FF_RSL` / `_FF_RSO` checks inside
-    matched-pair opcodes (XLOOP, XDO, NEST, EXIT, …). Custom
-    native words still get full validation.
+    bytecode-internal `_FF_RSL` underflow checks inside
+    matched-pair opcodes (EXIT, XLOOP, LEAVE, I, J, …); overflow
+    checks always stay. Custom native words still get full
+    validation.
   - `FF_LTO` build flag wires
     `CMAKE_INTERPROCEDURAL_OPTIMIZATION` for cross-TU inlining.
   - `FF_PGO=GENERATE`/`USE` build flags for profile-guided

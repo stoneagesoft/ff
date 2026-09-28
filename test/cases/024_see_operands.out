@@ -1,0 +1,12 @@
+: shout
+    ." "Hi, \"you\"!\n"
+;
+: guard
+    abort" "no\tway"
+;
+: refs
+    ten 2 arr ! buf hook three +
+;
+: lits
+    "a\\b" 1.0 0.5 -0.00225
+;

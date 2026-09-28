@@ -1,0 +1,27 @@
+\ ff-test: lines
+\ Stack limits hold on every push, and hitting one leaves the engine usable.
+\
+\ The evaluator pushed literals with no overflow check: one push past the
+\ top overwrote the stack's own bookkeeping. `execute` and deferred words
+\ re-enter the interpreter, pushing a return frame nothing checked, so deep
+\ recursion through them ran off the end of the return stack. And under
+\ FF_R_TRUSTED, NEST / DO lost their overflow checks altogether, although
+\ how deep a program recurses is up to the program.
+
+: fill 512 0 do 0 loop ;
+fill 1
+clear fill 1.5
+clear fill "s"
+clear depth . cr
+
+: r1 ['] r1 execute ;
+r1
+defer rd
+: r2 rd ;
+' r2 is rd
+r2
+: r3 1 r3 drop ;
+r3
+: r4 10 0 do r4 loop ;
+r4
+clear 1 2 + . cr

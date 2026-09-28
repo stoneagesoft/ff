@@ -318,9 +318,9 @@ typedef struct
     int   at_line_start;   /* 1 = nothing on current line; need to emit indent first */
 } see_printer_t;
 
-/* Emit text on the current line. Lays down the indent on the first
-   emit after a newline; otherwise inserts a single space separator. */
-static void see_text(see_printer_t *p, const char *fmt, ...)
+/* Start the next item on the current line: lay down the indent on the
+   first emit after a newline, otherwise a single space separator. */
+static void see_lead(see_printer_t *p)
 {
     if (p->at_line_start)
     {
@@ -332,6 +332,12 @@ static void see_text(see_printer_t *p, const char *fmt, ...)
     {
         ff_printf(p->ff, " ");
     }
+}
+
+/* Emit text on the current line (see see_lead). */
+static void see_text(see_printer_t *p, const char *fmt, ...)
+{
+    see_lead(p);
     va_list ap;
     va_start(ap, fmt);
     char buf[256];
@@ -388,6 +394,80 @@ static size_t see_opcode_len(const ff_int_t *cells, size_t pos, size_t end)
     if (pos >= end)
         return 1;
     return ff_opcode_encoded_cells((ff_opcode_t)cells[pos], cells, pos, end);
+}
+
+/* Step past the instruction at `pos`, operands included. Never less than
+   one cell, so a corrupt length can't stall the walk. */
+static size_t see_next(const ff_int_t *cells, size_t pos, size_t end)
+{
+    size_t n = see_opcode_len(cells, pos, end);
+    return pos + (n ? n : 1);
+}
+
+/* Emit the inline string operand of the instruction at `pos` as a source
+   literal, after an optional `prefix` word (`."`, `abort"`). The text is
+   re-escaped the way the tokenizer reads it, so the output evaluates back
+   to the same bytes, and it is bounded by the operand's skip count and the
+   heap size rather than trusted to hold a NUL. */
+static void see_string(see_printer_t *p, const char *prefix,
+                       const ff_int_t *cells, size_t pos, size_t end)
+{
+    size_t payload = 0;         /* cells of text after the skip cell */
+    if (pos + 2 <= end)
+    {
+        ff_int_t skip = cells[pos + 1];
+        payload = skip > 1 ? (size_t)skip - 1 : 0;
+        if (payload > end - (pos + 2))
+            payload = end - (pos + 2);
+    }
+    const char *s   = (const char *)&cells[pos + 2];
+    size_t      max = payload * sizeof(ff_int_t);
+
+    see_lead(p);
+    if (prefix)
+        ff_printf(p->ff, "%s ", prefix);
+
+    char buf[64];
+    size_t n = 0;
+    buf[n++] = '"';
+    for (size_t i = 0; i < max && s[i]; ++i)
+    {
+        unsigned char c = (unsigned char)s[i];
+        char esc[8];
+        switch (c)
+        {
+            case '"':  strcpy(esc, "\\\""); break;
+            case '\\': strcpy(esc, "\\\\"); break;
+            case '\n': strcpy(esc, "\\n");  break;
+            case '\t': strcpy(esc, "\\t");  break;
+            case '\r': strcpy(esc, "\\r");  break;
+            case '\b': strcpy(esc, "\\b");  break;
+            case '\f': strcpy(esc, "\\f");  break;
+            default:
+                if (c < 0x20 || c == 0x7F)
+                    snprintf(esc, sizeof(esc), "\\x%02X", c);
+                else
+                {
+                    esc[0] = (char)c;
+                    esc[1] = '\0';
+                }
+                break;
+        }
+        /* Flush early enough that the closing quote and the NUL always
+           fit after the last append. */
+        size_t len = strlen(esc);
+        if (n + len + 2 > sizeof(buf))
+        {
+            buf[n] = '\0';
+            ff_printf(p->ff, "%s", buf);
+            n = 0;
+        }
+        memcpy(buf + n, esc, len);
+        n += len;
+    }
+    buf[n++] = '"';
+    buf[n] = '\0';
+    ff_printf(p->ff, "%s", buf);
 }
 
 
@@ -604,26 +684,68 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
 
             case FF_OP_FLIT:
             {
+                /* Shortest form that reads back as the same value, and
+                   always marked as a real: `%g` turned 1.0 into `1`,
+                   which re-enters as an integer literal. */
                 ff_real_t r;
                 memcpy(&r, &cells[pos + 1], sizeof(r));
-                see_text(pr, "%g", r);
+                char num[40];
+                snprintf(num, sizeof(num), "%.15g", (double)r);
+                if ((ff_real_t)strtod(num, NULL) != r)
+                    snprintf(num, sizeof(num), "%.17g", (double)r);
+                if (!strpbrk(num, ".eEn"))
+                    strcat(num, ".0");
+                see_text(pr, "%s", num);
                 pos += 2;
                 break;
             }
 
             case FF_OP_STRLIT:
-            {
-                ff_int_t skip = cells[pos + 1];
-                see_text(pr, "\" %s\"", (const char *)&cells[pos + 2]);
-                pos += 1 + (size_t)skip;
+                see_string(pr, NULL, cells, pos, size);
+                pos = see_next(cells, pos, size);
                 break;
-            }
+
+            /* Inline-string instructions compiled by `."` and `abort"`. */
+            case FF_OP_DOT_PAREN:
+                see_string(pr, ".\"", cells, pos, size);
+                pos = see_next(cells, pos, size);
+                break;
+
+            case FF_OP_ABORTQ:
+                see_string(pr, "abort\"", cells, pos, size);
+                pos = see_next(cells, pos, size);
+                break;
 
             case FF_OP_NEST:
             case FF_OP_TNEST:
             {
                 ff_word_t *nw = (ff_word_t *)(intptr_t)cells[pos + 1];
                 see_text(pr, "%s", nw->name);
+                pos += 2;
+                break;
+            }
+
+            /* A reference to a created / constant / array / deferred /
+               DOES> word: the operand is that word, so it prints as its
+               name. (Rendering these by opcode alone printed whichever
+               word first had the same runtime, then decoded the pointer
+               cell as an opcode.) */
+            case FF_OP_CREATE_RUNTIME:
+            case FF_OP_CONSTANT_RUNTIME:
+            case FF_OP_ARRAY_RUNTIME:
+            case FF_OP_DEFER_RUNTIME:
+            case FF_OP_DOES_RUNTIME:
+            {
+                ff_word_t *nw = (ff_word_t *)(intptr_t)cells[pos + 1];
+                see_text(pr, "%s", nw->name);
+                pos += 2;
+                break;
+            }
+
+            case FF_OP_POSTPONE_RUNTIME:
+            {
+                ff_word_t *nw = (ff_word_t *)(intptr_t)cells[pos + 1];
+                see_text(pr, "postpone %s", nw->name);
                 pos += 2;
                 break;
             }
@@ -794,7 +916,11 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                     else
                         see_text(pr, "<%d>", op);
                 }
-                pos += 1;
+                /* Step over any operand cells too: advancing one cell
+                   decoded operands — inline strings, word pointers — as
+                   opcodes, and a string or pointer that happened to look
+                   like NEST was then dereferenced as a word. */
+                pos = see_next(cells, pos, size);
                 break;
             }
         }

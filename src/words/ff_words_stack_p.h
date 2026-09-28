@@ -47,15 +47,20 @@ case FF_OP_LITSUB:
     tos -= *ip++;
     _FF_NEXT();
 
-/** ( -- n )  `depth` — push current stack depth (before pushing). */
+/** ( -- n )  `depth` — push current stack depth (before pushing). Inside
+    a `{ }` scope that is the depth above the barrier: the cells below it
+    are not the scope's to count. */
 case FF_OP_DEPTH:
     _FF_SO(1);
-    _FF_PUSH((ff_int_t)S->top);
+    _FF_PUSH((ff_int_t)(S->top - floor));
     _FF_NEXT();
 
-/** ( ... -- )  `clear` — discard every data-stack item. */
+/** ( ... -- )  `clear` — discard every data-stack item above the scope
+    barrier (all of them outside a scope). Clearing past the barrier would
+    destroy the caller's cells and the scope's own inputs. */
 case FF_OP_CLEAR:
-    S->top = 0;
+    S->top = floor;
+    _FF_LOAD_TOS();
     _FF_NEXT();
 
 /** ( a b c -- c a b )  `-rot` — reverse three-cell rotate. */

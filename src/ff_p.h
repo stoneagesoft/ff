@@ -146,10 +146,15 @@ struct ff
        back-branch and word call. See FF_ABORT_LOAD / FF_ABORT_STORE
        above for the memory-order contract. `opcodes_run` is the
        running opcode count consulted by the polling watchdog
-       callback; reset on each ff_exec entry. */
+       callback; reset when the outermost evaluation starts. */
     ff_abort_flag_t abort_requested;
     uint64_t        opcodes_run;
     uint64_t        next_watchdog_at;
+
+    /* Nesting depth of ff_eval / ff_load. Only the outermost call resets
+       the watchdog state above: a nested reset (`evaluate`, `load`) would
+       let a loop around them run forever and drop a pending abort. */
+    int             eval_depth;
 };
 
 

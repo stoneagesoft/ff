@@ -22,6 +22,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -220,6 +221,57 @@ static char *ff_pad_intern(ff_t *ff, const char *s, size_t len)
     dst[len] = '\0';
     sl->used += need;
     return dst;
+}
+
+/**
+ * Enter an evaluation (ff_eval or ff_load).
+ *
+ * The watchdog state belongs to the outermost evaluation. Resetting it on
+ * a nested entry (`evaluate`, `load`) would restart the opcode budget and
+ * drop a pending ff_request_abort() on every pass through a loop around
+ * them, so untrusted code could never be stopped.
+ *
+ * @param ff Engine.
+ */
+static void ff_eval_enter(ff_t *ff)
+{
+    if (ff->eval_depth++ > 0)
+        return;
+
+    FF_ABORT_CLEAR(&ff->abort_requested);
+    ff->opcodes_run      = 0;
+    ff->next_watchdog_at = ff->platform.watchdog_interval
+                               ? ff->platform.watchdog_interval
+                               : 65536;
+}
+
+/**
+ * Leave an evaluation entered with ff_eval_enter().
+ * @param ff Engine.
+ */
+static void ff_eval_leave(ff_t *ff)
+{
+    --ff->eval_depth;
+}
+
+/**
+ * Check there is room for one outer-interpreter push. The evaluator
+ * pushes literals itself, outside ff_exec's dispatch-context checks, so
+ * without this a long enough line of literals overruns the stack array.
+ *
+ * @param ff Engine.
+ * @param ec Set to the raised error on failure.
+ * @return false if the data stack is full.
+ */
+static bool ff_eval_room(ff_t *ff, ff_error_t *ec)
+{
+    if (ff_unlikely(ff->stack.top >= FF_STACK_SIZE))
+    {
+        *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_OVER,
+                        "Stack overflow: %d item(s) would not fit.", 1);
+        return false;
+    }
+    return true;
 }
 
 /**
@@ -449,22 +501,21 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
             || !*src)
         return FF_OK;
 
+    /* The tokenizer's token-start offset indexes ff->input (it locates
+       errors), so it is saved and restored with it: after a nested
+       `evaluate` returns, errors must point into the outer source again. */
     const char *prev_input = ff->input;
     int prev_pos = ff->input_pos;
+    int prev_tok_pos = ff->tokenizer.pos;
     ff->input = src;
     ff->input_pos = 0;
+    ff->tokenizer.pos = 0;
 
     ff->state &= ~(FF_STATE_BROKEN | FF_STATE_ERROR | FF_STATE_ABORTED);
 
-    /* Watchdog state is per-evaluation: a stale abort-request from a
-       previous run is dropped, the opcode counter starts at zero,
-       and the polling watchdog will fire after `watchdog_interval`
-       opcodes (default 65536). */
-    FF_ABORT_CLEAR(&ff->abort_requested);
-    ff->opcodes_run      = 0;
-    ff->next_watchdog_at = ff->platform.watchdog_interval
-                               ? ff->platform.watchdog_interval
-                               : 65536;
+    /* Watchdog state is per outermost evaluation: a stale abort request
+       from a previous run is dropped and the opcode count starts at zero. */
+    ff_eval_enter(ff);
 
     int pos = 0;
     ff_dict_t *d = &ff->dict;
@@ -482,6 +533,12 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
         {
             ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
                            "Token longer than %d bytes.", FF_TOKEN_SIZE - 1);
+            goto out;
+        }
+        if (t->bad_escape)
+        {
+            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                           "Invalid escape sequence in string literal.");
             goto out;
         }
 
@@ -586,14 +643,15 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                 {
                     ff->state &= ~FF_STATE_TICK_PENDING;
                     const ff_word_t *w = ff_dict_lookup(d, t->token);
-                    if (w)
-                        ff_stack_push_ptr(&ff->stack, w);
-                    else
+                    if (!w)
                     {
                         ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
                                        "'%s' undefined.", t->token);
                         goto out;
                     }
+                    if (!ff_eval_room(ff, &ec))
+                        goto out;
+                    ff_stack_push_ptr(&ff->stack, w);
                 }
                 else if (ff->state & FF_STATE_IS_PENDING)
                 {
@@ -684,7 +742,12 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                             ff->input_pos = pos;
                             if (!ff_exec(ff, w))
                             {
-                                ec = FF_ERR_BROKEN;
+                                /* A recorded error (watchdog abort, bad
+                                   opcode) names the cause; only an
+                                   uncaught THROW has none to report. */
+                                ec = (ff->state & FF_STATE_ERROR)
+                                         ? ff->error
+                                         : FF_ERR_BROKEN;
                                 goto out;
                             }
                             if ((ff->state & FF_STATE_ERROR))
@@ -718,8 +781,10 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
             case FF_TOKEN_INTEGER:
                 if (ff->state & FF_STATE_COMPILING)
                     ff_heap_compile_lit(&ff_dict_top(d)->heap, t->integer_val);
-                else
+                else if (ff_eval_room(ff, &ec))
                     ff_stack_push(&ff->stack, t->integer_val);
+                else
+                    goto out;
                 break;
 
             case FF_TOKEN_REAL:
@@ -728,8 +793,10 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     ff_heap_compile_op(&ff_dict_top(d)->heap, FF_OP_FLIT);
                     ff_heap_compile_real(&ff_dict_top(d)->heap, t->real_val);
                 }
-                else
+                else if (ff_eval_room(ff, &ec))
                     ff_stack_push_real(&ff->stack, t->real_val);
+                else
+                    goto out;
                 break;
 
             case FF_TOKEN_STRING:
@@ -752,6 +819,8 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     }
                     else
                     {
+                        if (!ff_eval_room(ff, &ec))
+                            goto out;
                         /* Intern into the bump arena; the pushed pointer
                            stays stable for the engine's lifetime. */
                         char *dst = ff_pad_intern(ff, t->token, t->token_len);
@@ -782,16 +851,22 @@ out:
        and every error path lands here so the input/input_pos snapshot
        is rolled back exactly once. */
     /* An unterminated string literal makes the lexer return NULL like a
-       clean EOF; the flag distinguishes them so it isn't silently dropped. */
-    if (ec == FF_OK && (ff->tokenizer.state & FF_TOK_STATE_STRING))
+       clean EOF; the flag distinguishes them so it isn't silently dropped.
+       It is cleared even when another error already won (a bad escape or
+       an overlong token inside the same literal): left set, it would fail
+       the *next*, perfectly good, evaluation. */
+    if (ff->tokenizer.state & FF_TOK_STATE_STRING)
     {
         ff->tokenizer.state &= ~FF_TOK_STATE_STRING;
-        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_STRING,
-                       "Unterminated string literal.");
+        if (ec == FF_OK)
+            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_STRING,
+                           "Unterminated string literal.");
     }
 
     ff->input = prev_input;
     ff->input_pos = prev_pos;
+    ff->tokenizer.pos = prev_tok_pos;
+    ff_eval_leave(ff);
     return FF_ERR_CODE(ec);
 }
 
@@ -817,6 +892,17 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     ff->cur_word = w;
     int bt_size = BT->top;
 
+    /* An invocation leaves nothing behind. An error exit abandons the
+       return frames and `{` scopes it opened, so the exit path cuts both
+       back to their entry values: otherwise every runtime error leaks
+       return-stack cells until the array overflows, and a failed scope
+       keeps its barrier raised for all later code. A clean run has
+       already balanced both, so the cut is a no-op there. */
+    const size_t r_base      = R->top;
+    const size_t floor_base  = S->floor;
+    const size_t scopes_base = ff->n_scopes;
+    bool ok = true;
+
     if (ff->state & (FF_STATE_TRACE | FF_STATE_BACKTRACE))
     {
         if (ff->state & FF_STATE_TRACE)
@@ -830,7 +916,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
          FF_OP_EXIT]. Push a NULL return sentinel on R so EXIT terminates
          cleanly.
        - External FF_OP_NONE word with a fn pointer → call it directly
-         (it may, for colon-def'd words via ff_w_nest, set ff->ip).
+         (it may set ff->ip to continue in bytecode).
        - Otherwise nothing to run. */
     ff_int_t exec_scratch[3];
     ff_int_t *ip;
@@ -851,18 +937,30 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
         /* Two-cell return frame: [saved_ip, saved_cur_word]. The
            outermost ip is NULL — the EXIT case detects that and goes
            to `done`. The cur_word slot carries the caller's value so
-           a nested ff_exec (e.g. via EXECUTE) restores it cleanly. */
-        ff_stack_push(R, 0);
-        ff_stack_push(R, (ff_int_t)(intptr_t)prev_cur_word);
-        ip = exec_scratch;
+           a nested ff_exec (e.g. via EXECUTE) restores it cleanly.
+           Checked like any other push: `execute` and deferred words
+           re-enter here once per level, so deep recursion through them
+           would otherwise run straight off the end of R. */
+        if (ff_unlikely(R->top + 2 > FF_STACK_SIZE))
+        {
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER,
+                      "Return stack overflow: %d item(s) would not fit.", 2);
+            ip = NULL;
+        }
+        else
+        {
+            ff_stack_push(R, 0);
+            ff_stack_push(R, (ff_int_t)(intptr_t)prev_cur_word);
+            ip = exec_scratch;
+        }
     }
     else if (w->flags & FF_WORD_NATIVE)
     {
         /* Default ip to NULL so a plain leaf native word (the common case
            — pop args, push results, return) falls through to `done`. Only
-           words that deliberately install bytecode (e.g. ff_w_nest) set
-           ff->ip; without this reset a leaf word would inherit a stale ip
-           and the dispatch loop would run garbage. */
+           a word that deliberately installs bytecode sets ff->ip; without
+           this reset a leaf word would inherit a stale ip and the dispatch
+           loop would run garbage. */
         ff->ip = NULL;
         ff_word_native_fn(w)(ff);
         ip = ff->ip;
@@ -992,6 +1090,19 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 goto done; \
             } \
         } while (0)
+    /* Words that write into (or mark) the current definition —
+       ff_dict_top() — outside compile mode: `here`, `,`, `allot`,
+       `immediate`, `]`, … On a fresh engine there is no such word yet. */
+    #define _FF_NEED_DEF \
+        do { \
+            if (ff_unlikely(!ff_dict_top(&ff->dict))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF, \
+                          "No current definition."); \
+                goto done; \
+            } \
+        } while (0)
 
     /* Dispatch-context address check; gated by FF_SAFE_MEM. Compiles
        to nothing in the default build. See ff_p.h:FF_CHECK_ADDR for
@@ -1066,16 +1177,18 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
 
     /* Trusted-bytecode return-stack checks. Inside opcodes that the
        compiler emits in matched pairs (XDO ... XLOOP, etc.), the
-       _FF_RSL_T / _FF_RSO_T checks guard an engine-bug-only failure
-       and can be elided when FF_R_TRUSTED is on. The unsuffixed
-       _FF_RSL / _FF_RSO above stay live because they protect words
-       (>R, R>, R@) that user code can stand-alone-misuse. */
+       _FF_RSL_T underflow check can't fail in well-formed code and is
+       elided when FF_R_TRUSTED is on (`i` / `j` / `leave` misused outside
+       a loop then go unchecked). The unsuffixed _FF_RSL above stays live
+       because it protects words (>R, R>, R@) that user code can
+       stand-alone-misuse. There is deliberately no trusted variant of
+       _FF_RSO: how deep NEST / DO / DOES_RUNTIME push depends on the
+       program's recursion depth, so an overflow is always a
+       user-reachable failure, never an engine bug. */
 #if FF_R_TRUSTED
     #define _FF_RSL_T(n)  ((void)0)
-    #define _FF_RSO_T(n)  ((void)0)
 #else
     #define _FF_RSL_T(n)  _FF_RSL(n)
-    #define _FF_RSO_T(n)  _FF_RSO(n)
 #endif
 
     #define _FF_NEXT()    break
@@ -1102,8 +1215,9 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             /* Built-in word bodies live in per-category headers that
                are included here so each case is inline. The headers
                reference the macros (_FF_NEXT, _FF_SYNC, _FF_RESTORE, _FF_SO,
-               _FF_RSO), labels (done, broken), and local variables
-               (S, R, BT, ip, ff, nest_code, bt_size) in this scope. */
+               _FF_RSO, …), labels (done, broken), and local variables
+               (S, R, BT, ip, tos, floor, ff, exec_scratch, r_base) in
+               this scope. */
             /* FF_IN_EXEC gates the dispatch fragments: each #error's out
                if included anywhere but here. */
             #define FF_IN_EXEC 1
@@ -1161,23 +1275,27 @@ _watchdog_abort:
     goto broken;
 
 broken:
+    ok = false;
+
+done:
     /* Flush the local watchdog batch counter back into the engine's
        running total before returning, so a host that reads
        ff->opcodes_run after a failed run sees an accurate count. */
     ff->opcodes_run += (uint64_t)(FF_WD_BATCH - wd_tick);
     ff->ip = ip;
     if (S->top) S->data[S->top - 1] = tos;
+    /* Cut back to the entry state (see r_base). Only ever lowers R:
+       QUIT and ABORT empty it on purpose. */
+    if (R->top > r_base)
+        R->top = r_base;
+    if (ff->n_scopes > scopes_base)
+    {
+        ff->n_scopes = scopes_base;
+        S->floor = floor_base;
+    }
     ff->cur_word = prev_cur_word;
     BT->top = bt_size;
-    return false;
-
-done:
-    ff->opcodes_run += (uint64_t)(FF_WD_BATCH - wd_tick);
-    ff->ip = ip;
-    if (S->top) S->data[S->top - 1] = tos;
-    ff->cur_word = prev_cur_word;
-    BT->top = bt_size;
-    return true;
+    return ok;
 
     #undef _FF_NEXT
     #undef _FF_SYNC
@@ -1197,8 +1315,49 @@ done:
     #undef _FF_RSL
     #undef _FF_RSO
     #undef _FF_RSL_T
-    #undef _FF_RSO_T
     #undef _FF_COMPILING
+    #undef _FF_NEED_DEF
+}
+
+/**
+ * Read one whole line of @p f, however long, into `*buf`, growing it as
+ * needed. A fixed buffer would split an overlong line mid-token and feed
+ * the halves to ff_eval as two tokens.
+ *
+ * @param f   Open file.
+ * @param buf In/out line buffer (malloc'd; may start NULL).
+ * @param cap In/out capacity of `*buf`.
+ * @param oom Set when growing the buffer fails.
+ * @return false at end of file with nothing read, or on allocation failure.
+ */
+static bool ff_load_line(FILE *f, char **buf, size_t *cap, bool *oom)
+{
+    size_t len = 0;
+    for (;;)
+    {
+        if (*cap - len < 2)
+        {
+            size_t nc = *cap ? *cap * 2 : (size_t)FF_LOAD_LINE_SIZE;
+            char *nb = (char *)realloc(*buf, nc);
+            if (!nb)
+            {
+                *oom = true;
+                return false;
+            }
+            *buf = nb;
+            *cap = nc;
+        }
+
+        size_t room = *cap - len;
+        if (room > INT_MAX)
+            room = INT_MAX;
+        if (!fgets(*buf + len, (int)room, f))
+            return len > 0;     /* EOF: a last line without '\n' still counts */
+
+        len += strlen(*buf + len);
+        if (len > 0 && (*buf)[len - 1] == '\n')
+            return true;
+    }
 }
 
 /** @copydoc ff_load */
@@ -1209,32 +1368,48 @@ ff_error_t ff_load(ff_t *ff, const char *path)
 
     FILE *f = fopen(path, "r");
     if (!f)
-        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
-                         "Failed to open file '%s': %s.",
-                         path, strerror(errno));
+        return FF_ERR_CODE(ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
+                                     "Failed to open file '%s': %s.",
+                                     path, strerror(errno)));
 
     ff_error_t ec = FF_OK;
     int line_no = 0;
+    /* A nested `load` must hand its caller's line count back intact. */
+    int prev_line = ff->tokenizer.line;
     ff_int_t *prev_ip = ff->ip;
+    char *line = NULL;
+    size_t cap = 0;
+    bool oom = false;
 
-    char line[FF_LOAD_LINE_SIZE];
-    while (fgets(line, sizeof(line), f))
+    /* The whole file is one evaluation as far as the watchdog goes. */
+    ff_eval_enter(ff);
+    while (ff_load_line(f, &line, &cap, &oom))
     {
-        ff->tokenizer.line = line_no++;
+        ff->tokenizer.line = ++line_no;
         if ((ec = ff_eval(ff, line)) != FF_OK)
             break;
     }
     fclose(f);
+    free(line);
 
-    ff->ip = prev_ip;
-    ff->tokenizer.line = 0;
+    if (ec == FF_OK && oom)
+        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
+                       "Out of memory reading '%s'.", path);
 
-    /* If there were no other errors, check for a runaway comment. */
+    /* If there were no other errors, check for a runaway comment. The
+       comment state is dropped once reported: left set, it would swallow
+       whatever the caller evaluates next. */
     if (ec == FF_OK
             && (ff->tokenizer.state & FF_TOK_STATE_COMMENT))
-        return FF_ERR_CODE(ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_COMMENT,
-                                     "Runaway ( comment."));
+    {
+        ff->tokenizer.state &= ~FF_TOK_STATE_COMMENT;
+        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_COMMENT,
+                       "Runaway ( comment.");
+    }
 
+    ff_eval_leave(ff);
+    ff->ip = prev_ip;
+    ff->tokenizer.line = prev_line;
     return FF_ERR_CODE(ec);
 }
 
@@ -1442,14 +1617,48 @@ int ff_printf(ff_t *ff, const char *fmt, ...)
     return n;
 }
 
+/**
+ * Locate the most recently scanned token for an error report.
+ *
+ * The tokenizer only records the token's byte offset within ff->input;
+ * the line and column are worked out here, on the error path, so the
+ * lexer's hot loop doesn't have to track them.
+ *
+ * @param ff   Engine.
+ * @param line Out: 1-based line — the file line under ff_load(), else the
+ *             line within the string passed to ff_eval(); 0 when nothing
+ *             is being evaluated.
+ * @param pos  Out: 0-based byte offset of the token within that line.
+ */
+static void ff_error_locate(const ff_t *ff, int *line, int *pos)
+{
+    const ff_tokenizer_t *t = &ff->tokenizer;
+
+    *line = t->line;
+    *pos  = 0;
+    if (!ff->input)
+        return;
+
+    int i = 0, line_start = 0, newlines = 0;
+    for (; i < t->pos && ff->input[i]; ++i)
+    {
+        if (ff->input[i] == '\n')
+        {
+            ++newlines;
+            line_start = i + 1;
+        }
+    }
+    *line = (t->line > 0 ? t->line : 1) + newlines;
+    *pos  = i - line_start;
+}
+
 /** @copydoc ff_tracef */
 ff_error_t ff_tracef(ff_t *ff, ff_error_t e, const char *fmt, ...)
 {
     if ((e & FF_SEV_ERROR))
     {
         ff->error = e;
-        ff->error_line = ff->tokenizer.line;
-        ff->error_pos = ff->tokenizer.pos;
+        ff_error_locate(ff, &ff->error_line, &ff->error_pos);
 
         ff->state |= FF_STATE_ERROR;
 

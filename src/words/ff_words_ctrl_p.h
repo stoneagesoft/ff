@@ -13,7 +13,7 @@
     and cur_word, then jump to the callee's heap. EXIT pops both. */
 case FF_OP_NEST:
     _FF_WATCHDOG_TICK();
-    _FF_RSO_T(2);
+    _FF_RSO(2);
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         if (ff->state & FF_STATE_BACKTRACE)
@@ -80,7 +80,7 @@ case FF_OP_QBRANCH:
 /** ( limit start -- )  R: ( -- leave-target limit index )  Runtime DO entry. */
 case FF_OP_XDO:
     _FF_SL(2);
-    _FF_RSO_T(3);
+    _FF_RSO(3);
     ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
     ip++;
     ff_stack_push(R, _FF_NOS);
@@ -98,7 +98,7 @@ case FF_OP_XQDO:
     }
     else
     {
-        _FF_RSO_T(3);
+        _FF_RSO(3);
         ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
         ip++;
         ff_stack_push(R, _FF_NOS);
@@ -123,15 +123,23 @@ case FF_OP_XLOOP:
     }
     _FF_NEXT();
 
-/** ( delta -- )  Runtime +LOOP back-edge with arbitrary index delta. */
+/** ( delta -- )  Runtime +LOOP back-edge: add delta to the index and loop
+    again unless that step crossed the boundary between limit-1 and limit
+    (ANS 6.1.0140). Either direction counts, so a negative delta counts
+    down to and including the limit. */
 case FF_OP_PXLOOP:
     _FF_SL(1);
     _FF_RSL_T(3);
     {
-        ff_int_t niter = *ff_tos(R) + tos;
+        /* In unsigned arithmetic, so a step wraps instead of overflowing.
+           The boundary was crossed iff index - limit changed sign while
+           moving toward it; a sign change while moving away is only the
+           wrap-around at the far end of the number range. */
+        ff_uint_t delta = (ff_uint_t)tos;
+        ff_uint_t diff  = (ff_uint_t)*ff_tos(R) - (ff_uint_t)*ff_nos(R);
+        ff_uint_t next  = diff + delta;
         _FF_DROP();
-        if (niter >= *ff_nos(R)
-                && *ff_tos(R) < *ff_nos(R))
+        if ((ff_int_t)(diff ^ next) < 0 && (ff_int_t)(diff ^ delta) < 0)
         {
             ff_stack_popn(R, 3);
             ip++;
@@ -140,7 +148,7 @@ case FF_OP_PXLOOP:
         {
             _FF_WATCHDOG_TICK();
             ip += *ip;
-            *ff_tos(R) = niter;
+            *ff_tos(R) = (ff_int_t)((ff_uint_t)*ff_tos(R) + delta);
         }
     }
     _FF_NEXT();
@@ -279,6 +287,9 @@ case FF_OP_CATCH:
         }
         else
         {
+            /* The xt may have filled the stack; the rolled-back branch
+               above always has room, since it rewinds past the xt. */
+            _FF_SO(1);
             _FF_PUSH(0);
         }
     }

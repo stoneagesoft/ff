@@ -1,0 +1,19 @@
+\ `+loop` ends when the index crosses the limit in either direction
+\ (ANS 6.1.0140), so a negative step counts down to and including the
+\ limit. The old exit test only knew positive steps: counting down never
+\ ended.
+
+: p 32 emit . ;
+: down   0 10 do i p -1 +loop cr ;
+: down3  0 10 do i p -3 +loop cr ;
+: across -5 5 do i p -5 +loop cr ;
+: up     10 0 do i p 3 +loop cr ;
+: exact  10 0 do i p 5 +loop cr ;
+: skip   0 0 ?do i p -1 +loop ." "none" cr ;
+
+down                                     \ 10 9 8 7 6 5 4 3 2 1 0
+down3                                    \ 10 7 4 1
+across                                   \ 5 0 -5
+up                                       \ 0 3 6 9
+exact                                    \ 0 5
+skip                                     \ none

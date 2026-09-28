@@ -1,0 +1,14 @@
+\ ff-test: lines budget=100000
+\ The watchdog budget covers the whole outermost evaluation.
+\
+\ Re-entering the interpreter (`evaluate`, `load`) used to restart the
+\ opcode count and drop any pending ff_request_abort(), so a loop around
+\ `evaluate` could never be stopped. The abort also now reports
+\ FF_ERR_ABORTED, as documented, instead of a generic FF_ERR_BROKEN.
+
+1 . cr
+: spin begin again ;
+spin
+: respin begin "1 drop" evaluate drop again ;
+respin
+2 . cr

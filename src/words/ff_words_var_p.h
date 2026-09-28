@@ -114,10 +114,13 @@ case FF_OP_DEFER_RUNTIME:
             goto done;
         }
         _FF_SYNC();
+        /* As in EXECUTE: the nested run always ends with ff->ip NULL, so
+           the caller's ip is put back by hand. Restoring from ff->ip made
+           every call to a deferred word end its caller early. */
+        ff_int_t *saved_ip = ip;
         ff_exec(ff, target);
+        ff->ip = saved_ip;
         _FF_RESTORE();
-        if (!ip)
-            goto done;
     }
     _FF_NEXT();
 

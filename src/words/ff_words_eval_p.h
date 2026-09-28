@@ -16,11 +16,14 @@ case FF_OP_EVALUATE:
     {
         const char *src = (const char *)(intptr_t)tos;
         _FF_DROP();
-        ff_int_t *prev_ip = ff->ip;
         _FF_SYNC();
-        ff->ip = NULL;
+        /* Save the live register, not ff->ip: the memory copy is only as
+           fresh as the last sync before this opcode — usually NULL — and
+           resuming there crashed every `evaluate`. The nested run leaves
+           ff->ip NULL, so it must be put back before the restore. */
+        ff_int_t *saved_ip = ip;
         ff_error_t ec = ff_eval(ff, src);
-        ff->ip = prev_ip;
+        ff->ip = saved_ip;
         _FF_RESTORE();
         _FF_SO(1);
         _FF_PUSH((ff_int_t)ec);

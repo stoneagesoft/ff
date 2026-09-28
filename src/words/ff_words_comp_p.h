@@ -15,7 +15,7 @@ case FF_OP_DOES_RUNTIME:
     _FF_WATCHDOG_TICK();
     {
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
-        _FF_RSO_T(2);
+        _FF_RSO(2);
         _FF_SO(1);
         if (ff->state & FF_STATE_BACKTRACE)
             ff_bt_stack_push(BT, ff->cur_word);
@@ -80,6 +80,7 @@ case FF_OP_RBRACE:
 
 /** ( -- )  `immediate` — flag the most recent definition as immediate. */
 case FF_OP_IMMEDIATE:
+    _FF_NEED_DEF;
     ff_dict_top(&ff->dict)->flags |= FF_WORD_IMMEDIATE;
     _FF_NEXT();
 
@@ -89,8 +90,10 @@ case FF_OP_LBRACKET:
     ff->state &= ~FF_STATE_COMPILING;
     _FF_NEXT();
 
-/** ( -- )  `]` — switch from interpret to compile mode. */
+/** ( -- )  `]` — switch from interpret to compile mode. Every compile
+    path writes into ff_dict_top(), so there must be a word to write to. */
 case FF_OP_RBRACKET:
+    _FF_NEED_DEF;
     ff->state |= FF_STATE_COMPILING;
     _FF_NEXT();
 
@@ -267,7 +270,18 @@ case FF_OP_EXECUTE:
  * then bail out of the definition like an EXIT.
  */
 case FF_OP_DOES:
-    _FF_RSL_T(2);
+    _FF_NEED_DEF;
+    /* does> ends the defining word, so that word's NEST frame must sit
+       above this invocation's sentinel frame. Run any other way — at the
+       prompt, or through `execute` — ip points into exec_scratch, and the
+       created word would keep a pointer into a dead C stack frame. */
+    if (ff_unlikely(R->top < r_base + 4))
+    {
+        _FF_SYNC();
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
+                  "does> used outside a defining word.");
+        goto done;
+    }
     ff_dict_top(&ff->dict)->does = ip;
     ff_dict_top(&ff->dict)->opcode = FF_OP_DOES_RUNTIME;
     /* Simulate EXIT to bail out of the definition: pop the 2-cell

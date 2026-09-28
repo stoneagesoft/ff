@@ -52,7 +52,7 @@
 /** @brief Bytes reserved for the most recent error message. */
 #define FF_ERROR_MSG_SIZE   512
 
-/** @brief Line buffer size when reading source via ff_load(). */
+/** @brief Initial line buffer size for ff_load(); longer lines grow it. */
 #define FF_LOAD_LINE_SIZE   4096
 
 /**
@@ -82,14 +82,17 @@
  *        checks inside opcodes that the compiler emits in matched
  *        pairs.
  *
- * `XLOOP`/`PXLOOP`/`LOOP_I`/`LOOP_J`/`R_FETCH`/`FROM_R`/`EXIT` and
- * friends all run *only* in bytecode the engine itself emitted, in
- * positions where a preceding `XDO`/`>R` provably leaves the right
- * number of items on the return stack. Their @c _FF_RSL(n) check
- * therefore guards an impossible failure — engine bug, not a
- * user-code bug. When this flag is on, those bytecode-internal
- * checks compile away, saving ~5 % on loop-heavy code without
- * weakening any embedder-facing macro.
+ * `EXIT`, `XLOOP`, `PXLOOP`, `LEAVE`, `I` / `J` and the `i +` /
+ * `i + loop` / `r@ +` superinstructions read return-stack cells that,
+ * in well-formed code, a preceding NEST / DO provably pushed. When this
+ * flag is on their @c _FF_RSL underflow checks compile away, saving ~5 %
+ * on loop-heavy code. What stays unchecked is misuse — `i`, `j` or
+ * `leave` outside a loop, `r@ +` without a matching `>r` — which then
+ * reads past the bottom of the return stack instead of failing cleanly.
+ *
+ * Overflow checks are never removed: how deep NEST, DO and DOES> frames
+ * pile up depends on the program's recursion, so an overflow is always
+ * a user-reachable failure.
  *
  * Off by default. The `FF_RSL` / `FF_RSO` macros that custom native
  * words call (via `<ff_p.h>`) are not affected — they still run.

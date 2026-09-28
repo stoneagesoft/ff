@@ -138,9 +138,10 @@ void ff_abort(ff_t *ff);
  * arrives via a path the polling callback can't observe (alarm
  * signal, GUI thread, …).
  *
- * The flag is consumed (cleared) on the next ff_eval entry, so a
- * call between evaluations is silently ignored — abort requests
- * only apply to in-flight execution.
+ * The flag is consumed (cleared) when the next outermost ff_eval() or
+ * ff_load() starts, so a call between evaluations is silently ignored —
+ * abort requests only apply to in-flight execution. Nested evaluations
+ * (`evaluate`, `load`) leave it alone.
  *
  * @param ff Engine instance.
  */
@@ -180,15 +181,19 @@ ff_error_t ff_errno(const ff_t *ff);
 const char *ff_strerror(const ff_t *ff);
 
 /**
- * Source line on which the last error occurred (1-based when reading
- * a file via ff_load(), 0 when evaluating an interactive line).
+ * 1-based source line of the token being processed when the last error
+ * occurred: the file line under ff_load(), otherwise the line within the
+ * string passed to ff_eval() (so 1 for a single interactive line). 0 when
+ * the error arose outside any evaluation, e.g. ff_load() failing to open
+ * its file.
  * @param ff Engine instance.
  */
 int ff_err_line(const ff_t *ff);
 
 /**
- * Byte offset within the offending line at which the last error
- * occurred.
+ * 0-based byte offset, within the line reported by ff_err_line(), of the
+ * token being processed when the last error occurred — for a runtime
+ * error, the word that was running.
  * @param ff Engine instance.
  */
 int ff_err_pos(const ff_t *ff);

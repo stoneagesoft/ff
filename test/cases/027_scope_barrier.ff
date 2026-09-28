@@ -1,0 +1,17 @@
+\ ff-test: lines
+\ A `{ }` scope's barrier never outlives the word that raised it, and
+\ `clear` / `depth` respect it.
+\
+\ An error inside a scope used to leave the barrier up for good: the
+\ caller's cells stayed out of reach until ff_abort. `clear` inside a
+\ scope emptied the whole stack - the caller's cells and the scope's own
+\ inputs - which the closing `}` then slid down with a negative length.
+
+: p 32 emit . ;
+: eat { ( a -- b ) drop drop } ;
+1 2 eat
+drop drop depth . cr
+: wipe { ( a -- ... ) 5 6 clear 7 } ;
+1 2 3 wipe p p p cr
+: count { ( a b -- n ) 9 depth nip } ;
+10 20 30 count p p cr

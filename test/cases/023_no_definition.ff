@@ -1,0 +1,26 @@
+\ ff-test: lines
+\ Words that act on "the current definition" fail cleanly when there is
+\ none, instead of dereferencing a NULL dictionary top. This has to run on
+\ a fresh engine: nothing may be defined above the first probe.
+
+immediate
+here
+1 ,
+65 c,
+1 allot
+c=
+] 1
+does>
+(nest)
+clear 1 2 + . cr
+
+\ Once words exist, `does>` still needs a defining word to be running:
+\ at the prompt or through `execute` it would record a pointer into a
+\ dead C stack frame as the word's runtime.
+: foo ;
+does>
+' does> execute
+foo 5 . cr
+: const create , does> @ ;
+42 const answer
+answer . cr
