@@ -307,9 +307,10 @@ struct ff
  *        wants: a name for `:`, `create`, `'`, `see`, …, a string literal
  *        for `."`, `.(` and `abort"`.
  *
- * It is read when the word runs, and must follow it on the same line, as
- * in standard Forth — whether the word was typed at the prompt or runs
- * inside another word (`: mk create ;  mk name`).
+ * It is read when the word runs, and must follow it in the same input
+ * (ff::input: one line, from ffsh or ff_load()), as in standard Forth —
+ * whether the word was typed at the prompt or runs inside another word
+ * (`: mk create ;  mk name`).
  *
  * @param ff   Engine.
  * @param word The word asking, for messages.

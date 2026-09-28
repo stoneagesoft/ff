@@ -1,14 +1,23 @@
 #!/bin/bash
 # Re-run the benchmarks documented in doc/md/50-benchmarks.md and
-# print the results table. Best of five runs per cell.
+# print the results table. Best of twenty runs per cell (RUNS=… to change);
+# gforth's run times vary widely from run to run, and fewer can miss its
+# fastest.
 #
-# Requires: ffsh built somewhere (set FFSH=… or pass --ffsh PATH),
-# gforth, gforth-itc, gforth-fast on PATH. lua5.4 is optional; if
-# present, a "lua" column is appended to the output.
+# Requires: bash 5 (for its microsecond clock), ffsh built somewhere
+# (set FFSH=… or pass --ffsh PATH), gforth, gforth-itc, gforth-fast on
+# PATH. lua5.4 and python3 are optional; if present, "lua" and "py"
+# columns are appended to the output.
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
+
+RUNS="${RUNS:-20}"
+if [ -z "${EPOCHREALTIME:-}" ]; then
+    echo "run.sh needs bash 5 or newer (\$EPOCHREALTIME)." >&2
+    exit 1
+fi
 
 # Locate ffsh: --ffsh override → FFSH env var → built example dir.
 FFSH="${FFSH:-}"
@@ -28,17 +37,20 @@ if [ -z "$FFSH" ] || [ ! -x "$FFSH" ]; then
     exit 1
 fi
 
+# Print the best wall-clock time of $RUNS runs, in milliseconds. The
+# clock is $EPOCHREALTIME with its decimal separator (which follows the
+# locale) dropped, i.e. microseconds; /usr/bin/time's 10 ms steps are
+# too coarse for runs that take 100 ms.
 bench() {
     local label="$1" file="$2" cmd="$3"
-    local best=99999999
-    for _ in 1 2 3 4 5; do
-        local t
-        t=$( { /usr/bin/time -f '%e' "$cmd" < "$file" >/dev/null; } 2>&1 )
-        local ms
-        ms=$(awk -v t="$t" 'BEGIN { printf "%d", t * 1000 }')
-        if [ "$ms" -lt "$best" ]; then best=$ms; fi
+    local best=999999999999 start end i
+    for ((i = 0; i < RUNS; i++)); do
+        start=${EPOCHREALTIME/[.,]/}
+        "$cmd" < "$file" > /dev/null 2>&1
+        end=${EPOCHREALTIME/[.,]/}
+        if (( end - start < best )); then best=$(( end - start )); fi
     done
-    printf '%4d ' "$best"
+    printf '%4d ' $(( (best + 500) / 1000 ))
 }
 
 HAS_LUA=0

@@ -35,10 +35,10 @@ host-supplied native words.
   suite](doc/md/50-benchmarks.md), measured on the reference hardware,
   *ff* leads both threaded [gforth](https://gforth.org/) engines
   (`gforth-itc` and the direct-threaded default `gforth`) on all five
-  workloads, by 1.1–1.4×. Only `gforth-fast`'s native-code translator
-  is faster, and chiefly on the compute-bound loops — on the
-  dispatch-bound benchmarks *ff* runs within ~5 % of it.
-- **~130 opcodes** covering integer / floating-point math, stack
+  workloads, by 1.1–2×. Only `gforth-fast`'s native-code translator
+  is faster, and only on the call- and memory-bound workloads — on
+  the dispatch-bound benchmarks *ff* is faster than it too.
+- **~220 opcodes** covering integer / floating-point math, stack
   manipulation, control flow, counted loops, `create`/`does>`,
   `defer`/`is`, dictionary introspection, file I/O, and string
   handling. Specialised literal and arithmetic forms (`FF_OP_LIT0`,

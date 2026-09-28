@@ -253,8 +253,9 @@ the project follows [Semantic Versioning](https://semver.org/).
   `abort"` read the name or string that follows them themselves, as in
   standard Forth, instead of setting a flag for the interpreter to act
   on at the next token, wherever that came from. The name or string must
-  now be on the same line: `:` at the end of one raises `FF_ERR_MISSING`
-  rather than taking its name from the next. A parsing word run from
+  now be on the same line — strictly, in the same `ff_eval()` input,
+  which `ffsh` and `ff_load()` pass a line at a time: `:` at the end of
+  one raises `FF_ERR_MISSING` rather than taking its name from the next. A parsing word run from
   compiled code reads the input after its caller (`: tick ' ;  tick dup`
   pushes `dup`'s xt). A missing name after `see`, `man` or `dump-word`
   raises `FF_ERR_MISSING` too. The pending flags other than

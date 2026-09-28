@@ -328,9 +328,12 @@ Before running a word the evaluator leaves its place in `ff->input` /
 whatever the word read. A word run from compiled code reads the same
 input, so `: mk create ;  mk name` names the word `mk` makes, and a
 word that runs `create` twice makes two. The name or string must follow
-on the same line — `ff_parse()` raises `FF_ERR_MISSING` at the end of
-the input, as it does for a token of the wrong kind — and a word run by
-the host's `ff_exec()` outside any evaluation has no input to read.
+in the same input — `ff_parse()` raises `FF_ERR_MISSING` at its end, as
+it does for a token of the wrong kind. `ffsh` and `ff_load()` pass one
+line per `ff_eval()` call, so there it means the same line; a string
+passed to `ff_eval()` or `evaluate` is one input however many lines it
+spans. A word run by the host's `ff_exec()` outside any evaluation has
+no input to read.
 
 
 ## Word structure
