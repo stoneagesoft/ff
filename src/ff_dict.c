@@ -399,15 +399,29 @@ ff_word_t *ff_dict_top(ff_dict_t *d)
 
 /* Compute the index of @p w within the shared static_pool, or
    SIZE_MAX if @p w isn't a member. Used to gate the per-instance
-   "used" bitmap and to detect "is this a built-in?". */
+   "used" bitmap and to detect "is this a built-in?". The address is
+   compared as an integer and must fall on a word boundary: under
+   FF_SAFE_MEM it can be any cell a program passed as an xt, and a
+   pointer into the middle of a built-in used to pass for one. */
 static size_t ff_dict_builtin_index(const ff_dict_t *d, const ff_word_t *w)
 {
     if (!d->builtins || !w)
         return (size_t)-1;
-    const ff_word_t *base = d->builtins->static_pool;
-    if (w < base || w >= base + d->builtins->static_pool_size)
+    uintptr_t base = (uintptr_t)d->builtins->static_pool;
+    uintptr_t addr = (uintptr_t)w;
+    if (addr < base)
         return (size_t)-1;
-    return (size_t)(w - base);
+    uintptr_t off = addr - base;
+    if (off % sizeof(ff_word_t) != 0
+            || off / sizeof(ff_word_t) >= d->builtins->static_pool_size)
+        return (size_t)-1;
+    return (size_t)(off / sizeof(ff_word_t));
+}
+
+/** @copydoc ff_dict_is_builtin */
+bool ff_dict_is_builtin(const ff_dict_t *d, const ff_word_t *w)
+{
+    return ff_dict_builtin_index(d, w) != (size_t)-1;
 }
 
 /** @copydoc ff_dict_lookup */

@@ -271,12 +271,16 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
         if (t->token_len == 0)
             return FF_TOKEN_NULL;
 
-        /* Line comment: backslash. */
+        /* Line comment: backslash. The whitespace that ended the token
+           has been consumed; if it was the newline, so is the comment —
+           skipping on to the next newline commented out the next line
+           too. */
         if (t->token_len == 1
                 && t->token[0] == '\\')
         {
-            while (!ff_tok_eof(src, *pos) && src[*pos] != '\n')
-                (*pos)++;
+            if (c != '\n')
+                while (!ff_tok_eof(src, *pos) && src[*pos] != '\n')
+                    (*pos)++;
             continue;
         }
 

@@ -213,6 +213,38 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The fuzzing harness ran with `system` and the file words live, so a
   generated input could run commands on the fuzzing machine. It now
   denies them, caps memory and time, and evaluates line by line.
+- `pick` and `roll` took their index as an `int`: a huge index read far
+  outside the stack (a crash, even under `FF_SAFE_MEM`), one past 2^32
+  wrapped to a small index, and a `roll` reaching too deep wrote its
+  index over the item below. The index is now checked as a whole cell
+  before anything moves.
+- A native word that ran Forth itself — `ff_eval()`, or `ff_exec()` of
+  a word — made the word that called it stop right after it, silently
+  skipping the rest of its body. `ff_exec()` now hands `ff->ip` back as
+  it found it.
+- A `{ }` scope that left the return stack unbalanced raised its error
+  but kept its barrier over the caller's cells: afterwards `depth` read
+  0 and `drop` failed on cells that were still there.
+- Under `FF_SAFE_MEM`, a pointer into the middle of a built-in word
+  passed for an xt, so `' dup 24 + execute` crashed; `catch`, deferred
+  words, `>name` and `>body` had the same gap.
+- `parse` with a delimiter of 0 (or 256, …) consumed the input's
+  terminator, and the next read ran past the end of the input. It now
+  takes the rest of the input.
+- A `(` comment still open at the end of an `evaluate` string ran on
+  into the caller's input and the lines after it, and a `\` ending a line
+  of a multi-line input commented out the next line too.
+- `fix` of NaN, an infinity, or a real whose integer part doesn't fit a
+  cell was undefined behaviour in C; it now raises -24.
+- `@`, `!`, `+!` and `?` accessed a cell at an unaligned address —
+  easy to make with `c,` — through a misaligned pointer: undefined
+  behaviour, and a fault on strict-alignment CPUs. They copy the cell
+  now.
+- The manual gave `state` as `( -- addr )`, so the `state @` it implied
+  crashed. `state` pushes the flag itself, and the manual says so.
+- The test driver ignored how a whole-file test case ended, so a test
+  of an error path passed even if the error never happened. The error
+  is now part of the expected output, as in line-by-line cases.
 
 ### Changed
 

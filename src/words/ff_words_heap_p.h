@@ -26,7 +26,7 @@ case FF_OP_HERE:
 case FF_OP_STORE:
     _FF_SL(2);
     _FF_CHECK_WRITE((const void *)(intptr_t)tos, sizeof(ff_int_t));
-    *(ff_int_t *)(intptr_t)tos = _FF_NOS;
+    ff_store_cell((void *)(intptr_t)tos, _FF_NOS);
     _FF_DROPN(2);
     _FF_NEXT();
 
@@ -34,14 +34,17 @@ case FF_OP_STORE:
 case FF_OP_FETCH:
     _FF_SL(1);
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(ff_int_t));
-    tos = *(ff_int_t *)(intptr_t)tos;
+    tos = ff_load_cell((const void *)(intptr_t)tos);
     _FF_NEXT();
 
 /** ( v a -- )  `+!` — *a += v. */
 case FF_OP_PLUS_STORE:
     _FF_SL(2);
     _FF_CHECK_WRITE((const void *)(intptr_t)tos, sizeof(ff_int_t));
-    *(ff_int_t *)(intptr_t)tos += _FF_NOS;
+    {
+        void *a = (void *)(intptr_t)tos;
+        ff_store_cell(a, ff_load_cell(a) + _FF_NOS);
+    }
     _FF_DROPN(2);
     _FF_NEXT();
 

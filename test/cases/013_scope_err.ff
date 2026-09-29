@@ -2,9 +2,10 @@
 \
 \ The driver feeds the whole file to one ff_eval and ignores vtracef, so
 \ a hard error ends the run and everything after it is skipped. The
-\ expected output is therefore just the sentinel printed before the
-\ violation — which is the assertion: the violation was caught, rather
-\ than silently eating the caller's cells and carrying on.
+\ expected output is therefore the sentinel printed before the violation
+\ and the error that ended the run — which is the assertion: the
+\ violation was caught, rather than silently eating the caller's cells
+\ and carrying on.
 
 \ `a b +` leaves one cell above the barrier; dropping twice asks for a
 \ second. Without the barrier that drop would consume the caller's 111

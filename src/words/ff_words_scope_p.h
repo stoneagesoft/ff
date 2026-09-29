@@ -114,14 +114,18 @@ case FF_OP_SCOPE_UNWIND:
             goto done;
         }
 
-        ff->n_scopes--;
-        if (ff_unlikely(R->top != (size_t)ff->scopes[ff->n_scopes].r_top))
+        /* The scope's record stays until the scope is closed: an error
+           exit then finds it open and puts the enclosing barrier back.
+           Popped before this check, it left the scope's barrier over the
+           caller's cells for good after the error. */
+        size_t r_top = (size_t)ff->scopes[ff->n_scopes - 1].r_top;
+        if (ff_unlikely(R->top != r_top))
         {
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_RSTACK,
                       "Scope left the return stack unbalanced "
                       "(depth %d, expected %d).",
-                      (int)R->top, (int)ff->scopes[ff->n_scopes].r_top);
+                      (int)R->top, (int)r_top);
             goto done;
         }
 
@@ -131,6 +135,7 @@ case FF_OP_SCOPE_UNWIND:
                     &S->data[floor],
                     produced * sizeof(S->data[0]));
 
+        ff->n_scopes--;
         S->top   = floor - (size_t)nargs + produced;
         floor    = ff->scopes[ff->n_scopes].floor;
         S->floor = floor;   /* see SCOPE_ENTER: both copies stay coherent */

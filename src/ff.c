@@ -1460,6 +1460,13 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
     ff->cur_word = w;
     int bt_size = BT->top;
 
+    /* ff->ip is handed back as it was found. A word that re-enters the
+       interpreter — `evaluate`, `catch`, `load`, or a native word calling
+       ff_eval() or ff_exec() — syncs its ip there first and reloads it
+       after, so a nested run that left its own final ip (NULL) behind
+       made the caller stop dead after the call, without an error. */
+    ff_int_t *const entry_ip = ff->ip;
+
     /* An invocation leaves nothing behind. An error exit abandons the
        return frames and `{` scopes it opened, so the exit path cuts both
        back to their entry values: otherwise every runtime error leaks
@@ -1854,8 +1861,8 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                 /* An error the native raised (ff_tracef) stops the word
                    that called it, as any other error does. */
                 _FF_CHECK_THROWN();
-                if (!ip)
-                    goto done;
+                /* Anything the native ran hands ff->ip back (entry_ip). */
+                assert(ip);
                 _FF_NEXT();
 
             /* Built-in word bodies live in per-category headers that
@@ -1922,7 +1929,7 @@ done:
        running total before returning, so a host that reads
        ff->opcodes_run after a failed run sees an accurate count. */
     ff->opcodes_run += (uint64_t)(FF_WD_BATCH - wd_tick);
-    ff->ip = ip;
+    ff->ip = entry_ip;
     if (S->top) S->data[S->top - 1] = tos;
     /* Cut back to the entry state (see r_base). Only ever lowers R: a
        native word that popped below it is left to its own devices. */
@@ -2041,7 +2048,6 @@ ff_error_t ff_load(ff_t *ff, const char *path)
     int line_no = 0;
     /* A nested `load` must hand its caller's line count back intact. */
     int prev_line = ff->tokenizer.line;
-    ff_int_t *prev_ip = ff->ip;
 
     /* The whole file is one evaluation as far as the watchdog goes, and
        one exception boundary: a failing line ends the load. */
@@ -2096,7 +2102,6 @@ ff_error_t ff_load(ff_t *ff, const char *path)
         ec = ff_settle(ff, ff->eval_depth == 1 && ff->exec_depth == 0);
     }
     ff_eval_leave(ff);
-    ff->ip = prev_ip;
     ff->tokenizer.line = prev_line;
     return FF_ERR_CODE(ec);
 }
@@ -2200,10 +2205,9 @@ bool ff_word_valid(const ff_t *ff, const ff_word_t *w)
 {
     if (w == NULL)
         return false;
-    /* Shared built-ins live in a contiguous static_pool — fast range
-       check first. */
-    const ff_builtins_t *b = ff->dict.builtins;
-    if (b && w >= b->static_pool && w < b->static_pool + b->static_pool_size)
+    /* Shared built-ins live in a contiguous static_pool — fast check
+       first. */
+    if (ff_dict_is_builtin(&ff->dict, w))
         return true;
     /* User words: linear scan over the per-instance words array. */
     for (size_t i = 0; i < ff->dict.count; ++i)

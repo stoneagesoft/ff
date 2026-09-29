@@ -78,21 +78,31 @@ case FF_OP_NROT:
 case FF_OP_ROLL:
     _FF_SL(1);
     {
-        int idx = (int)tos;
-        if (ff_unlikely(idx < 0))
+        /* Checked as a whole cell, against the items below the index,
+           before anything moves: truncated to int, a huge index wrapped
+           to a small one or overflowed past the depth check, and a check
+           after the pop left the index written over the item below. */
+        ff_int_t idx   = tos;
+        ff_int_t below = (ff_int_t)(S->top - floor) - 1;
+        if (ff_unlikely(idx < 0 || idx >= below))
         {
             _FF_SYNC();
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                      "Negative roll index.");
+            if (idx < 0)
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                          "Negative roll index.");
+            else
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                          "Stack underflow: roll index %" FF_PRIdCELL
+                          " reaches past the stack.", idx);
             goto done;
         }
         --S->top;
-        _FF_SL(idx + 1);
         /* The selected item becomes the new TOS; items above it shift
            down. We don't load tos from memory here — it's overwritten by
            the rolled value at the end. */
-        ff_int_t t = S->data[S->top - 1 - idx];
-        for (int j = idx; j > 0; --j)
+        size_t   k = (size_t)idx;
+        ff_int_t t = S->data[S->top - 1 - k];
+        for (size_t j = k; j > 0; --j)
             S->data[S->top - 1 - j] = S->data[S->top - j];
         tos = t;
     }
@@ -169,16 +179,22 @@ case FF_OP_ROT:
 case FF_OP_PICK:
     _FF_SL(1);
     {
-        int idx = (int)tos;
-        if (ff_unlikely(idx < 0))
+        /* Checked as a whole cell (see `roll`). */
+        ff_int_t idx   = tos;
+        ff_int_t below = (ff_int_t)(S->top - floor) - 1;
+        if (ff_unlikely(idx < 0 || idx >= below))
         {
             _FF_SYNC();
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                      "Negative pick index.");
+            if (idx < 0)
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                          "Negative pick index.");
+            else
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                          "Stack underflow: pick index %" FF_PRIdCELL
+                          " reaches past the stack.", idx);
             goto done;
         }
-        _FF_SL(idx + 2);
-        tos = _FF_SAT(idx + 1);
+        tos = _FF_SAT((size_t)idx + 1);
     }
     _FF_NEXT();
 

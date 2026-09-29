@@ -152,7 +152,21 @@ case FF_OP_FLOAT:
 /** ( r -- n )  `fix` — truncate real to int. */
 case FF_OP_FIX:
     _FF_SL(1);
-    tos = (ff_int_t)ff_get_real(&tos);
+    {
+        /* Converting a real whose integer part doesn't fit a cell — or
+           NaN, which fails both tests — is undefined behaviour in C. The
+           bounds are powers of two, so exact as reals. */
+        ff_real_t r = ff_get_real(&tos);
+        if (ff_unlikely(!(r >= (ff_real_t)FF_INT_MIN
+                          && r < -(ff_real_t)FF_INT_MIN)))
+        {
+            _FF_SYNC();
+            ff_raise(ff, FF_THROW_BAD_ARG, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                     "fix: %g doesn't fit a cell.", (double)r);
+            goto done;
+        }
+        tos = (ff_int_t)r;
+    }
     _FF_NEXT();
 
 /** ( -- pi )  `pi` — push 3.14159… */

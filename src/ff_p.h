@@ -557,6 +557,32 @@ static inline void ff_set_real(ff_int_t *p, ff_real_t r)
     memcpy(p, &r, sizeof(r));
 }
 
+/**
+ * Read the cell at an address a program supplied (`@`, `?`). It needn't
+ * be cell-aligned — `c,` leaves `here` at any byte — so it is copied out
+ * rather than dereferenced, which is undefined behaviour misaligned and a
+ * fault on strict-alignment CPUs; on x86 it is the same single load.
+ * @param addr Address of the cell.
+ * @return The cell's value.
+ */
+static inline ff_int_t ff_load_cell(const void *addr)
+{
+    ff_int_t v;
+    memcpy(&v, addr, sizeof(v));
+    return v;
+}
+
+/**
+ * Write the cell at an address a program supplied (`!`, `+!`); see
+ * ff_load_cell().
+ * @param addr Address of the cell.
+ * @param v    Value to store.
+ */
+static inline void ff_store_cell(void *addr, ff_int_t v)
+{
+    memcpy(addr, &v, sizeof(v));
+}
+
 /** @brief Read a real out of TOS. */
 static inline ff_real_t ff_real0(ff_t *ff) { return ff_get_real(ff_s0(ff)); }
 /** @brief Read a real out of NOS. */

@@ -76,9 +76,10 @@ const ff_word_def_t FF_COMP_WORDS[] =
       "( cfa -- )  Execute word\n"
       "Executes the word with compile address *cfa*."),
     _FF_W("state", FF_OP_STATE,
-      "( -- addr )  System state variable\n"
-      "The address of the system state variable is pushed on the stack.\n"
-      "The state is zero if interpreting, nonzero if compiling."),
+      "( -- flag )  Compilation state\n"
+      "Pushes true (-1) while compiling and false (0) while interpreting.\n"
+      "It pushes the flag itself, not the address of a variable as in\n"
+      "ANS Forth: write `state`, not `state @`."),
     _FF_WI("[compile]", FF_OP_BRACKET_COMPILE,
       "w ( -- )  Compile immediate word\n"
       "Compiles the address of word *w*, even if *w* is marked as *immediate*."),

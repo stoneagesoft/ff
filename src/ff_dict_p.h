@@ -60,6 +60,13 @@ const ff_word_t *ff_dict_word_at(const ff_dict_t *d, size_t i);
 bool ff_dict_word_was_used(const ff_dict_t *d, const ff_word_t *w);
 
 /**
+ * @brief True if @p w is one of the shared built-in words: it lies in
+ *        the built-in pool *and* at the start of a word there. @p w may
+ *        be any value a program passed as an xt.
+ */
+bool ff_dict_is_builtin(const ff_dict_t *d, const ff_word_t *w);
+
+/**
  * Release every dynamically allocated word, the buckets, and the
  * static pool.
  * @param d Dictionary to destroy.

@@ -1,0 +1,62 @@
+\ ff-test: lines
+\ Edge cases that read out of bounds, ran undefined behaviour, or went
+\ quietly wrong. Each section says what used to happen.
+
+: p 32 emit . ;
+
+\ `pick` and `roll` took their index as an int: a huge one read far
+\ outside the stack, one past 2^32 wrapped to a small index, and a `roll`
+\ reaching too deep wrote its index over the item below it.
+1 2 3 2147483647 pick
+clear
+1 2 3 4294967297 pick
+clear
+1 2 3 4294967298 roll
+clear
+1 2 3 5 roll
+depth p p p p p cr
+1 2 3 2 pick p cr
+clear
+1 2 3 2 roll p p p cr
+
+\ `parse` consumed the input's terminator when the delimiter was 0 (or
+\ 256), and the next read ran on past the end of the input.
+: rest 0 parse type ;
+: rest-256 256 parse type ;
+rest of the line
+cr
+rest-256 runs to the end too
+cr
+41 parse group) type cr
+
+\ `fix` of a real whose integer part doesn't fit a cell, or of NaN, was
+\ undefined behaviour in C.
+-2.5 fix p 2e9 fix p cr
+1e300 fix
+-1e300 fix
+1e300 1e300 f* fix
+1e300 1e300 f* dup f- fix
+clear
+
+\ `@`, `!`, `+!` and `?` used whatever address they got as a cell
+\ pointer: undefined behaviour when it isn't cell-aligned — `c,` makes
+\ that easy — and a fault on strict-alignment CPUs.
+create buf 1 c, 0 , 0 ,
+42 buf 1 + !
+buf 1 + @ p
+5 buf 1 + +!
+32 emit buf 1 + ? cr
+
+\ A `(` comment still open at the end of an `evaluate` string ran on
+\ into the caller's input and the lines after it; a `\` ending a line of
+\ a multi-line input commented out the next line too.
+"( open" evaluate p 1 2 + p cr
+7 p cr
+"1 p \\\n2 p 3 p" evaluate drop cr
+
+\ A scope that left the return stack unbalanced raised its error but
+\ kept its barrier over the caller's cells: `depth` read 0, and `drop`
+\ failed on cells that were still there.
+: unbalanced { ( a -- ) 1 >r } ;
+5 6 7 unbalanced
+depth p drop drop drop depth p cr

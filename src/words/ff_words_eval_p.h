@@ -20,13 +20,15 @@ case FF_OP_EVALUATE:
         const char *src = (const char *)(intptr_t)tos;
         _FF_DROP();
         _FF_SYNC();
-        /* Save the live register, not ff->ip: the memory copy is only as
-           fresh as the last sync before this opcode — usually NULL — and
-           resuming there crashed every `evaluate`. The nested run leaves
-           ff->ip NULL, so it must be put back before the restore. */
-        ff_int_t *saved_ip = ip;
+        /* The string is an input of its own: a `(` comment still open at
+           its end ends there, instead of swallowing the rest of the
+           caller's source (only the host's line-by-line input carries a
+           comment over to its next line). */
+        int comment = ff->tokenizer.state & FF_TOK_STATE_COMMENT;
+        ff->tokenizer.state &= ~FF_TOK_STATE_COMMENT;
         ff_error_t ec = ff_eval(ff, src);
-        ff->ip = saved_ip;
+        ff->tokenizer.state = (ff->tokenizer.state & ~FF_TOK_STATE_COMMENT)
+                              | comment;
         _FF_RESTORE();
         _FF_CHECK_THROWN();
         _FF_SO(1);
@@ -66,16 +68,20 @@ case FF_OP_PARSE_WORD:
 case FF_OP_PARSE:
     _FF_SL(1);
     {
-        int delim = (int)tos;
+        /* The delimiter is the cell's low byte. */
+        char delim = (char)(unsigned char)tos;
         _FF_DROP();
         _FF_SYNC();
         const char *src = ff->input ? ff->input : "";
         int p = ff->input_pos;
         int start = p;
-        while (src[p] != '\0' && src[p] != (char)delim)
+        while (src[p] != '\0' && src[p] != delim)
             p++;
         char *s = ff_pad_intern(ff, src + start, (size_t)(p - start));
-        if (src[p] == (char)delim)   /* consume the delimiter if present */
+        /* Consume the delimiter if the scan stopped at one — but never the
+           input's terminator: with a delimiter of 0 (or 256, …) that
+           matched too, and the next read ran on past the end. */
+        if (src[p] != '\0')
             p++;
         ff->input_pos = p;
         _FF_RESTORE();

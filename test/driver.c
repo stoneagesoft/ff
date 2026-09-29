@@ -199,6 +199,18 @@ static void parse_directive(const char *src, bool *per_line, uint64_t *budget,
     }
 }
 
+/* Put a failure in the output as `[NAME]` on a line of its own, so the
+   expected output pins down which error ended the input — not only what
+   was printed before it. */
+static void record_error(test_ctx_t *ctx, ff_error_t ec)
+{
+    if (ctx->size && ctx->buf[ctx->size - 1] != '\n')
+        capture_append(ctx, "\n");
+    capture_append(ctx, "[");
+    capture_append(ctx, err_name(ec));
+    capture_append(ctx, "]\n");
+}
+
 /* Evaluate @p src one line at a time, recording each failure. */
 static ff_error_t eval_lines(ff_t *ff, test_ctx_t *ctx, char *src)
 {
@@ -214,11 +226,7 @@ static ff_error_t eval_lines(ff_t *ff, test_ctx_t *ctx, char *src)
         ff_error_t ec = ff_eval(ff, line);
         if (ec != FF_OK)
         {
-            if (ctx->size && ctx->buf[ctx->size - 1] != '\n')
-                capture_append(ctx, "\n");
-            capture_append(ctx, "[");
-            capture_append(ctx, err_name(ec));
-            capture_append(ctx, "]\n");
+            record_error(ctx, ec);
             last = ec;
         }
         line = next;
@@ -280,6 +288,11 @@ int main(int argc, char **argv)
 
     ff_t *ff = ff_new(&p);
     ff_error_t ec = per_line ? eval_lines(ff, &ctx, src) : ff_eval(ff, src);
+    /* A whole-file case that ends in an error records it too: otherwise
+       a test of an error path passes when the error never happens, as
+       long as the output before it matches. */
+    if (!per_line && ec != FF_OK)
+        record_error(&ctx, ec);
     ff_free(ff);
 
     int rc = 0;

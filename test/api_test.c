@@ -269,6 +269,45 @@ static void test_native_errors(void)
     ff_free(ff);
 }
 
+static void nat_eval(ff_t *ff)
+{
+    ff_eval(ff, "100 dup");
+}
+
+static void nat_exec(ff_t *ff)
+{
+    ff_exec(ff, ff_dict_lookup(&ff->dict, "dup"));
+}
+
+/* A native word can run Forth itself, through ff_eval() or ff_exec(), and
+   the word that called it carries on afterwards. The nested run handed
+   back its own final ip, so the caller stopped right after the native
+   and the rest of its body was skipped without an error. */
+static void test_native_reentry(void)
+{
+    ff_t *ff = new_engine(10000000);
+
+    static const ff_native_word_t words[] =
+    {
+        FF_NATIVE("nat-eval", nat_eval, NULL),
+        FF_NATIVE("nat-exec", nat_exec, NULL),
+        FF_NATIVE_END
+    };
+    ff_register(ff, words);
+
+    static const int64_t want[] = { 1, 100, 100, 2, 7, 7, 3, 999 };
+    CHECK(ff_eval(ff, ": t1 1 nat-eval 2 ;  : t2 7 nat-exec 3 ;"
+                      "  : outer t1 t2 999 ;  outer") == FF_OK);
+    CHECK(ff_depth(ff) == sizeof(want) / sizeof(want[0]));
+    for (size_t i = sizeof(want) / sizeof(want[0]); i-- > 0; )
+    {
+        int64_t v = 0;
+        CHECK(ff_pop_int(ff, &v) && v == want[i]);
+    }
+
+    ff_free(ff);
+}
+
 /* A host calling ff_exec() directly gets false for a failed run, and the
    engine is left clean: nothing is still unwinding into the next call. */
 static void test_host_exec(void)
@@ -536,6 +575,7 @@ int main(void)
 #endif
     test_abort_request_nested();
     test_native_errors();
+    test_native_reentry();
     test_host_exec();
 #if FF_WITH_FILES
     test_load_codes();

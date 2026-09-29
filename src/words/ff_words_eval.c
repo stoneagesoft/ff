@@ -52,6 +52,8 @@ const ff_word_def_t FF_EVAL_WORDS[] =
       "next occurrence of *char* (given as its character code), and leaves\n"
       "the text before it as a NUL-terminated string. Leading delimiters\n"
       "are not skipped, so successive calls can return empty strings.\n"
+      "Without the delimiter, it takes the rest of the input: `0 parse`\n"
+      "always does.\n"
       "\n"
       "    41 parse group) type   \\ 41 is ')' — prints 'group'\n"
       "\n"

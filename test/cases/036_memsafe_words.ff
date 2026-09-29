@@ -45,6 +45,15 @@ clear
 create data-word 3 allot
 7 data-word ! data-word @ p cr
 
+\ An xt has to be the start of a word: a pointer into the middle of a
+\ built-in one passed the check, and `execute` ran whatever lay there.
+' dup 8 + execute
+' dup 24 + execute
+' dup 8 + catch
+' dup 8 + >name
+' dup 8 + >body
+clear
+
 \ Valid arguments pass. `>name` and `strerror` hand out copies that the
 \ checks know about.
 ' dup >name type cr

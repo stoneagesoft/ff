@@ -973,7 +973,10 @@ The compiler can allocate `ip` to a hardware register. Each opcode's
 flushes the register back to the struct before any opcode body that
 calls out to arbitrary C — primarily `FF_OP_CALL` (external natives)
 and the few opcodes that re-enter `ff_eval` or `ff_load` — and
-`_FF_RESTORE()` reloads on return.
+`_FF_RESTORE()` reloads on return. For that to work, every `ff_exec`
+hands `ff->ip` back as it found it: whatever the C code ran in between
+— `evaluate`, `catch`, or a native word's own `ff_eval()` or
+`ff_exec()` call — the caller resumes where it synced.
 
 
 ### Top-of-stack register caching

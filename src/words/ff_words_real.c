@@ -94,7 +94,8 @@ const ff_word_def_t FF_REAL_WORDS[] =
     _FF_W("fix", FF_OP_FIX,
       "( f -- n )  Floating to integer\n"
       "The floating point number on the top of the stack is replaced\n"
-      "by the integer obtained by truncating its fractional part."),
+      "by the integer obtained by truncating its fractional part. One\n"
+      "whose integer part doesn't fit a cell, or NaN, is an error (-24)."),
     _FF_W("pi", FF_OP_PI,
       "( -- pi )  Pi constant\n"
       "Returns *Pi* constant."),

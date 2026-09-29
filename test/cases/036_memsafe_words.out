@@ -19,6 +19,11 @@
 [BAD_PTR]
 abc
  7
+[BAD_PTR]
+[BAD_PTR]
+[BAD_PTR]
+[BAD_PTR]
+[BAD_PTR]
 dup
  -1
 abc

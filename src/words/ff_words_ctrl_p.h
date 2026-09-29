@@ -258,9 +258,7 @@ case FF_OP_CATCH:
         ff_word_t *xt = (ff_word_t *)(intptr_t)tos;
         _FF_CHECK_XT(xt);
         _FF_DROP();
-        /* Snapshot before the protected call. ff_exec leaves ff->ip
-           cleared on return, so we also save the *outer* ip so the
-           caller's bytecode position survives the nested run. */
+        /* Snapshot before the protected call. */
         size_t saved_s  = S->top;
         size_t saved_r  = R->top;
         int    saved_bt = BT->top;
@@ -271,11 +269,9 @@ case FF_OP_CATCH:
            refreshed by the _FF_SYNC() below. */
         size_t saved_floor  = floor;
         size_t saved_scopes = ff->n_scopes;
-        ff_int_t   *saved_outer_ip = ip;
         ff_word_t  *saved_cur      = ff->cur_word;
         _FF_SYNC();
         bool ran = ff_exec(ff, xt);
-        ff->ip = saved_outer_ip;
         _FF_RESTORE();
         if (!ran)
         {

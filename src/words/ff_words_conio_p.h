@@ -26,7 +26,7 @@ case FF_OP_QUESTION:
     _FF_CHECK_ADDR((const void *)(intptr_t)tos, sizeof(ff_int_t));
     _FF_SYNC();
     {
-        ff_int_t v = *(ff_int_t *)(intptr_t)tos;
+        ff_int_t v = ff_load_cell((const void *)(intptr_t)tos);
         if (ff->base == FF_BASE_HEX)
             ff_printf(ff, "0x%" FF_PRIXCELL, (ff_uint_t)v);
         else
