@@ -28,7 +28,8 @@ const ff_word_def_t FF_VAR_WORDS[] =
       "w ( -- )  Forget word\n"
       "The most recent definition of word *w* is deleted, along with\n"
       "all words declared more recently than the named word. Refused while\n"
-      "a definition is being compiled or one of those words is running."),
+      "a definition is being compiled, or if one of those words is running\n"
+      "or was registered by the host."),
     _FF_W("variable", FF_OP_VARIABLE,
       "w ( -- )  Declare variable\n"
       "A variable named *w* is declared and its value is set to zero.\n"

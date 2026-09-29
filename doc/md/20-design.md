@@ -1583,8 +1583,9 @@ their share of the word-storage arena (see *Heap and compilation*), so
 code that defines and forgets words in a loop holds steady. The
 transient string arena is different: its strings stay valid for the
 engine's lifetime, as documented, so it only grows — until the limit,
-or until `ff_abort()` or an uncaught `abort` resets the engine and
-frees it.
+until `ff_abort()` or an uncaught `abort` resets the engine and frees
+it, or until the host calls `ff_release_strings()` between calls, once
+it knows nothing still points into it.
 
 
 ## Sandboxing

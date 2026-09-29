@@ -19,8 +19,10 @@ typedef enum ff_word_flag
     FF_WORD_USED      = 1 << 1,  /**< Set on first lookup; powers the `wordsused` introspection. */
     FF_WORD_HIDDEN    = 1 << 2,  /**< Skip in `words` listings. */
     FF_WORD_NATIVE    = 1 << 3,  /**< External native: C function in ff_word::fn. */
-    FF_WORD_STATIC    = 1 << 4   /**< Built-in stored in the dict's static pool — name and struct
+    FF_WORD_STATIC    = 1 << 4,  /**< Built-in stored in the dict's static pool — name and struct
                                       are not individually freed. */
+    FF_WORD_HOST      = 1 << 5   /**< Registered by the host (ff_register()): `forget` leaves it,
+                                      as it does a built-in. */
 } ff_word_flag_t;
 
 /**

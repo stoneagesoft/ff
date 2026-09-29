@@ -36,7 +36,17 @@ library is required.
 > are the word's stack error, as for any word: the call returns false and
 > the error is raised, so return at once — the word's caller stops. To run
 > other Forth code from C, `ff_eval()` a snippet, or look a word up with
-> `ff_find()` and run it with `ff_exec()`. The
+> `ff_find()` and run it with `ff_exec()`.
+>
+> A native word reaches the host's own data through `ff_context()` (the
+> `context` it put in `ff_platform_t`), takes and leaves strings with
+> `ff_pop_str()` and `ff_push_str()`, and throws a code of the program's
+> own — one `catch` catches — with `ff_throwf()`. `ff_register()` refuses
+> a name the interpreter couldn't read back as that one word (empty, with
+> a space, a number, …) and warns when a name shadows another, as `:`
+> does; `forget` leaves the words it registers in place.
+>
+> The
 > rest of this chapter uses the lower-level `<ff_p.h>` API, which exposes
 > the raw data stack, stack-effect assertion macros, and pointer
 > validators — reach for it when you need direct stack access, custom
@@ -280,6 +290,11 @@ error's ANS THROW code, `-4` for `FF_ERR_STACK_UNDER` and so on, or
 `-(256 + code)` for a code with no standard equivalent such as
 `FF_ERR_APPLICATION` — or, if nothing catches it, ends the evaluation with
 your message.
+
+To throw a THROW code of your own instead — say, one the Forth program
+catches and tells apart — use `ff_throwf(ff, code, fmt, ...)`; uncaught,
+the host reads the code back with `ff_throw_code()`. ANS Forth leaves
+positive codes, and those below -4095, to programs.
 
 
 ## Complete example

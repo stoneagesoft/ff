@@ -97,6 +97,14 @@ case FF_OP_FORGET:
                       name, running->name);
             goto done;
         }
+        const ff_word_t *host = ff_word_host_from(ff, at);
+        if (host)
+        {
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FORGET_PROT,
+                      "Can't forget '%s': it would take '%s', which the "
+                      "host registered.", name, host->name);
+            goto done;
+        }
         ff_dict_truncate(&ff->dict, at);
     }
     _FF_NEXT();

@@ -45,6 +45,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   as `FF_ERR_APPLICATION`).
 - The public headers declare the API `extern "C"` and are tested from a
   C++ host.
+- For native words: `ff_context()` returns the host's
+  `ff_platform_t::context`; `ff_push_str()` / `ff_pop_str()` pass
+  strings (validated under `FF_SAFE_MEM`); `ff_throwf()` throws a THROW
+  code of the program's own, with a message.
+- `ff_release_strings()` frees the transient string arena between calls,
+  for long-running hosts: it otherwise only grows, until the memory
+  limit makes every allocation fail.
 
 ### Fixed
 
@@ -301,6 +308,13 @@ the project follows [Semantic Versioning](https://semver.org/).
   a deferred word to having no action.
 - `see` printed an xt compiled by `[']` as a raw address; it prints
   `['] name`.
+- `ff_new()` crashed if memory ran out while it built the built-in table
+  or the dictionary; it returns NULL, and a later call tries again.
+- `ff_register()` accepted names no program could call — empty, with a
+  space, a number — and shadowed built-ins without the warning `:`
+  gives; a script's `forget` could remove the host's words. It returns
+  `FF_ERR_MALFORMED` for such a name now, warns of shadowing, and
+  `forget` leaves registered words in place.
 
 ### Changed
 
@@ -354,6 +368,10 @@ the project follows [Semantic Versioning](https://semver.org/).
   it looked for the name only when the definition ran.
 - `-inf` and `-nan` no longer read as reals (`inf` and `nan` never did):
   a real literal is digits with a fraction and/or an exponent.
+- `ff_warmup()` returns false if memory ran out. Its documentation now
+  says what holds: with C11 atomics, building the shared built-in table
+  on first use is safe from any number of threads; only without them
+  (MSVC) must a multi-threaded host call it first.
 - Control structures are tracked on a compile-time stack of their own
   instead of the data stack. `while` follows ANS: a loop may have several,
   each after the first closed by a `then` after the `repeat`

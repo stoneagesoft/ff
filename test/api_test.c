@@ -557,6 +557,141 @@ static void test_dict_indexes(void)
     ff_free(ff);
 }
 
+static int g_non_unique;
+
+static int note_trace(void *ctx, ff_error_t e, const char *fmt, va_list args)
+{
+    (void)ctx;
+    (void)fmt;
+    (void)args;
+    if (FF_ERR_CODE(e) == FF_ERR_NON_UNIQUE)
+        ++g_non_unique;
+    return 0;
+}
+
+static void nat_nop(ff_t *ff)
+{
+    (void)ff;
+}
+
+/* ff_register() takes only names the interpreter can read back as that
+   one word, warns of shadowing as `:` does, and `forget` leaves what it
+   registers. It took "", "two words" or "42" — words no program could
+   call — shadowed built-ins without a word, and a script's `forget`
+   removed the host's words. */
+static void test_register_checks(void)
+{
+    ff_platform_t p = { .vprintf = capture_vprintf, .vtracef = note_trace };
+    ff_t *ff = ff_new(&p);
+
+    static const char *const bad[] =
+        { "", "two words", "42", "1.5", "\"s\"", "(", "\\", NULL };
+    for (int i = 0; bad[i]; ++i)
+    {
+        ff_native_word_t t[] = { FF_NATIVE(bad[i], nat_nop, NULL), FF_NATIVE_END };
+        CHECK(ff_register(ff, t) == FF_ERR_MALFORMED);
+    }
+    ff_native_word_t no_fn[] = { FF_NATIVE("no-fn", NULL, NULL), FF_NATIVE_END };
+    CHECK(ff_register(ff, no_fn) == FF_ERR_MALFORMED);
+    CHECK(ff_find(ff, "no-fn") == NULL);
+
+    g_non_unique = 0;
+    static const ff_native_word_t good[] =
+    {
+        FF_NATIVE("host-word", nat_nop, NULL),
+        FF_NATIVE("swap", nat_nop, NULL),
+        FF_NATIVE_END
+    };
+    CHECK(ff_register(ff, good) == FF_OK);
+    CHECK(g_non_unique == 1);
+
+    CHECK(ff_eval(ff, "forget host-word") == FF_ERR_FORGET_PROT);
+    CHECK(ff_find(ff, "host-word") != NULL);
+    CHECK(ff_eval(ff, ": mine ;  forget mine") == FF_OK);
+
+    ff_free(ff);
+}
+
+static void nat_ctx(ff_t *ff)
+{
+    ff_push_int(ff, *(const int *)ff_context(ff));
+}
+
+static void nat_hello(ff_t *ff)
+{
+    ff_push_str(ff, "hello, world", 5);
+}
+
+static void nat_slen(ff_t *ff)
+{
+    const char *s;
+    if (ff_pop_str(ff, &s))
+        ff_push_int(ff, (int64_t)strlen(s));
+}
+
+static void nat_nope(ff_t *ff)
+{
+    ff_throwf(ff, -5000, "Host said no (%d).", 7);
+}
+
+/* What a native word needs besides numbers: the host's own data, strings
+   both ways, and throwing a code of the program's own. */
+static void test_native_facilities(void)
+{
+    int ctx = 99;
+    ff_platform_t p = { .context = &ctx, .vprintf = capture_vprintf };
+    ff_t *ff = ff_new(&p);
+    static const ff_native_word_t words[] =
+    {
+        FF_NATIVE("ctx", nat_ctx, NULL),
+        FF_NATIVE("hello", nat_hello, NULL),
+        FF_NATIVE("slen", nat_slen, NULL),
+        FF_NATIVE("nope", nat_nope, NULL),
+        FF_NATIVE_END
+    };
+    CHECK(ff_register(ff, words) == FF_OK);
+    CHECK(ff_context(ff) == &ctx);
+
+    reset_output();
+    CHECK(ff_eval(ff, "ctx . 32 emit hello type 32 emit \"abcd\" slen .") == FF_OK);
+    CHECK(strcmp(g_out, "99 hello 4") == 0);
+
+    const char *s = NULL;
+    CHECK(ff_push_str(ff, "from the host", 13));
+    CHECK(ff_eval(ff, "dup slen swap") == FF_OK);
+    CHECK(ff_pop_str(ff, &s) && strcmp(s, "from the host") == 0);
+    int64_t n = 0;
+    CHECK(ff_pop_int(ff, &n) && n == 13);
+
+    reset_output();
+    CHECK(ff_eval(ff, "' nope catch .") == FF_OK);
+    CHECK(strcmp(g_out, "-5000") == 0);
+    CHECK(ff_eval(ff, "nope") == FF_ERR_APPLICATION);
+    CHECK(ff_throw_code(ff) == -5000);
+    CHECK(strcmp(ff_strerror(ff), "Host said no (7).") == 0);
+
+    ff_free(ff);
+}
+
+/* The transient string arena only grew, until the memory limit made
+   every allocation fail; ff_release_strings() gives it back. */
+static void test_release_strings(void)
+{
+    ff_t *ff = new_engine(100000000);
+    CHECK(ff_eval(ff, "\"kept\" constant kept") == FF_OK);
+    size_t before = ff->dict.mem.used;
+    for (int i = 0; i < 2000; ++i)
+        (void)ff_eval(ff, "\"a string literal typed at the prompt\" drop");
+    CHECK(ff->dict.mem.used > before);
+    ff_release_strings(ff);
+    CHECK(ff->dict.mem.used < before);
+#if FF_SAFE_MEM
+    /* A string the program kept is gone, and refused. */
+    CHECK(ff_eval(ff, "kept type") == FF_ERR_BAD_PTR);
+#endif
+    ff_free(ff);
+}
+
 /* A host calling ff_exec() directly gets false for a failed run, and the
    engine is left clean: nothing is still unwinding into the next call. */
 static void test_host_exec(void)
@@ -829,6 +964,9 @@ int main(void)
     test_host_calls();
     test_dict_indexes();
     test_real_locale();
+    test_register_checks();
+    test_native_facilities();
+    test_release_strings();
     test_host_exec();
 #if FF_WITH_FILES
     test_load_codes();

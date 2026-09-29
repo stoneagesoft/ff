@@ -295,14 +295,17 @@ const char *ff_version(void);
 /**
  * Initialize the process-wide shared built-in table up front.
  *
- * ff_new() builds this table lazily on the first call, and that lazy
- * initialization is not thread-safe. A host that creates engines from
- * multiple threads must call ff_warmup() once from a single thread
- * before spawning them; afterwards any number of threads may call
- * ff_new() concurrently, since the shared table is then read-only.
+ * ff_new() builds this table on first use and only reads it afterwards.
+ * Built with C11 atomics (GCC, Clang), that first use is safe from any
+ * number of threads at once. Without them — MSVC without
+ * /experimental:c11atomics — it is not, and a host that creates engines
+ * from several threads must call ff_warmup() once from one thread first.
  * Idempotent.
+ *
+ * @return false if memory ran out; the next call, or ff_new(), tries
+ *         again.
  */
-void ff_warmup(void);
+bool ff_warmup(void);
 
 
 /* ===================================================================
@@ -338,11 +341,54 @@ typedef struct ff_native_word
 
 /**
  * Register a NULL-terminated table of native words into @p ff.
+ *
+ * Each name must read as one word — not empty, no spaces, not a number,
+ * a string literal or a comment — and each entry needs a function. A name
+ * already in use is shadowed, with an FF_ERR_NON_UNIQUE warning through
+ * ff_platform::vtracef, as `:` does. `forget` leaves registered words in
+ * place, as it does built-ins.
+ *
  * @param ff    Engine instance.
  * @param words Table terminated by FF_NATIVE_END.
- * @return FF_OK.
+ * @return FF_OK; FF_ERR_MALFORMED for an entry it can't register
+ *         (ff_strerror() says which), or FF_ERR_OOM. The entries before
+ *         it are registered.
  */
 ff_error_t ff_register(ff_t *ff, const ff_native_word_t *words);
+
+/**
+ * @return The ff_platform::context the engine was created with: a native
+ *         word's way to the host's own data.
+ * @param ff Engine instance.
+ */
+void *ff_context(const ff_t *ff);
+
+/**
+ * Throw @p code with a message, from a native word: `catch` catches it
+ * as it catches `n throw`; uncaught, the call from the host fails with
+ * ff_throw_code() returning @p code and ff_strerror() the message. ANS
+ * Forth leaves positive codes, and those below -4095, to programs.
+ * Return from the native at once. A code of 0 throws nothing.
+ *
+ * @param ff   Engine instance.
+ * @param code THROW code.
+ * @param fmt  printf format of the message.
+ * @param ...  Format arguments.
+ */
+void ff_throwf(ff_t *ff, int64_t code, const char *fmt, ...) FF_PRINTF_FMT(3, 4);
+
+/**
+ * Free the transient string arena, which holds the string literals typed
+ * outside a definition and the strings `parse`, `parse-word` and
+ * ff_push_str() make. It only grows otherwise — until the memory limit,
+ * or an ff_abort(). A long-running host calls this between calls, once
+ * nothing that it or the program keeps (on the stack, in a variable)
+ * points at such a string: any such pointer dangles afterwards, which
+ * FF_SAFE_MEM builds refuse. Does nothing while a word is running.
+ *
+ * @param ff Engine instance.
+ */
+void ff_release_strings(ff_t *ff);
 
 
 /* ===================================================================
@@ -373,6 +419,21 @@ bool ff_pop_int(ff_t *ff, int64_t *out);
 bool ff_push_real(ff_t *ff, double v);
 /** Pop a real into @p out. @return false if the stack is empty. */
 bool ff_pop_real(ff_t *ff, double *out);
+
+/**
+ * Push a copy of @p len bytes of @p s as a NUL-terminated string, the way
+ * a string literal pushes one: its address, in the transient string arena
+ * (see ff_release_strings()), counted against the memory limit.
+ * @return false if the stack is full or memory is short (nothing pushed).
+ */
+bool ff_push_str(ff_t *ff, const char *s, size_t len);
+
+/**
+ * Pop a string's address into @p out. The string belongs to the engine.
+ * @return false if the stack is empty — or, in an FF_SAFE_MEM build, if
+ *         the cell isn't the address of a string the engine holds.
+ */
+bool ff_pop_str(ff_t *ff, const char **out);
 
 #ifdef __cplusplus
 }

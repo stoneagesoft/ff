@@ -36,8 +36,10 @@ typedef struct ff_builtins ff_builtins_t;
  *
  * @param d        Dictionary to initialize.
  * @param builtins Shared built-in block, typically @ref ff_builtins_default().
+ * @return false if memory ran out; @ref ff_dict_destroy then frees what
+ *         was allocated.
  */
-void ff_dict_init(ff_dict_t *d, const ff_builtins_t *builtins);
+bool ff_dict_init(ff_dict_t *d, const ff_builtins_t *builtins);
 
 /** @brief Total word count: user words + shared built-ins. */
 size_t ff_dict_total_count(const ff_dict_t *d);
@@ -283,12 +285,14 @@ struct ff_builtins
     const ff_word_t *by_opcode[FF_OP_COUNT];
 };
 
-/** @brief Populate @p b with every FF_*_WORDS table; thread-unsafe. */
-void ff_builtins_init(ff_builtins_t *b);
+/** @brief Populate @p b with every FF_*_WORDS table; thread-unsafe.
+ *  @return false, with @p b left empty, if memory ran out. */
+bool ff_builtins_init(ff_builtins_t *b);
 /** @brief Free everything @ref ff_builtins_init allocated. */
 void ff_builtins_destroy(ff_builtins_t *b);
 
-/** @brief Process-wide singleton, lazily initialised by @ref ff_new. */
+/** @brief Process-wide singleton, lazily initialised by @ref ff_new.
+ *  @return The table, or NULL if memory ran out initialising it. */
 const ff_builtins_t *ff_builtins_default(void);
 
 /**

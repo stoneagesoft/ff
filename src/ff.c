@@ -61,6 +61,12 @@
 
 static void ff_csig_clear(ff_t *ff);
 static bool ff_idle(const ff_t *ff);
+static char *ff_pad_intern(ff_t *ff, const char *s, size_t len);
+static void ff_pad_release(ff_t *ff);
+static bool ff_mem_check(ff_t *ff);
+static void ff_raisev(ff_t *ff, ff_int_t code, ff_error_t e,
+                      const char *fmt, va_list args);
+static ff_error_t ff_error_from_throw(ff_int_t n);
 
 
 // Public
@@ -79,10 +85,16 @@ ff_t *ff_new(const ff_platform_t *p)
     ff->base = FF_BASE_DEC;
 
     /* Per-engine dict delegates built-in lookups to the process-wide
-       singleton — initialised lazily here on the first ff_new call.
-       Embedders that fan out engines across threads should warm the
-       singleton from the main thread first; see ff_builtins_default(). */
-    ff_dict_init(&ff->dict, ff_builtins_default());
+       singleton — initialised lazily here on the first ff_new call (see
+       ff_builtins_default() about threads). Out of memory in either, the
+       engine isn't made. */
+    const ff_builtins_t *builtins = ff_builtins_default();
+    if (!builtins || !ff_dict_init(&ff->dict, builtins))
+    {
+        ff_dict_destroy(&ff->dict);
+        free(ff);
+        return NULL;
+    }
     ff->dict.mem.limit = p->mem_limit;
     ff_stack_init(&ff->stack);
     ff_stack_init(&ff->r_stack);
@@ -129,21 +141,55 @@ const char *ff_version(void)
 }
 
 /** @copydoc ff_warmup */
-void ff_warmup(void)
+bool ff_warmup(void)
 {
-    (void)ff_builtins_default();
+    return ff_builtins_default() != NULL;
+}
+
+/**
+ * @param name Proposed word name.
+ * @return true if the interpreter would read @p name as that one word —
+ *         not empty, no spaces, not a number, a string or a comment.
+ */
+static bool ff_name_readable(const char *name)
+{
+    ff_tokenizer_t t;
+    ff_tokenizer_init(&t);
+    int pos = 0;
+    return ff_tokenizer_next(&t, name, &pos) == FF_TOKEN_WORD
+        && !t.truncated
+        && strcmp(t.token, name) == 0
+        && name[pos] == '\0';
 }
 
 /** @copydoc ff_register */
 ff_error_t ff_register(ff_t *ff, const ff_native_word_t *words)
 {
     for (const ff_native_word_t *w = words; w && w->name; ++w)
-        if (!ff_dict_append(&ff->dict,
-                            w->immediate
-                                ? ff_im_word_new(w->name, w->fn, FF_OP_NONE, w->manual)
-                                : ff_word_new(w->name, w->fn, FF_OP_NONE, w->manual)))
+    {
+        if (!ff_name_readable(w->name) || !w->fn)
+            return FF_ERR_CODE(ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                                         "Can't register '%s': %s.", w->name,
+                                         w->fn ? "not a name the interpreter can read"
+                                               : "no function"));
+        if (ff_dict_lookup(&ff->dict, w->name))
+            ff_tracef(ff, FF_SEV_WARNING | FF_ERR_NON_UNIQUE,
+                      "'%s' isn't unique.", w->name);
+        ff_word_t *nw = ff_dict_append(&ff->dict,
+                                       w->immediate
+                                           ? ff_im_word_new(w->name, w->fn, FF_OP_NONE, w->manual)
+                                           : ff_word_new(w->name, w->fn, FF_OP_NONE, w->manual));
+        if (!nw)
             return FF_ERR_OOM;
+        nw->flags |= FF_WORD_HOST;
+    }
     return FF_OK;
+}
+
+/** @copydoc ff_context */
+void *ff_context(const ff_t *ff)
+{
+    return ff->platform.context;
 }
 
 /** @copydoc ff_find */
@@ -212,6 +258,62 @@ bool ff_push_real(ff_t *ff, double v)
         return ff_api_stack_fail(ff, true);
     ff_stack_push_real(&ff->stack, (ff_real_t)v);
     return true;
+}
+
+/** @copydoc ff_push_str */
+bool ff_push_str(ff_t *ff, const char *s, size_t len)
+{
+    if (ff->stack.top >= FF_STACK_SIZE)
+        return ff_api_stack_fail(ff, true);
+    char *copy = ff_pad_intern(ff, s ? s : "", s ? len : 0);
+    if (!copy)
+    {
+        /* Over the memory limit, or out of memory: the host gets the
+           error recorded; a running word, raised. */
+        ff_mem_check(ff);
+        return false;
+    }
+    ff_stack_push_ptr(&ff->stack, copy);
+    return true;
+}
+
+/** @copydoc ff_pop_str */
+bool ff_pop_str(ff_t *ff, const char **out)
+{
+    if (ff->stack.top <= ff->stack.floor)
+        return ff_api_stack_fail(ff, false);
+    const char *s = (const char *)(intptr_t)ff->stack.data[ff->stack.top - 1];
+#if FF_SAFE_MEM
+    if (!ff_str_valid(ff, s))
+    {
+        if (!ff_idle(ff))
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, "Bad string address.");
+        return false;
+    }
+#endif
+    --ff->stack.top;
+    if (out)
+        *out = s;
+    return true;
+}
+
+/** @copydoc ff_throwf */
+void ff_throwf(ff_t *ff, int64_t code, const char *fmt, ...)
+{
+    if (code == 0)
+        return;     /* `0 throw` does nothing either */
+    va_list args;
+    va_start(args, fmt);
+    ff_raisev(ff, (ff_int_t)code,
+              FF_SEV_ERROR | ff_error_from_throw((ff_int_t)code), fmt, args);
+    va_end(args);
+}
+
+/** @copydoc ff_release_strings */
+void ff_release_strings(ff_t *ff)
+{
+    if (ff_idle(ff))
+        ff_pad_release(ff);
 }
 
 /** @copydoc ff_pop_real */
@@ -285,6 +387,24 @@ static char *ff_pad_intern(ff_t *ff, const char *s, size_t len)
     dst[len] = '\0';
     sl->used += need;
     return dst;
+}
+
+/**
+ * Free the transient string arena: every string in it goes, and its
+ * memory is handed back to the account.
+ *
+ * @param ff Engine.
+ */
+static void ff_pad_release(ff_t *ff)
+{
+    for (ff_pad_slab_t *sl = ff->pad; sl; )
+    {
+        ff_pad_slab_t *next = sl->next;
+        ff_mem_release(&ff->dict.mem, sizeof(*sl) + sl->size);
+        free(sl);
+        sl = next;
+    }
+    ff->pad = NULL;
 }
 
 /**
@@ -769,6 +889,23 @@ static const ff_word_t *ff_word_running_from(const ff_t *ff, size_t index)
 }
 
 /**
+ * Find a word the host registered (ff_register()) among the user words
+ * from @p index on, which `forget` would remove: the host's words stay,
+ * as built-ins do.
+ *
+ * @param ff    Engine.
+ * @param index Index in ff::dict of the first word that would go.
+ * @return The first such word, or NULL.
+ */
+static const ff_word_t *ff_word_host_from(const ff_t *ff, size_t index)
+{
+    for (size_t i = index; i < ff->dict.count; ++i)
+        if (ff->dict.words[i]->flags & FF_WORD_HOST)
+            return ff->dict.words[i];
+    return NULL;
+}
+
+/**
  * Begin a colon definition (`:`).
  *
  * @param ff Engine.
@@ -1062,17 +1199,10 @@ static void ff_reset(ff_t *ff)
 
     ff->n_scopes = 0;
     ff->stack.floor = 0;
-    /* Reset the transient-string arena by freeing all slabs. Anything
-       still pointing into the pad becomes garbage — but we just cleared
-       the data and return stacks, so there is nothing to dangle. */
-    for (ff_pad_slab_t *sl = ff->pad; sl; )
-    {
-        ff_pad_slab_t *next = sl->next;
-        ff_mem_release(&ff->dict.mem, sizeof(*sl) + sl->size);
-        free(sl);
-        sl = next;
-    }
-    ff->pad = NULL;
+    /* Anything still pointing into the transient-string arena becomes
+       garbage — but we just cleared the data and return stacks, so there
+       is nothing to dangle. */
+    ff_pad_release(ff);
     /* A refusal nobody raised is stale now. */
     ff->dict.mem.failed = false;
 }

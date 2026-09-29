@@ -591,7 +591,7 @@ static size_t ff_dict_builtin_count(void)
 }
 
 /** @copydoc ff_dict_init */
-void ff_dict_init(ff_dict_t *d, const ff_builtins_t *builtins)
+bool ff_dict_init(ff_dict_t *d, const ff_builtins_t *builtins)
 {
     memset(d, 0, sizeof(*d));
     d->bucket_count = FF_DICT_INITIAL_BUCKETS;
@@ -600,6 +600,8 @@ void ff_dict_init(ff_dict_t *d, const ff_builtins_t *builtins)
     if (builtins && builtins->static_pool_size)
         d->builtins_used = (uint8_t *)calloc((builtins->static_pool_size + 7) / 8, 1);
     d->arena.mem = &d->mem;
+    return d->buckets
+        && (d->builtins_used || !builtins || !builtins->static_pool_size);
 }
 
 /** @copydoc ff_dict_destroy */
@@ -940,13 +942,18 @@ static void ff_builtins_define_static(ff_builtins_t *b, const ff_word_def_t *def
 }
 
 /** @copydoc ff_builtins_init */
-void ff_builtins_init(ff_builtins_t *b)
+bool ff_builtins_init(ff_builtins_t *b)
 {
     memset(b, 0, sizeof(*b));
     b->static_pool_size = ff_dict_builtin_count();
     b->static_pool = (ff_word_t *)calloc(b->static_pool_size, sizeof(ff_word_t));
     b->bucket_count = FF_DICT_INITIAL_BUCKETS;
     b->buckets = (ff_word_t **)calloc(b->bucket_count, sizeof(ff_word_t *));
+    if (!b->static_pool || !b->buckets)
+    {
+        ff_builtins_destroy(b);
+        return false;
+    }
 
     size_t pool_idx = 0;
     ff_builtins_define_static(b, FF_ARRAY_WORDS,  &pool_idx);
@@ -966,6 +973,7 @@ void ff_builtins_init(ff_builtins_t *b)
     ff_builtins_define_static(b, FF_STRING_WORDS, &pool_idx);
     ff_builtins_define_static(b, FF_VAR_WORDS,    &pool_idx);
     assert(pool_idx == b->static_pool_size);
+    return true;
 }
 
 /** @copydoc ff_builtins_destroy */
@@ -983,11 +991,12 @@ void ff_builtins_destroy(ff_builtins_t *b)
 /* ===================================================================
  * Process-wide singleton, lazily initialised on first ff_new.
  *
- * Thread-safety: `ff_builtins_default()` itself is not thread-safe on
- * its first call (see the spinning compare-exchange). Embedders that
- * spin up engine instances from multiple threads concurrently should
- * call `ff_builtins_default()` once from the main thread first, or
- * use `ff_builtins_init` on a host-owned struct instead.
+ * Thread-safety: with C11 atomics, the first call is safe from any
+ * number of threads — one initialises, the others wait for it. Without
+ * them (MSVC without /experimental:c11atomics) it is not, and a host that
+ * creates engines from several threads must call ff_warmup() from one
+ * thread first. An initialisation that runs out of memory leaves the
+ * table uninitialised, for a later call to try again.
  * =================================================================== */
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L \
@@ -1003,35 +1012,28 @@ const ff_builtins_t *ff_builtins_default(void)
 {
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L \
         && !defined(__STDC_NO_ATOMICS__)
-    int s = atomic_load_explicit(&g_builtins_state, memory_order_acquire);
-    if (s == 2)
-        return &g_builtins;
-    int expected = 0;
-    if (atomic_compare_exchange_strong(&g_builtins_state, &expected, 1))
+    for (;;)
     {
-        ff_builtins_init(&g_builtins);
-        atomic_store_explicit(&g_builtins_state, 2, memory_order_release);
-    }
-    else
-    {
-        while (atomic_load_explicit(&g_builtins_state, memory_order_acquire) != 2)
-            ; /* brief spin until the racing initializer flips state to 2 */
+        int s = atomic_load_explicit(&g_builtins_state, memory_order_acquire);
+        if (s == 2)
+            return &g_builtins;
+        int expected = 0;
+        if (s == 0
+                && atomic_compare_exchange_strong(&g_builtins_state, &expected, 1))
+        {
+            bool ok = ff_builtins_init(&g_builtins);
+            atomic_store_explicit(&g_builtins_state, ok ? 2 : 0,
+                                  memory_order_release);
+            return ok ? &g_builtins : NULL;
+        }
+        /* Another thread is initialising it: wait, briefly. */
     }
 #else
     if (g_builtins_state != 2)
     {
-        if (g_builtins_state == 0)
-        {
-            g_builtins_state = 1;
-            ff_builtins_init(&g_builtins);
-            g_builtins_state = 2;
-        }
-        else
-        {
-            while (g_builtins_state != 2)
-                ;
-        }
+        g_builtins_state = 1;
+        g_builtins_state = ff_builtins_init(&g_builtins) ? 2 : 0;
     }
+    return g_builtins_state == 2 ? &g_builtins : NULL;
 #endif
-    return &g_builtins;
 }
