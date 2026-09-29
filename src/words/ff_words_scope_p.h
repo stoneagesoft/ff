@@ -98,6 +98,18 @@ case FF_OP_SCOPE_UNWIND:
             goto done;
         }
 
+        /* Words dispatched here can't pop below the barrier, but a native
+           word working on ff->stack directly can. The slide below would
+           then move a negative count of cells — a wild memmove for a
+           `-- ...` scope, which has no arity check to stop it first. */
+        if (ff_unlikely(S->top < floor))
+        {
+            _FF_SYNC();
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                      "Stack underflow: popped below the scope's barrier.");
+            goto done;
+        }
+
         _FF_SYNC_TOS();
 
         size_t produced = S->top - floor;

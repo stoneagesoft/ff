@@ -19,6 +19,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 /**
  * @def FF_PRINTF_FMT(i, j)
@@ -100,14 +104,27 @@ ff_error_t ff_eval(ff_t *ff, const char *src);
  * interpreter.
  *
  * @param ff Engine instance.
- * @param w  Word to execute. Must not be NULL.
+ * @param w  Word to execute, as ff_find() returns it; NULL is an error
+ *           (FF_ERR_BAD_PTR).
  * @return true on normal completion, false if an exception (an error,
  *         THROW, ABORT, QUIT, or a watchdog abort) escaped the word;
  *         ff_errno() and ff_strerror() describe it. Called by the host
  *         outside any evaluation, ff_exec settles the exception itself, so
- *         the engine is ready for the next call either way.
+ *         the engine is ready for the next call either way, and starts
+ *         afresh as ff_eval() does: its own opcode count for the
+ *         watchdog, and no stale ff_request_abort().
  */
 bool ff_exec(ff_t *ff, ff_word_t *w);
+
+/**
+ * Look a word up by name, as the interpreter does: ASCII letters in
+ * either case, user words shadowing built-ins.
+ *
+ * @param ff   Engine instance.
+ * @param name Word name.
+ * @return The word, for ff_exec(), or NULL if there is none.
+ */
+ff_word_t *ff_find(ff_t *ff, const char *name);
 
 /**
  * Load a file as if every line were passed to ff_eval() in order. The
@@ -156,10 +173,11 @@ void ff_abort(ff_t *ff);
  * arrives via a path the polling callback can't observe (alarm
  * signal, GUI thread, …).
  *
- * The flag is consumed (cleared) when the next outermost ff_eval() or
- * ff_load() starts, so a call between evaluations is silently ignored —
- * abort requests only apply to in-flight execution. Nested evaluations
- * (`evaluate`, `load`) leave it alone.
+ * The flag is consumed (cleared) when the next call from the host —
+ * ff_eval(), ff_load() or ff_exec() with nothing running — starts, so a
+ * request between calls is silently ignored: abort requests only apply
+ * to in-flight execution. Nested calls (`evaluate`, `load`, a native
+ * word's own ff_eval()) leave it alone.
  *
  * @param ff Engine instance.
  */
@@ -215,6 +233,15 @@ int ff_err_line(const ff_t *ff);
  * @param ff Engine instance.
  */
 int ff_err_pos(const ff_t *ff);
+
+/**
+ * THROW code of the exception that ended the last call, or 0 if the call
+ * succeeded: the ANS code of an engine error (-4 stack underflow, -13
+ * undefined word, …), or the program's own for an uncaught `n throw`,
+ * which ff_errno() reports only as FF_ERR_APPLICATION.
+ * @param ff Engine instance.
+ */
+int64_t ff_throw_code(const ff_t *ff);
 
 /**
  * printf-style output through the platform-provided vprintf callback.
@@ -322,12 +349,20 @@ ff_error_t ff_register(ff_t *ff, const ff_native_word_t *words);
  * Data-stack marshaling
  *
  * For hosts that drive Forth words from C — push arguments, run a word
- * via ff_eval()/ff_exec(), pop results. Values are exchanged as int64_t
- * / double; on a 32-bit-cell build (FF_32BIT) integer values are
- * narrowed to the cell width.
+ * via ff_eval()/ff_exec(), pop results — and for native words, which
+ * take their arguments and leave their results the same way. Values are
+ * exchanged as int64_t / double; on a 32-bit-cell build (FF_32BIT)
+ * integer values are narrowed to the cell width.
+ *
+ * Inside a native word, a push onto a full stack, or a pop from an empty
+ * one — or from below the barrier of the `{ }` scope the word runs in —
+ * is that word's stack error: the call returns false and the error is
+ * raised as for any other word, so return at once; the word's caller
+ * stops. Called by the host between runs, they only return false.
  * =================================================================== */
 
-/** @return Number of cells currently on the data stack. */
+/** @return Number of cells on the data stack — inside a `{ }` scope, those
+ *          above its barrier, as the `depth` word counts them. */
 size_t ff_depth(const ff_t *ff);
 
 /** Push an integer. @return false if the stack is full (nothing pushed). */
@@ -338,3 +373,7 @@ bool ff_pop_int(ff_t *ff, int64_t *out);
 bool ff_push_real(ff_t *ff, double v);
 /** Pop a real into @p out. @return false if the stack is empty. */
 bool ff_pop_real(ff_t *ff, double *out);
+
+#ifdef __cplusplus
+}
+#endif

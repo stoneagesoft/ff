@@ -30,7 +30,13 @@ library is required.
 > ~~~
 >
 > Use `ff_depth`, `ff_push_int` / `ff_pop_int`, and
-> `ff_push_real` / `ff_pop_real` to move values across the boundary. The
+> `ff_push_real` / `ff_pop_real` to move values across the boundary.
+> Inside a native word, a pop from an empty stack (or from below the
+> barrier of the `{ }` scope the word runs in) and a push onto a full one
+> are the word's stack error, as for any word: the call returns false and
+> the error is raised, so return at once — the word's caller stops. To run
+> other Forth code from C, `ff_eval()` a snippet, or look a word up with
+> `ff_find()` and run it with `ff_exec()`. The
 > rest of this chapter uses the lower-level `<ff_p.h>` API, which exposes
 > the raw data stack, stack-effect assertion macros, and pointer
 > validators — reach for it when you need direct stack access, custom
@@ -460,9 +466,10 @@ ready for the next `ff_eval` call.
   errors earlier on a nearly-full stack; being too optimistic corrupts
   memory.
 - **Don't touch `ff->ip`, `ff->state`, or `ff->dict` directly** unless
-  you understand the inner interpreter. Use existing words (call
-  `ff_dict_lookup`, then set up and call `ff_exec`) when you need to
-  chain to other Forth code.
+  you understand the inner interpreter. To chain to other Forth code,
+  look the word up with `ff_find()` and run it with `ff_exec()`, or
+  `ff_eval()` a snippet; the word that called yours carries on
+  afterwards.
 - **Layouts can change.** The `_p.h` headers are part of the installed
   surface but are marked as advanced internals. Treat struct layouts as
   subject to change across releases, and prefer the accessor inlines

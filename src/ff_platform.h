@@ -20,6 +20,10 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 
 /**
  * @brief vprintf-shaped callback for engine output.
@@ -148,3 +152,7 @@ typedef struct ff_platform
     ff_open_file_fn open_file; /**< Opens files for Forth code; if NULL, fopen(). */
     ff_run_command_fn run_command; /**< Runs `system` commands; if NULL, system(). */
 } ff_platform_t;
+
+#ifdef __cplusplus
+}
+#endif

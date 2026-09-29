@@ -38,6 +38,13 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `FF_CHECK_WRITE` / `ff_addr_writable()` and `FF_CHECK_STR` /
   `ff_str_valid()` for native words that write through, or read a
   string from, a pointer off the stack.
+- `ff_find()` looks a word up by name for `ff_exec()`, so a host no
+  longer needs the internal `ff_dict_lookup()`; `ff_throw_code()` gives
+  the THROW code that ended the last call, which is how the host tells
+  a program's own `n throw` codes apart (`ff_errno()` reports them all
+  as `FF_ERR_APPLICATION`).
+- The public headers declare the API `extern "C"` and are tested from a
+  C++ host.
 
 ### Fixed
 
@@ -245,6 +252,24 @@ the project follows [Semantic Versioning](https://semver.org/).
 - The test driver ignored how a whole-file test case ended, so a test
   of an error path passed even if the error never happened. The error
   is now part of the expected output, as in line-by-line cases.
+- **Host API:**
+  - A C++ host couldn't link: the public headers had no `extern "C"`.
+  - `ff_depth()` and the pops ignored a `{ }` scope's barrier, so a
+    native word could eat its caller's cells; and a native's failed
+    pop went unnoticed, its caller running on. Inside a running word a
+    failed push or pop is now the word's stack error.
+  - A host calling `ff_exec()` in a loop had the watchdog's opcode
+    budget run on across calls, until every call was aborted, and a
+    stale `ff_request_abort()` ended the next call. `ff_exec()` from the
+    host now starts afresh, as `ff_eval()` does.
+  - An error the host raised itself (`ff_tracef()` with nothing
+    running) made every later call return at once, running nothing.
+  - `ff_errno()` kept reporting an old error after a later call
+    succeeded, and errors that `catch` handled.
+  - `ff_exec(NULL)` crashed; it is an `FF_ERR_BAD_PTR` error.
+  - A native word popping through a scope's barrier with the internal
+    stack API made the scope's exit slide a negative count of cells;
+    it is a stack-underflow error.
 
 ### Changed
 

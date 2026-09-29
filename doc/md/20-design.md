@@ -1390,9 +1390,14 @@ evaluation was compiling (see *Compiling a definition*). The compiler's
 own errors carry -22 (control structure mismatch) and -29 (`:` inside a
 definition); the host sees both as `FF_ERR_MALFORMED`.
 
-`ff->error` and `ff->error_msg` always describe the most recent error
-raised, caught or not — they are what `ff_errno()` and `ff_strerror()`
-report after a failing call.
+`ff->error` and `ff->error_msg` hold the most recent error raised. A
+call from the host starts with them cleared, and one that succeeds
+clears them again on the way out — errors that `catch` or `evaluate`
+handled along the way included — so `ff_errno()`, `ff_strerror()` and
+`ff_throw_code()` describe what ended the last call, and report nothing
+after a successful one. An error raised with nothing running (the host
+calling `ff_tracef()` itself) is recorded but not put in flight: there
+is nothing to unwind, and the next call runs as usual.
 
 
 ## Configuration
@@ -1629,13 +1634,15 @@ loop polls at the same back-branch / call sites as the polling
 callback. Safe to call from a signal handler or another thread
 (per the C17 sig_atomic_t guarantees on the platforms ff targets);
 no I/O, no allocation, no engine state mutation beyond the flag.
-The flag is consumed when the next outermost `ff_eval` / `ff_load`
-starts, so a stale request between evaluations is silently ignored.
+The flag is consumed when the next call from the host — `ff_eval`,
+`ff_load` or `ff_exec` with nothing running — starts, so a stale
+request between calls is silently ignored.
 
-Both the flag and the opcode count belong to the outermost evaluation.
-A nested one — `evaluate` or `load` running inside a word — leaves them
-alone; resetting them there would let a loop around `evaluate` restart
-its budget, and drop a pending request, on every pass.
+Both the flag and the opcode count belong to that outermost call. A
+nested one — `evaluate` or `load` running inside a word, or a native
+word's own `ff_eval` or `ff_exec` — leaves them alone; resetting them
+there would let a loop around `evaluate` restart its budget, and drop a
+pending request, on every pass.
 
 ### Where the check lives
 

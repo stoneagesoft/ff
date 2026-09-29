@@ -47,6 +47,28 @@ add_test(NAME api COMMAND ff_api_test)
 set_tests_properties(api PROPERTIES TIMEOUT 60)
 
 
+# A C++ host that includes only the public headers: they must compile as
+# C++ and declare the API with C linkage.
+add_executable(ff_cxx_test cxx_test.cpp)
+
+target_link_libraries(ff_cxx_test PRIVATE ${_ff_test_lib})
+
+# A sanitizer build that sets only CMAKE_C_FLAGS instruments the library,
+# and CMake hands those flags to C links alone: this C++ link needs the
+# same runtimes.
+string(REGEX MATCHALL "-fsanitize=[^ ]+" _ff_sanitize "${CMAKE_C_FLAGS}")
+if(_ff_sanitize)
+    target_compile_options(ff_cxx_test PRIVATE ${_ff_sanitize})
+    target_link_options(ff_cxx_test PRIVATE ${_ff_sanitize})
+endif()
+
+if(NOT MSVC)
+    target_compile_options(ff_cxx_test PRIVATE -Wall -Wextra -Werror)
+endif()
+
+add_test(NAME cxx COMMAND ff_cxx_test)
+
+
 # Discover every .ff / .out pair and register it with ctest.
 
 file(GLOB TEST_CASES RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/cases"

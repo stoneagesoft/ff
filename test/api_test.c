@@ -308,6 +308,121 @@ static void test_native_reentry(void)
     ff_free(ff);
 }
 
+static void nat_square(ff_t *ff)
+{
+    int64_t n;
+    if (ff_pop_int(ff, &n))
+        ff_push_int(ff, n * n);
+}
+
+static void nat_sum_all(ff_t *ff)
+{
+    int64_t sum = 0, v;
+    while (ff_depth(ff) > 0 && ff_pop_int(ff, &v))
+        sum += v;
+    ff_push_int(ff, sum);
+}
+
+static void nat_eat2(ff_t *ff)
+{
+    /* The internal stack API knows nothing of scope barriers. */
+    ff_stack_pop(&ff->stack);
+    ff_stack_pop(&ff->stack);
+}
+
+/* A native word's pushes and pops follow the rules of any word's: in a
+   `{ }` scope it sees only the cells above the barrier, and running out
+   of stack is its error, which stops its caller. `ff_depth` and the pops
+   used to see the whole stack, so a native could eat its caller's cells,
+   and a failed pop went unnoticed. */
+static void test_native_stack(void)
+{
+    ff_t *ff = new_engine(10000000);
+
+    static const ff_native_word_t words[] =
+    {
+        FF_NATIVE("square", nat_square, NULL),
+        FF_NATIVE("sum-all", nat_sum_all, NULL),
+        FF_NATIVE("eat2", nat_eat2, NULL),
+        FF_NATIVE_END
+    };
+    ff_register(ff, words);
+
+    reset_output();
+    CHECK(ff_eval(ff, "clear square 42 .") == FF_ERR_STACK_UNDER);
+    CHECK(strcmp(g_out, "") == 0);
+
+    int64_t v = 0;
+    CHECK(ff_eval(ff, "clear : f { ( a b -- r ) a b sum-all } ;"
+                      "  1000 2000 3 4 f") == FF_OK);
+    CHECK(ff_depth(ff) == 3);
+    CHECK(ff_pop_int(ff, &v) && v == 7);
+    CHECK(ff_pop_int(ff, &v) && v == 2000);
+    CHECK(ff_pop_int(ff, &v) && v == 1000);
+
+    /* Through the internal API a native can still pop through a barrier;
+       the scope's exit reports it instead of sliding a negative count of
+       cells over the stack. */
+    CHECK(ff_eval(ff, ": g { ( a -- ... ) eat2 } ;  1 2 3 g")
+          == FF_ERR_STACK_UNDER);
+
+    /* From the host, between runs, a pop from an empty stack only fails. */
+    CHECK(ff_eval(ff, "clear") == FF_OK);
+    CHECK(!ff_pop_int(ff, &v));
+    CHECK(ff_errno(ff) == FF_OK);
+
+    ff_free(ff);
+}
+
+/* The host's calls: ff_find() gets a word for ff_exec() without internal
+   headers; each call from the host starts afresh, ff_exec() as ff_eval()
+   does; and the error record describes the last call only. */
+static void test_host_calls(void)
+{
+    ff_t *ff = new_engine(100000);
+
+    CHECK(ff_find(ff, "DUP") != NULL);
+    CHECK(ff_find(ff, "no-such-word") == NULL);
+    CHECK(!ff_exec(ff, NULL));
+    CHECK(ff_errno(ff) == FF_ERR_BAD_PTR);
+
+    /* The watchdog budget used to run on across ff_exec() calls, so a host
+       calling a short word in a loop had every call aborted after a while;
+       an abort requested between calls ended the next one. */
+    CHECK(ff_eval(ff, ": spin 2000 0 do loop ;") == FF_OK);
+    ff_word_t *spin = ff_find(ff, "spin");
+    bool all = true;
+    for (int i = 0; i < 200; ++i)
+        all = ff_exec(ff, spin) && all;
+    CHECK(all);
+    ff_request_abort(ff);
+    CHECK(ff_exec(ff, spin));
+
+    /* A later success, or an error that `catch` handled, leaves no error
+       behind. */
+    CHECK(ff_eval(ff, "zork") == FF_ERR_UNDEFINED);
+    CHECK(ff_errno(ff) == FF_ERR_UNDEFINED && ff_throw_code(ff) == -13);
+    CHECK(ff_eval(ff, "1 drop") == FF_OK);
+    CHECK(ff_errno(ff) == FF_OK && strcmp(ff_strerror(ff), "") == 0);
+    CHECK(ff_eval(ff, "clear ' drop catch drop") == FF_OK);
+    CHECK(ff_errno(ff) == FF_OK && ff_throw_code(ff) == 0);
+
+    /* The program's own THROW code reaches the host. */
+    CHECK(ff_eval(ff, "-1234 throw") == FF_ERR_APPLICATION);
+    CHECK(ff_throw_code(ff) == -1234);
+
+    /* An error the host raises itself, with nothing running, is recorded
+       but leaves nothing to unwind: it used to make every later call
+       return at once, running nothing. */
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, "Host error.");
+    CHECK(ff_errno(ff) == FF_ERR_BAD_PTR);
+    reset_output();
+    CHECK(ff_eval(ff, "1 2 + .") == FF_OK);
+    CHECK(strcmp(g_out, "3") == 0);
+
+    ff_free(ff);
+}
+
 /* A host calling ff_exec() directly gets false for a failed run, and the
    engine is left clean: nothing is still unwinding into the next call. */
 static void test_host_exec(void)
@@ -576,6 +691,8 @@ int main(void)
     test_abort_request_nested();
     test_native_errors();
     test_native_reentry();
+    test_native_stack();
+    test_host_calls();
     test_host_exec();
 #if FF_WITH_FILES
     test_load_codes();

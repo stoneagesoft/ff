@@ -59,6 +59,7 @@
 
 
 static void ff_csig_clear(ff_t *ff);
+static bool ff_idle(const ff_t *ff);
 
 
 // Public
@@ -144,17 +145,50 @@ ff_error_t ff_register(ff_t *ff, const ff_native_word_t *words)
     return FF_OK;
 }
 
+/** @copydoc ff_find */
+ff_word_t *ff_find(ff_t *ff, const char *name)
+{
+    return name ? ff_dict_lookup(&ff->dict, name) : NULL;
+}
+
 /** @copydoc ff_depth */
 size_t ff_depth(const ff_t *ff)
 {
-    return ff->stack.top;
+    /* Inside a `{ }` scope only the cells above its barrier belong to the
+       running code, as for the `depth` word. */
+    return ff->stack.top - ff->stack.floor;
+}
+
+/**
+ * A push or pop through the public stack API that didn't fit. Called by
+ * the host between runs, it just fails. Inside a running word — a native
+ * word's own push or pop — it is that word's stack error, raised as any
+ * word's would be, so the word that called it stops too: a native that
+ * only checked the return value used to carry on as if nothing happened.
+ *
+ * @param ff   Engine.
+ * @param over true for an overflow, false for an underflow.
+ * @return false.
+ */
+static bool ff_api_stack_fail(ff_t *ff, bool over)
+{
+    if (!ff_idle(ff))
+    {
+        if (over)
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_OVER,
+                      "Stack overflow: 1 item(s) would not fit.");
+        else
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+                      "Stack underflow: 1 item(s) expected.");
+    }
+    return false;
 }
 
 /** @copydoc ff_push_int */
 bool ff_push_int(ff_t *ff, int64_t v)
 {
     if (ff->stack.top >= FF_STACK_SIZE)
-        return false;
+        return ff_api_stack_fail(ff, true);
     ff_stack_push(&ff->stack, (ff_int_t)v);
     return true;
 }
@@ -162,8 +196,8 @@ bool ff_push_int(ff_t *ff, int64_t v)
 /** @copydoc ff_pop_int */
 bool ff_pop_int(ff_t *ff, int64_t *out)
 {
-    if (ff->stack.top == 0)
-        return false;
+    if (ff->stack.top <= ff->stack.floor)
+        return ff_api_stack_fail(ff, false);
     ff_int_t v = ff_stack_pop(&ff->stack);
     if (out)
         *out = (int64_t)v;
@@ -174,7 +208,7 @@ bool ff_pop_int(ff_t *ff, int64_t *out)
 bool ff_push_real(ff_t *ff, double v)
 {
     if (ff->stack.top >= FF_STACK_SIZE)
-        return false;
+        return ff_api_stack_fail(ff, true);
     ff_stack_push_real(&ff->stack, (ff_real_t)v);
     return true;
 }
@@ -182,8 +216,8 @@ bool ff_push_real(ff_t *ff, double v)
 /** @copydoc ff_pop_real */
 bool ff_pop_real(ff_t *ff, double *out)
 {
-    if (ff->stack.top == 0)
-        return false;
+    if (ff->stack.top <= ff->stack.floor)
+        return ff_api_stack_fail(ff, false);
     ff_int_t bits = ff_stack_pop(&ff->stack);
     ff_real_t r;
     memcpy(&r, &bits, sizeof(r));
@@ -253,26 +287,76 @@ static char *ff_pad_intern(ff_t *ff, const char *s, size_t len)
 }
 
 /**
- * Enter an evaluation (ff_eval or ff_load).
+ * @param ff Engine.
+ * @return true if nothing is running: no evaluation, no word. A call
+ *         into the engine now comes from the host itself.
+ */
+static bool ff_idle(const ff_t *ff)
+{
+    return ff->eval_depth == 0 && ff->exec_depth == 0;
+}
+
+/**
+ * Forget the last error: ff_errno() reports FF_OK again.
+ * @param ff Engine.
+ */
+static void ff_error_clear(ff_t *ff)
+{
+    ff->error        = FF_OK;
+    ff->error_msg[0] = '\0';
+    ff->error_line   = 0;
+    ff->error_pos    = 0;
+}
+
+/**
+ * Start a call from the host into an idle engine — ff_eval(), ff_load()
+ * or ff_exec() with nothing running.
  *
- * The watchdog state belongs to the outermost evaluation. Resetting it on
- * a nested entry (`evaluate`, `load`, or a native word evaluating source
- * inside a host's ff_exec) would restart the opcode budget and drop a
- * pending ff_request_abort() on every pass through a loop around them,
- * so untrusted code could never be stopped.
+ * The watchdog state belongs to the outermost call, and so does the
+ * error record: ff_errno() describes what ended the last call, not an
+ * earlier one. Resetting the watchdog on a nested entry (`evaluate`,
+ * `load`, or a native word evaluating source) would restart the opcode
+ * budget and drop a pending ff_request_abort() on every pass through a
+ * loop around them, so untrusted code could never be stopped; not
+ * resetting it on a host's ff_exec() made the budget of every earlier
+ * call count against the next one.
  *
  * @param ff Engine.
  */
-static void ff_eval_enter(ff_t *ff)
+static void ff_host_enter(ff_t *ff)
 {
-    if (ff->eval_depth++ > 0 || ff->exec_depth > 0)
-        return;
-
     FF_ABORT_CLEAR(&ff->abort_requested);
     ff->opcodes_run      = 0;
     ff->next_watchdog_at = ff->platform.watchdog_interval
                                ? ff->platform.watchdog_interval
                                : 65536;
+    ff->state &= ~FF_STATE_THROWN;
+    ff_error_clear(ff);
+}
+
+/**
+ * End a call from the host (see ff_host_enter()). One that succeeded
+ * leaves no error record behind, even if `catch` or `evaluate` handled
+ * errors on the way.
+ *
+ * @param ff Engine.
+ * @param ec What the call returns.
+ * @return @p ec.
+ */
+static ff_error_t ff_host_leave(ff_t *ff, ff_error_t ec)
+{
+    if (ec == FF_OK)
+        ff_error_clear(ff);
+    return ec;
+}
+
+/**
+ * Enter an evaluation (ff_eval or ff_load).
+ * @param ff Engine.
+ */
+static void ff_eval_enter(ff_t *ff)
+{
+    ++ff->eval_depth;
 }
 
 /**
@@ -444,6 +528,13 @@ static void ff_raisev(ff_t *ff, ff_int_t code, ff_error_t e,
     ff->error = e;
     ff_error_locate(ff, &ff->error_line, &ff->error_pos);
     vsnprintf(ff->error_msg, sizeof(ff->error_msg), fmt, args);
+
+    /* Raised with nothing running — by the host itself, through
+       ff_tracef() — there is nothing to unwind: the error is recorded
+       for ff_errno(), and the engine stays ready. Left in flight, it
+       made every later call return at once without running anything. */
+    if (ff_idle(ff))
+        ff->state &= ~FF_STATE_THROWN;
 }
 
 /**
@@ -1213,6 +1304,10 @@ static int ff_scope_arg(const ff_t *ff, const char *name)
 /** @copydoc ff_eval */
 ff_error_t ff_eval(ff_t *ff, const char *src)
 {
+    const bool host = ff_idle(ff);
+    if (host)
+        ff_host_enter(ff);
+
     if (!src
             || !*src)
         return FF_OK;
@@ -1233,8 +1328,6 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     ff->input_pos = 0;
     ff->tokenizer.pos = 0;
 
-    /* Watchdog state is per outermost evaluation: a stale abort request
-       from a previous run is dropped and the opcode count starts at zero. */
     ff_eval_enter(ff);
 
     int pos = 0;
@@ -1428,20 +1521,30 @@ out:
     /* Every error was raised as an exception; this boundary turns it into
        the return code (or, for an uncatchable one inside a nested call,
        reports it and lets it keep unwinding). */
-    ec = ff_settle(ff, ff->eval_depth == 1 && ff->exec_depth == 0);
+    ec = ff_settle(ff, host);
     ff_eval_leave(ff);
-    return ec;
+    return host ? ff_host_leave(ff, ec) : ec;
 }
 
 /** @copydoc ff_exec */
 bool ff_exec(ff_t *ff, ff_word_t *w)
 {
-    assert(w);
+    const bool host = ff_idle(ff);
+    if (host)
+        ff_host_enter(ff);
 
     /* Nothing new starts while an exception unwinds (a native word that
        raised an error and then called back in). */
     if (ff->state & FF_STATE_THROWN)
         return false;
+
+    /* An error like any other: from the host, recorded with the engine
+       left ready; from a native word, it stops the word that called it. */
+    if (!w)
+    {
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, "No word to execute.");
+        return false;
+    }
 
     ff_stack_t *S = &ff->stack;
     ff_stack_t *R = &ff->r_stack;
@@ -1948,7 +2051,7 @@ done:
        that called ff_exec directly has nothing above it to settle that
        exception, so it is settled here and the next call starts clean. */
     bool ok = !(ff->state & FF_STATE_THROWN);
-    if (!ok && ff->exec_depth == 0 && ff->eval_depth == 0)
+    if (!ok && host)
     {
         /* A definition this call began goes with it. One the host is
            feeding in through ff_eval() calls stays open: this call is not
@@ -1957,6 +2060,8 @@ done:
             ff_def_abandon(ff);
         (void)ff_settle(ff, true);
     }
+    else if (host)
+        (void)ff_host_leave(ff, FF_OK);
     return ok;
 
     #undef _FF_NEXT
@@ -2037,6 +2142,10 @@ static bool ff_load_line(FILE *f, char **buf, size_t *cap, bool *oom)
 /** @copydoc ff_load */
 ff_error_t ff_load(ff_t *ff, const char *path)
 {
+    const bool host = ff_idle(ff);
+    if (host)
+        ff_host_enter(ff);
+
     if (!path || !*path)
         return FF_OK;
 
@@ -2099,11 +2208,12 @@ ff_error_t ff_load(ff_t *ff, const char *path)
     if (ff->state & FF_STATE_THROWN)
     {
         ff_def_unwind(ff);
-        ec = ff_settle(ff, ff->eval_depth == 1 && ff->exec_depth == 0);
+        ec = ff_settle(ff, host);
     }
     ff_eval_leave(ff);
     ff->tokenizer.line = prev_line;
-    return FF_ERR_CODE(ec);
+    ec = FF_ERR_CODE(ec);
+    return host ? ff_host_leave(ff, ec) : ec;
 }
 
 /* -------------------------------------------------------------------
@@ -2299,6 +2409,14 @@ int ff_err_line(const ff_t *ff)
 int ff_err_pos(const ff_t *ff)
 {
     return ff->error_pos;
+}
+
+/** @copydoc ff_throw_code */
+int64_t ff_throw_code(const ff_t *ff)
+{
+    /* throw_code outlives the exception; the error record says whether
+       the last call ended in one. */
+    return ff->error == FF_OK ? 0 : (int64_t)ff->throw_code;
 }
 
 /** @copydoc ff_printf */

@@ -11,6 +11,10 @@
 
 #pragma once
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @brief Bit position above which severity flags live.
  *
@@ -88,3 +92,7 @@ typedef enum ff_error_code
  * @brief Storage type for the severity-OR-code combination.
  */
 typedef unsigned ff_error_t;
+
+#ifdef __cplusplus
+}
+#endif
