@@ -139,7 +139,7 @@ case FF_OP_FPOW:
 case FF_OP_F_DOT:
     _FF_SL(1);
     _FF_SYNC();
-    ff_printf(ff, "%g", ff_get_real(&tos));
+    ff_print_real(ff, ff_get_real(&tos));
     _FF_DROP();
     _FF_NEXT();
 
@@ -161,8 +161,7 @@ case FF_OP_FIX:
                           && r < -(ff_real_t)FF_INT_MIN)))
         {
             _FF_SYNC();
-            ff_raise(ff, FF_THROW_BAD_ARG, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                     "fix: %g doesn't fit a cell.", (double)r);
+            ff_fix_range_error(ff, r);
             goto done;
         }
         tos = (ff_int_t)r;

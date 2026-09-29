@@ -1,0 +1,13 @@
+ 10
+ 20
+ 10
+: use-twenty
+    ['] twenty is hook
+;
+[UNSUPPORTED]
+[MISSING]
+[MISSING]
+ 42
+[BAD_PTR]
+[UNDEFINED]
+[BAD_PTR]

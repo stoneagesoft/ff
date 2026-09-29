@@ -19,6 +19,7 @@
 #include <ff_p.h>
 
 #include <errno.h>
+#include <locale.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -423,6 +424,37 @@ static void test_host_calls(void)
     ff_free(ff);
 }
 
+/* Reals read and print with '.' whatever the host's locale. Under one
+   with a decimal comma, `1.5` was an undefined word, `2,5` a real, and
+   `f.` printed a comma. Skipped where no such locale is installed. */
+static void test_real_locale(void)
+{
+    static const char *const comma[] =
+        { "ru_RU.UTF-8", "ru_RU.utf8", "de_DE.UTF-8", "de_DE.utf8",
+          "fr_FR.UTF-8", "fr_FR.utf8", NULL };
+    const char *set = NULL;
+    for (int i = 0; comma[i] && !set; ++i)
+        set = setlocale(LC_NUMERIC, comma[i]);
+    if (!set || strcmp(localeconv()->decimal_point, ".") == 0)
+    {
+        setlocale(LC_NUMERIC, "C");
+        fprintf(stderr, "test_real_locale: no decimal-comma locale, skipped\n");
+        return;
+    }
+
+    ff_t *ff = new_engine(10000000);
+    reset_output();
+    CHECK(ff_eval(ff, "1.5 f. 32 emit 2.25e1 f. 32 emit 1.5 2.0 f* f.") == FF_OK);
+    CHECK(strcmp(g_out, "1.5 22.5 3") == 0);
+    CHECK(ff_eval(ff, "2,5") == FF_ERR_UNDEFINED);
+    reset_output();
+    CHECK(ff_eval(ff, ": r 0.25 ;  see r") == FF_OK);
+    CHECK(strstr(g_out, "0.25") != NULL);
+    ff_free(ff);
+
+    setlocale(LC_NUMERIC, "C");
+}
+
 /* The dictionary's indexes match its words exactly: every heap's region
    is in the arena's index — at its address, to its capacity — the index
    is sorted without overlaps, and by_addr holds every word in order. */
@@ -796,6 +828,7 @@ int main(void)
     test_native_stack();
     test_host_calls();
     test_dict_indexes();
+    test_real_locale();
     test_host_exec();
 #if FF_WITH_FILES
     test_load_codes();

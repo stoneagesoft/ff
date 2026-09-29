@@ -1,0 +1,39 @@
+\ ff-test: lines
+\ `is` in a definition, and deferred words whose action goes away.
+\
+\ `is` wasn't immediate: in a definition it compiled a call that looked
+\ for its name only when the definition ran, so a definition couldn't set
+\ a deferred word's action as in ANS Forth. And a deferred word whose
+\ action was forgotten, or never finished compiling, went on calling the
+\ freed word.
+
+: p 32 emit . ;
+defer hook
+: ten 10 ;
+: twenty 20 ;
+' ten is hook  hook p cr
+
+\ In a definition the name is read while compiling; the xt is taken from
+\ the stack when the definition runs.
+: use-twenty ['] twenty is hook ;
+: use-any is hook ;
+use-twenty hook p cr
+' ten use-any hook p cr
+see use-twenty
+
+\ The name has to be a deferred word, on the same line.
+: bad ['] ten is ten ;
+: bad2 is
+' ten is
+clear
+
+\ A deferred word whose action is forgotten has none left, rather than
+\ calling freed memory.
+: impl 42 ;
+' impl is hook  hook p cr
+forget impl
+hook
+
+\ Nor one whose action was a definition that failed.
+: gone [ ' gone is hook ] 1 zork ;
+hook

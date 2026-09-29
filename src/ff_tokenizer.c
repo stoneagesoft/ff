@@ -6,6 +6,8 @@
 
 #include "ff_tokenizer_p.h"
 
+#include "ff_real_p.h"
+
 #include <utf8/utf8.h>
 
 #include <ctype.h>
@@ -327,13 +329,7 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
             if (*end == '\0' && errno != ERANGE)
                 return FF_TOKEN_INTEGER;
 
-            errno = 0;
-#ifdef FF_32BIT
-            t->real_val = strtof(t->token, &end);
-#else
-            t->real_val = strtod(t->token, &end);
-#endif
-            if (*end == '\0' && errno != ERANGE)
+            if (ff_real_parse(t->token, &t->real_val))
                 return FF_TOKEN_REAL;
         }
 

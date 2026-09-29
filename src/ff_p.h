@@ -196,6 +196,20 @@ struct ff
 #  define ff_likely(x)   (x)
 #endif
 
+/**
+ * @def FF_NOINLINE
+ * @brief Keep a function out of line. For helpers of ff_exec()'s case
+ *        bodies that the dispatch loop's code generation is sensitive to
+ *        (see ff_print_real()).
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#  define FF_NOINLINE __attribute__((noinline))
+#elif defined(_MSC_VER)
+#  define FF_NOINLINE __declspec(noinline)
+#else
+#  define FF_NOINLINE
+#endif
+
 
 /* ===================================================================
  * Validation macros (word-fn context).

@@ -16,6 +16,7 @@
  */
 
 #include "ff_p.h"
+#include "ff_real_p.h"
 
 #include <fort/fort.h>
 
@@ -1524,6 +1525,71 @@ out:
     ec = ff_settle(ff, host);
     ff_eval_leave(ff);
     return host ? ff_host_leave(ff, ec) : ec;
+}
+
+/* ===================================================================
+ * Output helpers for words that format reals. They stay out of
+ * ff_exec() — FF_NOINLINE, or the compiler takes them back in: a
+ * character array among its locals made it build the whole dispatch
+ * loop differently, about 5 % more instructions for every word run
+ * (8 % inlined from here), measured with cachegrind.
+ * =================================================================== */
+
+/**
+ * Print @p r as `f.` does, with '.' as the decimal point.
+ * @param ff Engine.
+ * @param r  Value.
+ */
+static FF_NOINLINE void ff_print_real(ff_t *ff, ff_real_t r)
+{
+    char num[40];
+    ff_real_format(num, sizeof(num), "%g", (double)r);
+    ff_printf(ff, "%s", num);
+}
+
+/**
+ * Raise `fix`'s error for a real whose integer part doesn't fit a cell.
+ * @param ff Engine.
+ * @param r  Value.
+ */
+static FF_NOINLINE void ff_fix_range_error(ff_t *ff, ff_real_t r)
+{
+    char num[40];
+    ff_real_format(num, sizeof(num), "%g", (double)r);
+    ff_raise(ff, FF_THROW_BAD_ARG, FF_SEV_ERROR | FF_ERR_MALFORMED,
+             "fix: %s doesn't fit a cell.", num);
+}
+
+/**
+ * Print the data stack as `.s` does: a table of every cell as a decimal,
+ * hex and real number, a character and a pointer.
+ * @param ff Engine, its stack in memory.
+ */
+static FF_NOINLINE void ff_print_stack(ff_t *ff)
+{
+    const ff_stack_t *S = &ff->stack;
+    ft_table_t *tbl = ft_create_table();
+    ft_set_border_style(tbl, FT_SOLID_ROUND_STYLE);
+    ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
+    ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
+    ft_set_cell_prop(tbl, FT_ANY_ROW, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_RIGHT);
+    ft_set_cell_prop(tbl, FT_ANY_ROW, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
+    ft_set_cell_prop(tbl, FT_ANY_ROW, 4, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
+    ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
+    ft_u8write_ln(tbl, "#", "Dec", "Hex", "Real", "ASCII", "Ptr");
+    for (size_t n = 0; n < S->top; ++n)
+    {
+        ff_int_t v = S->data[n];
+        ff_real_t r;
+        memcpy(&r, &v, sizeof(r));
+        char c = (v > 0 && v < 0xFF && isprint((int)v)) ? (char)v : ' ';
+        char num[40];
+        ff_real_format(num, sizeof(num), "%g", (double)r);
+        ft_u8printf_ln(tbl, "%zu|%" FF_PRIdCELL "|%" FF_PRIXCELL "|%s|%c|%p",
+                       n, v, (ff_uint_t)v, num, c, (void *)(intptr_t)v);
+    }
+    ff_printf(ff, "\n%s", (const char *)ft_to_u8string(tbl));
+    ft_destroy_table(tbl);
 }
 
 /** @copydoc ff_exec */

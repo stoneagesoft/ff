@@ -766,6 +766,29 @@ size_t ff_dict_index(const ff_dict_t *d, const char *name)
     return (size_t)-1;
 }
 
+/**
+ * After words were removed: a deferred word left behind whose action was
+ * one of them would go on calling freed memory, so it goes back to having
+ * no action — an error to run rather than a use-after-free. The action is
+ * looked for among the words, never read through. (An xt a program keeps
+ * in a variable can't be tracked like this; letting it go is up to the
+ * program.)
+ *
+ * @param d Dictionary.
+ */
+static void ff_dict_unhook(ff_dict_t *d)
+{
+    for (size_t i = 0; i < d->count; ++i)
+    {
+        ff_word_t *w = d->words[i];
+        if (w->opcode != FF_OP_DEFER_RUNTIME || !w->heap.data)
+            continue;
+        const ff_word_t *t = (const ff_word_t *)(intptr_t)w->heap.data[0];
+        if (t && !ff_dict_is_builtin(d, t) && !ff_dict_contains(d, t))
+            w->heap.data[0] = 0;
+    }
+}
+
 /** @copydoc ff_dict_truncate */
 void ff_dict_truncate(ff_dict_t *d, size_t index)
 {
@@ -782,6 +805,7 @@ void ff_dict_truncate(ff_dict_t *d, size_t index)
         ff_word_free(w);
     }
     ff_dict_buckets_rebuild(d);
+    ff_dict_unhook(d);
     ff_dict_reclaim(d);
 }
 
@@ -800,6 +824,7 @@ bool ff_dict_remove(ff_dict_t *d, ff_word_t *w)
         ff_dict_bucket_unlink(d, w);
         ff_mem_release(&d->mem, ff_dict_word_cost(w->name));
         ff_word_free(w);
+        ff_dict_unhook(d);
         ff_dict_reclaim(d);
         return true;
     }

@@ -67,6 +67,7 @@
     X(CONSTANT_RUNTIME, WORD)  /* + word_ptr — push word's heap.data[0]. */ \
     X(ARRAY_RUNTIME,    WORD)  /* + word_ptr — index into word's heap (TOS = base + idx). */ \
     X(DEFER_RUNTIME,    WORD)  /* + word_ptr — call through the xt at heap.data[0] (ANS DEFER). */ \
+    X(IS_RUNTIME,       WORD)  /* + word_ptr — pop xt into that deferred word (compiled `is`). */ \
     X(VAR_FETCH,        WORD)  /* + word_ptr — push word's heap.data[0] (peephole `v @`). */ \
     X(VAR_STORE,        WORD)  /* + word_ptr — pop, store at heap.data[0] (peephole `v !`). */ \
     X(VAR_PLUS_STORE,   WORD)  /* + word_ptr — pop, add to heap.data[0] (peephole `v +!`). */ \

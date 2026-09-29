@@ -42,11 +42,13 @@ const ff_word_def_t FF_VAR_WORDS[] =
       "A deferred word named *w* is created with no action. Executing *w*\n"
       "before any action has been assigned raises FF_ERR_BAD_PTR.\n"
       "Use **is** to assign the action: `' some-word is w`."),
-    _FF_W("is", FF_OP_IS,
+    _FF_WI("is", FF_OP_IS,
       "w ( xt -- )  Set deferred word's action\n"
       "Pops *xt* from the data stack and stores it as the action of the\n"
       "deferred word named *w* (which must have been created with **defer**).\n"
-      "After this, executing *w* runs the word identified by *xt*."),
+      "After this, executing *w* runs the word identified by *xt*. In a\n"
+      "definition, *w* is read when the definition is compiled, and the\n"
+      "definition sets the action when it runs: `: use-ten ['] ten is hook ;`."),
     FF_WEND
 };
 

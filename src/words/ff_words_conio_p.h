@@ -62,28 +62,9 @@ case FF_OP_TYPE:
 case FF_OP_DOT_S:
     if (S->top != 0)
     {
-        /* Sync TOS to memory so the loop below reads a coherent stack. */
+        /* Sync TOS to memory so the table reads a coherent stack. */
         _FF_SYNC();
-        ft_table_t *tbl = ft_create_table();
-        ft_set_border_style(tbl, FT_SOLID_ROUND_STYLE);
-        ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
-        ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
-        ft_set_cell_prop(tbl, FT_ANY_ROW, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_RIGHT);
-        ft_set_cell_prop(tbl, FT_ANY_ROW, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
-        ft_set_cell_prop(tbl, FT_ANY_ROW, 4, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
-        ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
-        ft_u8write_ln(tbl, "#", "Dec", "Hex", "Real", "ASCII", "Ptr");
-        for (size_t n = 0; n < S->top; ++n)
-        {
-            ff_int_t v = S->data[n];
-            ff_real_t r;
-            memcpy(&r, &v, sizeof(r));
-            char c = (v > 0 && v < 0xFF && isprint((int)v)) ? (char)v : ' ';
-            ft_u8printf_ln(tbl, "%zu|%" FF_PRIdCELL "|%" FF_PRIXCELL "|%g|%c|%p",
-                           n, v, (ff_uint_t)v, r, c, (void *)(intptr_t)v);
-        }
-        ff_printf(ff, "\n%s", (const char *)ft_to_u8string(tbl));
-        ft_destroy_table(tbl);
+        ff_print_stack(ff);
     }
     _FF_NEXT();
 

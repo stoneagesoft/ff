@@ -293,8 +293,14 @@ evaluator reports as `FF_ERR_MALFORMED`. Unicode encoding is delegated to
 
 Number parsing attempts integer first, then real. A `0x` literal is a
 cell bit pattern (`0xFFFFFFFFFFFFFFFF` is -1) and is never retried as a
-real; a decimal integer that overflows falls back to a real. Words that
-cannot be parsed as numbers are returned as `FF_TOKEN_WORD`.
+real; a decimal integer that overflows falls back to a real. A real is
+an optional `-`, digits with a fraction and/or an exponent (`1.5`,
+`1.`, `-.5`, `2e3`, `1.5e-7`), read by `ff_real_parse()` with `.` as the
+decimal point whatever the host's C locale — `f.`, `.s` and `see` print
+with `.` too (`ff_real_format()`). A value too small to be represented
+normally reads as the nearest there is; one too large for a real, and
+`inf` or `nan`, don't read as numbers. Words that cannot be parsed as
+numbers are returned as `FF_TOKEN_WORD`.
 
 
 ## Eval loop
@@ -1320,9 +1326,17 @@ NULL dispatch, no segfault.
 **`' xt-source is name`** pops the xt left on the data stack by `'`,
 parses `name` from the input stream, looks it up, verifies it's a
 deferred word (`opcode == FF_OP_DEFER_RUNTIME`), and stores the xt
-into `name->heap.data[0]`, all when `is` runs. `is` isn't immediate: in
-a definition it is compiled like any other word, and reads its name from
-the input when the definition runs.
+into `name->heap.data[0]`. `is` is immediate and state-smart, as in ANS
+Forth: in a definition it parses and checks `name` while compiling, and
+compiles `FF_OP_IS_RUNTIME name`, which pops the xt and stores it when
+the definition runs — `: use-ten ['] ten is hook ;`.
+
+Removing words — `forget`, or a definition that fails — resets a
+deferred word left behind whose action was one of them to no action at
+all, so running it is the error above rather than a call into freed
+memory. The action is looked for among the words, never read through.
+An xt a program keeps elsewhere, in a variable say, is its own to let
+go of.
 
 The runtime arm is a thin shim that dispatches through the slot:
 

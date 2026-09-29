@@ -1,0 +1,23 @@
+\ ff-test: lines
+\ Real literals: digits with a fraction and/or an exponent, '.' as the
+\ decimal point whatever the host's locale (see the API test for that).
+\
+\ A value too small to be represented normally was rejected, because
+\ strtod() reports underflow the way it reports overflow; and `-inf` and
+\ `-nan` read as reals where `inf` and `nan` didn't.
+
+: p 32 emit f. ;
+1.5 p  -2.25e-1 p  1. p  -.5 p  2E3 p cr
+1e-310 p cr
+
+\ Not reals: too large, no digits, no exponent digits, inf and nan.
+1e400
+-e5
+1e
+-inf
+nan
+clear
+
+\ `see` prints a real so that it reads back as the same value.
+: r 0.1 -2.5e-7 1e300 ;
+see r

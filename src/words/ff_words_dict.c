@@ -5,6 +5,7 @@
 #include <ff_p.h>
 #include <ff_word_def_p.h>
 #include <ff_opcode_meta_p.h>
+#include <ff_real_p.h>
 
 #include "ff_md.h"
 
@@ -661,9 +662,19 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
             }
 
             case FF_OP_LIT:
-                see_text(pr, "%" FF_PRIdCELL, cells[pos + 1]);
+            {
+                /* `[']` compiles an xt as a plain literal: one that is
+                   exactly a word — found among the words, never read
+                   through — prints the way it was written. */
+                const ff_word_t *xt =
+                    (const ff_word_t *)(intptr_t)cells[pos + 1];
+                if (ff_word_valid(ff, xt))
+                    see_text(pr, "['] %s", xt->name);
+                else
+                    see_text(pr, "%" FF_PRIdCELL, cells[pos + 1]);
                 pos += 2;
                 break;
+            }
 
             case FF_OP_LIT0:    see_text(pr, "0");      pos += 1; break;
             case FF_OP_LIT1:    see_text(pr, "1");      pos += 1; break;
@@ -684,12 +695,12 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
                 /* Shortest form that reads back as the same value, and
                    always marked as a real: `%g` turned 1.0 into `1`,
                    which re-enters as an integer literal. */
-                ff_real_t r;
+                ff_real_t r, back;
                 memcpy(&r, &cells[pos + 1], sizeof(r));
                 char num[40];
-                snprintf(num, sizeof(num), "%.15g", (double)r);
-                if ((ff_real_t)strtod(num, NULL) != r)
-                    snprintf(num, sizeof(num), "%.17g", (double)r);
+                ff_real_format(num, sizeof(num), "%.15g", (double)r);
+                if (!ff_real_parse(num, &back) || back != r)
+                    ff_real_format(num, sizeof(num), "%.17g", (double)r);
                 if (!strpbrk(num, ".eEn"))
                     strcat(num, ".0");
                 see_text(pr, "%s", num);
@@ -751,6 +762,14 @@ static void see_decompile_body(ff_t *ff, const ff_word_t *sig_owner,
             {
                 ff_word_t *nw = (ff_word_t *)(intptr_t)cells[pos + 1];
                 see_text(pr, "postpone %s", nw->name);
+                pos += 2;
+                break;
+            }
+
+            case FF_OP_IS_RUNTIME:
+            {
+                ff_word_t *nw = (ff_word_t *)(intptr_t)cells[pos + 1];
+                see_text(pr, "is %s", nw->name);
                 pos += 2;
                 break;
             }

@@ -291,6 +291,16 @@ the project follows [Semantic Versioning](https://semver.org/).
     definitions of 600 cells: 403 KB instead of 785 KB), and under
     `FF_SAFE_MEM` an address into it stays valid as it grows. A word's
     charge against `mem_limit` now includes its index entries.
+- Reals depended on the host's C locale: under one with a decimal comma
+  (which GUI toolkits set for you), `1.5` was an undefined word, `2,5` a
+  real, and `f.`, `.s` and `see` printed a comma. Reals now read and
+  print with `.` regardless. A real too small to be represented normally
+  (`1e-310`) was rejected as if it had overflowed; it reads now.
+- A deferred word whose action was forgotten, or was a definition that
+  failed, went on calling the freed word. Removing words now resets such
+  a deferred word to having no action.
+- `see` printed an xt compiled by `[']` as a raw address; it prints
+  `['] name`.
 
 ### Changed
 
@@ -338,6 +348,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   pushes `dup`'s xt). A missing name after `see`, `man` or `dump-word`
   raises `FF_ERR_MISSING` too. The pending flags other than
   `FF_STATE_SIG_PENDING` are gone.
+- `is` is immediate and state-smart, as in ANS Forth: in a definition it
+  reads the deferred word's name while compiling, and the definition
+  sets the action when it runs (`: use-ten ['] ten is hook ;`). Before,
+  it looked for the name only when the definition ran.
+- `-inf` and `-nan` no longer read as reals (`inf` and `nan` never did):
+  a real literal is digits with a fraction and/or an exponent.
 - Control structures are tracked on a compile-time stack of their own
   instead of the data stack. `while` follows ANS: a loop may have several,
   each after the first closed by a `then` after the `repeat`

@@ -180,11 +180,16 @@ case FF_OP_DEFER:
     _FF_NEXT();
 
 /** ( xt -- )  `is` — make the deferred word that follows call xt
-    (ANS 6.2.1725). The xt is checked when the deferred word runs. */
+    (ANS 6.2.1725). Immediate and state-smart, as in ANS: in a definition
+    the name is read while compiling, and the definition stores the xt it
+    finds on the stack when it runs (FF_OP_IS_RUNTIME). The xt is checked
+    when the deferred word runs. */
 case FF_OP_IS:
-    _FF_SL(1);
     _FF_SYNC();
     {
+        bool compiling = (ff->state & FF_STATE_COMPILING) != 0;
+        if (!compiling)
+            _FF_SL(1);
         ff_word_t *w = ff_parse_word(ff, "is");
         if (!w)
             goto done;
@@ -194,6 +199,26 @@ case FF_OP_IS:
                       "'%s' is not a deferred word.", w->name);
             goto done;
         }
+        if (compiling)
+        {
+            ff_heap_compile_int(&ff->compiling->heap, FF_OP_IS_RUNTIME);
+            ff_heap_compile_int(&ff->compiling->heap, (ff_int_t)(intptr_t)w);
+            _FF_CHECK_MEM();
+        }
+        else
+        {
+            w->heap.data[0] = tos;
+            _FF_DROP();
+        }
+    }
+    _FF_NEXT();
+
+/** ( xt -- )  Runtime of `is` in a definition: make the deferred word in
+    the operand call xt. */
+case FF_OP_IS_RUNTIME:
+    _FF_SL(1);
+    {
+        ff_word_t *w = (ff_word_t *)(intptr_t)*ip++;
         w->heap.data[0] = tos;
     }
     _FF_DROP();
