@@ -19,6 +19,7 @@
 #include <ff_word_flags_p.h>
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -197,3 +198,13 @@ struct ff_word
     const char *man_desc;       /**< Points into @ref manual past the first newline. */
     struct ff_word *next_bucket;/**< Singly-linked dict hash chain (newest-first). */
 };
+
+/**
+ * @param h A word's heap — every heap in a dictionary is one.
+ * @return The word it belongs to.
+ */
+static inline const ff_word_t *ff_heap_word(const ff_heap_t *h)
+{
+    return (const ff_word_t *)(const void *)
+           ((const char *)h - offsetof(ff_word_t, heap));
+}

@@ -2223,25 +2223,6 @@ ff_error_t ff_load(ff_t *ff, const char *path)
  * words that take user-supplied addresses, regardless of build mode.
  * ------------------------------------------------------------------- */
 
-/* The word heap containing @p a, or NULL. The index is rebuilt lazily on
-   the first call after a dictionary mutation. */
-static const ff_interval_t *ff_dict_region(const ff_t *ff, const char *a)
-{
-    size_t n = 0;
-    const ff_interval_t *ivs = ff_dict_intervals((ff_dict_t *)&ff->dict, &n);
-    size_t lo_i = 0, hi_i = n;
-    while (lo_i < hi_i)
-    {
-        size_t mid = lo_i + (hi_i - lo_i) / 2;
-        if (ivs[mid].lo <= a)
-            lo_i = mid + 1;
-        else
-            hi_i = mid;
-    }
-    if (lo_i > 0 && a < ivs[lo_i - 1].hi)
-        return &ivs[lo_i - 1];
-    return NULL;
-}
 
 /* End of the region — stack, string-arena slab, word heap — containing
    @p a, or NULL; @p writable says whether a program may write it. */
@@ -2261,11 +2242,13 @@ static const char *ff_region_end(const ff_t *ff, const char *a,
     for (const ff_pad_slab_t *sl = ff->pad; sl; sl = sl->next)
         if (a >= sl->data && a < sl->data + sl->used)
             return sl->data + sl->used;
-    const ff_interval_t *iv = ff_dict_region(ff, a);
-    if (!iv)
+    const ff_region_t *r = ff_dict_region_at(&ff->dict, a);
+    if (!r)
         return NULL;
-    *writable = iv->writable;
-    return iv->hi;
+    /* Bytecode is read-only to a program, which could otherwise forge
+       what the interpreter follows. */
+    *writable = ff_word_holds_data(ff_heap_word(r->owner));
+    return (const char *)r->hi;
 }
 
 /** @copydoc ff_addr_valid_dict */
@@ -2283,8 +2266,8 @@ bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes)
     if (end < a)
         return false;
 
-    const ff_interval_t *iv = ff_dict_region(ff, a);
-    return iv && end <= iv->hi;
+    const ff_region_t *r = ff_dict_region_at(&ff->dict, a);
+    return r && (uintptr_t)end <= r->hi;
 }
 
 /** @copydoc ff_addr_extent */
@@ -2319,11 +2302,7 @@ bool ff_word_valid(const ff_t *ff, const ff_word_t *w)
        first. */
     if (ff_dict_is_builtin(&ff->dict, w))
         return true;
-    /* User words: linear scan over the per-instance words array. */
-    for (size_t i = 0; i < ff->dict.count; ++i)
-        if (ff->dict.words[i] == w)
-            return true;
-    return false;
+    return ff_dict_contains(&ff->dict, w);
 }
 
 

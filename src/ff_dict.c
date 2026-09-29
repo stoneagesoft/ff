@@ -125,25 +125,6 @@ static bool ff_arena_after(ff_arena_mark_t x, ff_arena_mark_t y)
     return x.seq > y.seq || (x.seq == y.seq && x.used > y.used);
 }
 
-/* Position just past the region of `bytes` bytes that starts at `p`, if
-   `p` is in one of the arena's slabs. Located by its start: an end
-   address can coincide with the start of another slab. */
-static bool ff_arena_locate_end(const ff_arena_t *a, const void *p,
-                                size_t bytes, ff_arena_mark_t *out)
-{
-    const char *c = (const char *)p;
-    for (const ff_arena_slab_t *s = a->head; s; s = s->next)
-    {
-        if (c >= s->data && c < s->data + s->cap)
-        {
-            out->seq  = s->seq;
-            out->used = (size_t)(c - s->data) + ((bytes + 7) & ~(size_t)7);
-            return true;
-        }
-    }
-    return false;
-}
-
 /* Give back everything allocated after position `m`: free the slabs
    made since, and rewind the one `m` is in. */
 static void ff_arena_release(ff_arena_t *a, ff_arena_mark_t m)
@@ -167,22 +148,208 @@ static size_t ff_arena_round(size_t bytes)
     return (bytes + 7) & ~(size_t)7;
 }
 
-/* Try to shrink @p region from @p old_bytes to @p new_bytes. Effective
-   only when @p region is at the tail of the current slab — otherwise
-   this is a no-op (the freed space is sandwiched between live
-   regions and can't be reclaimed without compaction). */
-void ff_arena_trim(ff_arena_t *a, void *region, size_t old_bytes,
-                   size_t new_bytes)
+/* True if the region of `bytes` bytes at `region` is the arena's newest
+   allocation: it ends where the head slab's free tail begins. */
+static bool ff_arena_is_newest(const ff_arena_t *a, const char *region,
+                               size_t bytes)
 {
-    if (!a || !a->head || !region) return;
-    if (new_bytes >= old_bytes) return;
+    const ff_arena_slab_t *s = a->head;
+    return s && region && region + ff_arena_round(bytes) == &s->data[s->used];
+}
+
+/* Shrink @p region from @p old_bytes to @p new_bytes. The freed tail goes
+   back to the arena only when @p region is its newest allocation;
+   otherwise it is sandwiched between live regions and can't be reclaimed
+   without compaction. */
+static bool ff_arena_trim(ff_arena_t *a, char *region, size_t old_bytes,
+                          size_t new_bytes)
+{
+    if (new_bytes >= old_bytes || !ff_arena_is_newest(a, region, old_bytes))
+        return false;
+    a->head->used -= ff_arena_round(old_bytes) - ff_arena_round(new_bytes);
+    return true;
+}
+
+/* Grow @p region from @p old_bytes to @p new_bytes where it lies, which
+   is possible only for the arena's newest allocation: into the head
+   slab's free tail when it has room, or, when the region is the slab's
+   only one, by reallocating the slab (which may move it). Returns the
+   region's address, or NULL if it can't grow in place. */
+static char *ff_arena_extend(ff_arena_t *a, char *region, size_t old_bytes,
+                             size_t new_bytes)
+{
+    if (!ff_arena_is_newest(a, region, old_bytes)
+            || new_bytes > SIZE_MAX - 7 - sizeof(ff_arena_slab_t))
+        return NULL;
     ff_arena_slab_t *s = a->head;
-    size_t old_aligned = ff_arena_round(old_bytes);
-    size_t new_aligned = ff_arena_round(new_bytes);
-    char *region_end = (char *)region + old_aligned;
-    if (region_end != &s->data[s->used])
-        return;     /* not at the tail — can't reclaim */
-    s->used -= (old_aligned - new_aligned);
+    size_t old_r = ff_arena_round(old_bytes);
+    size_t new_r = ff_arena_round(new_bytes);
+    if (new_r - old_r <= s->cap - s->used)
+    {
+        s->used += new_r - old_r;
+        return region;
+    }
+    if (region != s->data)
+        return NULL;    /* older regions share the slab */
+
+    /* The slab holds nothing else: it can grow as a whole. The account
+       is charged the difference, as for a slab of the new size. */
+    size_t more = new_r - s->cap;
+    if (a->mem && !ff_mem_fits(a->mem, more))
+        return NULL;
+    ff_arena_slab_t *g = (ff_arena_slab_t *)realloc(s, sizeof(*s) + new_r);
+    if (!g)
+        return NULL;
+    if (a->mem)
+        ff_mem_charge(a->mem, more);
+    g->cap  = new_r;
+    g->used = new_r;
+    a->head = g;
+    return g->data;
+}
+
+
+/* ---- Region index: every live heap's [lo, hi), sorted by lo. ---- */
+
+/* Index of the first region whose lo is not below @p lo. */
+static size_t ff_region_lower(const ff_arena_t *a, uintptr_t lo)
+{
+    size_t i = 0, j = a->n_regions;
+    while (i < j)
+    {
+        size_t mid = i + (j - i) / 2;
+        if (a->regions[mid].lo < lo)
+            i = mid + 1;
+        else
+            j = mid;
+    }
+    return i;
+}
+
+/* Room for one more region, so that recording one can't fail after the
+   heap has already moved. */
+static bool ff_region_reserve(ff_arena_t *a)
+{
+    if (a->n_regions < a->cap_regions)
+        return true;
+    size_t nc = a->cap_regions ? a->cap_regions * 2 : 64;
+    if (nc > SIZE_MAX / sizeof(ff_region_t))
+        return false;
+    ff_region_t *g = (ff_region_t *)realloc(a->regions,
+                                            nc * sizeof(ff_region_t));
+    if (!g)
+        return false;
+    a->regions = g;
+    a->cap_regions = nc;
+    return true;
+}
+
+/* Record the region [lo, hi) of heap @p owner (room reserved). */
+static void ff_region_insert(ff_arena_t *a, const char *lo, const char *hi,
+                             const ff_heap_t *owner)
+{
+    size_t i = ff_region_lower(a, (uintptr_t)lo);
+    memmove(&a->regions[i + 1], &a->regions[i],
+            (a->n_regions - i) * sizeof(ff_region_t));
+    a->regions[i].lo    = (uintptr_t)lo;
+    a->regions[i].hi    = (uintptr_t)hi;
+    a->regions[i].owner = owner;
+    ++a->n_regions;
+}
+
+/* The region starting at @p lo, or NULL. */
+static ff_region_t *ff_region_find(ff_arena_t *a, const char *lo)
+{
+    size_t i = ff_region_lower(a, (uintptr_t)lo);
+    return i < a->n_regions && a->regions[i].lo == (uintptr_t)lo
+               ? &a->regions[i] : NULL;
+}
+
+/* Forget the region starting at @p lo, if there is one. */
+static void ff_region_remove(ff_arena_t *a, const char *lo)
+{
+    ff_region_t *r = ff_region_find(a, lo);
+    if (!r)
+        return;
+    size_t i = (size_t)(r - a->regions);
+    memmove(r, r + 1, (a->n_regions - i - 1) * sizeof(ff_region_t));
+    --a->n_regions;
+}
+
+/** @copydoc ff_arena_heap_grow */
+bool ff_arena_heap_grow(ff_arena_t *a, ff_heap_t *h, size_t want, size_t need)
+{
+    if (!ff_region_reserve(a))
+    {
+        if (a->mem)
+            ff_mem_refuse(a->mem, sizeof(ff_region_t), true);
+        return false;
+    }
+
+    char  *old       = (char *)h->data;
+    size_t old_bytes = h->capacity * sizeof(ff_int_t);
+    size_t cells     = want;
+    char  *nd        = ff_arena_extend(a, old, old_bytes,
+                                       want * sizeof(ff_int_t));
+    if (!nd && need < want)
+    {
+        cells = need;
+        nd = ff_arena_extend(a, old, old_bytes, need * sizeof(ff_int_t));
+    }
+    if (!nd)
+    {
+        /* A fresh region, the doubled size if the limit leaves room for
+           it: a request that fits shouldn't fail for the slack after it. */
+        cells = ff_arena_fits(a, want * sizeof(ff_int_t)) ? want : need;
+        nd = (char *)ff_arena_alloc(a, cells * sizeof(ff_int_t));
+        if (!nd)
+            return false;
+        if (h->size)
+            memcpy(nd, old, h->size * sizeof(ff_int_t));
+    }
+
+    if (old)
+        ff_region_remove(a, old);
+    ff_region_insert(a, nd, nd + cells * sizeof(ff_int_t), h);
+    h->data     = (ff_int_t *)nd;
+    h->capacity = cells;
+    h->end      = ff_arena_mark(a);
+    return true;
+}
+
+/** @copydoc ff_arena_heap_trim */
+void ff_arena_heap_trim(ff_arena_t *a, ff_heap_t *h)
+{
+    char  *lo        = (char *)h->data;
+    size_t old_bytes = h->capacity * sizeof(ff_int_t);
+    size_t new_bytes = h->size * sizeof(ff_int_t);
+    if (!lo || new_bytes >= old_bytes)
+        return;
+
+    bool newest = ff_arena_trim(a, lo, old_bytes, new_bytes);
+    if (new_bytes == 0)
+    {
+        /* An empty region would start where the next allocation does:
+           the heap lets go of it. */
+        ff_region_remove(a, lo);
+        h->data = NULL;
+    }
+    else
+    {
+        ff_region_t *r = ff_region_find(a, lo);
+        if (r)
+            r->hi = (uintptr_t)(lo + new_bytes);
+    }
+    h->capacity = h->size;
+    if (newest)
+        h->end = ff_arena_mark(a);
+}
+
+/** @copydoc ff_arena_heap_drop */
+void ff_arena_heap_drop(ff_arena_t *a, const ff_heap_t *h)
+{
+    if (h->data)
+        ff_region_remove(a, (const char *)h->data);
 }
 
 /** @copydoc ff_arena_destroy */
@@ -196,6 +363,10 @@ void ff_arena_destroy(ff_arena_t *a)
         s = n;
     }
     a->head = NULL;
+    free(a->regions);
+    a->regions     = NULL;
+    a->n_regions   = 0;
+    a->cap_regions = 0;
 }
 
 
@@ -297,28 +468,83 @@ static void ff_dict_buckets_rebuild(ff_dict_t *d)
 
 
 /**
- * Give the arena back from position @p from, after words were removed:
- * everything allocated after it belonged to them. A remaining word's
- * heap can lie beyond it too — a definition that kept growing after a
- * word was created between its `[` and `]` — so stop short of the last
- * such heap.
+ * Give the arena back after words were removed: past the end of the last
+ * heap still in use, everything belonged to removed words, or to heaps
+ * that have since moved. O(words) — each heap records where it ends.
  *
- * @param d    Dictionary.
- * @param from Arena position where the first removed word began.
+ * @param d Dictionary.
  */
-static void ff_dict_reclaim(ff_dict_t *d, ff_arena_mark_t from)
+static void ff_dict_reclaim(ff_dict_t *d)
 {
+    ff_arena_mark_t keep = { 0, 0 };
     for (size_t i = 0; i < d->count; ++i)
     {
         const ff_heap_t *h = &d->words[i]->heap;
-        ff_arena_mark_t end;
-        if (h->arena == &d->arena && h->data && h->capacity
-                && ff_arena_locate_end(&d->arena, h->data,
-                                       h->capacity * sizeof(ff_int_t), &end)
-                && ff_arena_after(end, from))
-            from = end;
+        if (h->arena == &d->arena && h->data && ff_arena_after(h->end, keep))
+            keep = h->end;
     }
-    ff_arena_release(&d->arena, from);
+    ff_arena_release(&d->arena, keep);
+}
+
+/**
+ * Double the user-word hash table once it holds more words than buckets,
+ * so chains stay short however many words are defined. Left as it is if
+ * memory is short: lookups only get slower.
+ *
+ * @param d Dictionary.
+ */
+static void ff_dict_buckets_grow(ff_dict_t *d)
+{
+    if (d->count <= d->bucket_count || d->bucket_count > SIZE_MAX / 2)
+        return;
+    size_t nc = d->bucket_count * 2;
+    ff_word_t **b = (ff_word_t **)calloc(nc, sizeof(ff_word_t *));
+    if (!b)
+        return;
+    free(d->buckets);
+    d->buckets = b;
+    d->bucket_count = nc;
+    ff_dict_buckets_rebuild(d);
+}
+
+/**
+ * Where @p w sits, or would sit, in @ref ff_dict::by_addr among its
+ * first @p n entries.
+ *
+ * @param d Dictionary.
+ * @param w Any pointer.
+ * @param n Entries in use.
+ * @return Index of the first entry not below @p w.
+ */
+static size_t ff_dict_addr_pos(const ff_dict_t *d, const ff_word_t *w,
+                               size_t n)
+{
+    uintptr_t k = (uintptr_t)w;
+    size_t i = 0, j = n;
+    while (i < j)
+    {
+        size_t mid = i + (j - i) / 2;
+        if ((uintptr_t)d->by_addr[mid] < k)
+            i = mid + 1;
+        else
+            j = mid;
+    }
+    return i;
+}
+
+/**
+ * Take @p w out of @ref ff_dict::by_addr, which has @p n entries.
+ *
+ * @param d Dictionary.
+ * @param w Word to take out.
+ * @param n Entries in use.
+ */
+static void ff_dict_addr_remove(ff_dict_t *d, const ff_word_t *w, size_t n)
+{
+    size_t i = ff_dict_addr_pos(d, w, n);
+    if (i < n && d->by_addr[i] == w)
+        memmove(&d->by_addr[i], &d->by_addr[i + 1],
+                (n - i - 1) * sizeof(d->by_addr[0]));
 }
 
 
@@ -379,13 +605,16 @@ void ff_dict_init(ff_dict_t *d, const ff_builtins_t *builtins)
 /** @copydoc ff_dict_destroy */
 void ff_dict_destroy(ff_dict_t *d)
 {
+    /* Everything goes: drop the region index first rather than take the
+       words' regions out of it one by one as they are freed. */
+    d->arena.n_regions = 0;
     for (size_t i = 0; i < d->count; ++i)
         ff_word_free(d->words[i]);
     ff_arena_destroy(&d->arena);
     free(d->words);
+    free(d->by_addr);
     free(d->buckets);
     free(d->builtins_used);
-    free(d->intervals);
     memset(d, 0, sizeof(*d));
 }
 
@@ -493,7 +722,10 @@ bool ff_dict_word_was_used(const ff_dict_t *d, const ff_word_t *w)
 /** @copydoc ff_dict_word_cost */
 size_t ff_dict_word_cost(const char *name)
 {
-    return sizeof(ff_word_t) + sizeof(ff_word_t *) + strlen(name) + 1;
+    /* The word, its name, its slots in ff_dict::words and
+       ff_dict::by_addr, and its heap's entry in the region index. */
+    return sizeof(ff_word_t) + 2 * sizeof(ff_word_t *) + sizeof(ff_region_t)
+         + strlen(name) + 1;
 }
 
 /** @copydoc ff_dict_append */
@@ -506,21 +738,19 @@ ff_word_t *ff_dict_append(ff_dict_t *d, ff_word_t *w)
         ff_word_free(w);
         return NULL;
     }
+    size_t at = ff_dict_addr_pos(d, w, d->count);
+    memmove(&d->by_addr[at + 1], &d->by_addr[at],
+            (d->count - at) * sizeof(d->by_addr[0]));
+    d->by_addr[at] = w;
     d->words[d->count++] = w;
     ff_mem_charge(&d->mem, ff_dict_word_cost(w->name));
     ff_dict_bucket_insert(d, w);
-    /* Wire the heap to bump our mutation_seq on every realloc-that-
-       moves-data, then bump for this append itself. */
-    w->heap.mutation_seq_p = &d->mutation_seq;
+    ff_dict_buckets_grow(d);
     /* Bind the heap to the dict's arena. A heap that already owns a
        malloc'd buffer stays on malloc: mixing the two on one heap would
        free arena memory in ff_heap_destroy or vice versa. */
     if (w->heap.data == NULL)
-    {
         w->heap.arena = &d->arena;
-        w->heap.mark  = ff_arena_mark(&d->arena);
-    }
-    ++d->mutation_seq;
     return w;
 }
 
@@ -541,22 +771,18 @@ void ff_dict_truncate(ff_dict_t *d, size_t index)
 {
     if (index >= d->count)
         return;
-    /* Every word from here on goes, so the arena can go back to where
-       the earliest of them began. (Usually the first; a heap trimmed
-       back at `;` can put a later word's start lower.) */
-    ff_arena_mark_t from = d->words[index]->heap.mark;
-    for (size_t j = index; j < d->count; ++j)
+    /* Newest first: those are usually last in by_addr and the region
+       index too, so taking them out moves little. */
+    while (d->count > index)
     {
-        if (d->words[j]->heap.arena == &d->arena
-                && ff_arena_after(from, d->words[j]->heap.mark))
-            from = d->words[j]->heap.mark;
-        ff_mem_release(&d->mem, ff_dict_word_cost(d->words[j]->name));
-        ff_word_free(d->words[j]);
+        ff_word_t *w = d->words[d->count - 1];
+        ff_dict_addr_remove(d, w, d->count);
+        --d->count;
+        ff_mem_release(&d->mem, ff_dict_word_cost(w->name));
+        ff_word_free(w);
     }
-    d->count = index;
     ff_dict_buckets_rebuild(d);
-    ff_dict_reclaim(d, from);
-    ++d->mutation_seq;
+    ff_dict_reclaim(d);
 }
 
 /** @copydoc ff_dict_remove */
@@ -569,80 +795,40 @@ bool ff_dict_remove(ff_dict_t *d, ff_word_t *w)
             continue;
         memmove(&d->words[i], &d->words[i + 1],
                 (d->count - i - 1) * sizeof(d->words[0]));
+        ff_dict_addr_remove(d, w, d->count);
         d->count--;
         ff_dict_bucket_unlink(d, w);
-        ff_arena_mark_t from = w->heap.mark;
-        bool in_arena = w->heap.arena == &d->arena;
         ff_mem_release(&d->mem, ff_dict_word_cost(w->name));
         ff_word_free(w);
-        if (in_arena)
-            ff_dict_reclaim(d, from);
-        ++d->mutation_seq;
+        ff_dict_reclaim(d);
         return true;
     }
     return false;
 }
 
-/* qsort comparator: ascending by interval `lo`. */
-static int ff_interval_cmp(const void *a, const void *b)
+/** @copydoc ff_dict_region_at */
+const ff_region_t *ff_dict_region_at(const ff_dict_t *d, const void *addr)
 {
-    const ff_interval_t *ia = (const ff_interval_t *)a;
-    const ff_interval_t *ib = (const ff_interval_t *)b;
-    if (ia->lo < ib->lo) return -1;
-    if (ia->lo > ib->lo) return  1;
-    return 0;
+    const ff_arena_t *a = &d->arena;
+    uintptr_t p = (uintptr_t)addr;
+    /* The last region starting at or below p is the only candidate. */
+    size_t i = 0, j = a->n_regions;
+    while (i < j)
+    {
+        size_t mid = i + (j - i) / 2;
+        if (a->regions[mid].lo <= p)
+            i = mid + 1;
+        else
+            j = mid;
+    }
+    return i > 0 && p < a->regions[i - 1].hi ? &a->regions[i - 1] : NULL;
 }
 
-/** @copydoc ff_dict_intervals */
-const ff_interval_t *ff_dict_intervals(ff_dict_t *d, size_t *count)
+/** @copydoc ff_dict_contains */
+bool ff_dict_contains(const ff_dict_t *d, const ff_word_t *w)
 {
-    if (d->intervals_built_at == d->mutation_seq && d->intervals)
-    {
-        *count = d->intervals_count;
-        return d->intervals;
-    }
-
-    /* Rebuild from scratch: capacity-and-up-from-here. Re-sized once
-       per mutation rather than per word, which dominates the cost. */
-    if (d->intervals_capacity < d->count)
-    {
-        size_t nc = d->intervals_capacity ? d->intervals_capacity : 64;
-        while (nc < d->count) nc *= 2;
-        ff_interval_t *grown = (ff_interval_t *)realloc(d->intervals,
-                                                        nc * sizeof(ff_interval_t));
-        if (!grown)
-        {
-            /* No index: every dictionary address fails the check, which
-               is safe, until memory allows a rebuild. */
-            *count = 0;
-            return d->intervals;
-        }
-        d->intervals = grown;
-        d->intervals_capacity = nc;
-    }
-
-    size_t n = 0;
-    for (size_t i = 0; i < d->count; ++i)
-    {
-        const ff_word_t *w = d->words[i];
-        if (!w || !w->heap.data || w->heap.capacity == 0)
-            continue;
-        const char *lo = (const char *)w->heap.data;
-        const char *hi = lo + w->heap.capacity * sizeof(ff_int_t);
-        d->intervals[n].lo = lo;
-        d->intervals[n].hi = hi;
-        /* Bytecode is read-only to a program, which could otherwise
-           forge what the interpreter follows. */
-        d->intervals[n].writable = ff_word_holds_data(w);
-        ++n;
-    }
-    if (n > 1)
-        qsort(d->intervals, n, sizeof(ff_interval_t), ff_interval_cmp);
-
-    d->intervals_count = n;
-    d->intervals_built_at = d->mutation_seq;
-    *count = n;
-    return d->intervals;
+    size_t i = ff_dict_addr_pos(d, w, d->count);
+    return i < d->count && d->by_addr[i] == w;
 }
 
 /** @copydoc ff_dict_define */
@@ -687,6 +873,10 @@ static bool ff_dict_ensure(ff_dict_t *d, size_t extra)
         if (!grown)
             return false;
         d->words = grown;
+        grown = (ff_word_t **)realloc(d->by_addr, nc * sizeof(ff_word_t *));
+        if (!grown)
+            return false;   /* words is merely roomier than it needs */
+        d->by_addr = grown;
         d->capacity = nc;
     }
     return true;

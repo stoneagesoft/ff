@@ -122,9 +122,9 @@ void ff_heap_compile_lit(ff_heap_t *h, ff_int_t v);
 typedef struct ff_arena ff_arena_t;
 
 /**
- * @brief A position in the dictionary's word-storage arena. Everything
- *        allocated after it can be handed back at once (see
- *        ff_dict_truncate()).
+ * @brief A position in the dictionary's word-storage arena, in
+ *        allocation order. Everything allocated after it can be handed
+ *        back at once (see ff_dict_truncate()).
  */
 typedef struct ff_arena_mark
 {
@@ -154,31 +154,25 @@ struct ff_heap
     ff_opcode_t last_op;
 
     /**
-     * When non-NULL, points at the dict's mutation_seq; bumped on
-     * any realloc that moves @ref data so the dict's interval index
-     * knows to rebuild. NULL for ad-hoc heaps not owned by a dict.
-     */
-    unsigned long *mutation_seq_p;
-
-    /**
-     * When non-NULL, every growth allocates a fresh region from the
-     * arena instead of malloc/realloc. The heap never frees its data
-     * (arena owns the lifetime). A dictionary binds every word's heap
-     * to its arena; malloc serves only heaps outside one.
+     * When non-NULL, @ref data is a region of this arena, which grows
+     * it — in place when it can — and keeps it in the arena's index of
+     * live regions; the heap never frees it (the arena owns the
+     * lifetime). A dictionary binds every word's heap to its arena;
+     * malloc serves only heaps outside one.
      */
     ff_arena_t *arena;
 
     /**
-     * Arena position when the word joined the dictionary: all it has
-     * allocated since lies after it. Removing the word can give the
-     * arena back from here.
+     * Arena position just past @ref data's region: removing words gives
+     * the arena back beyond the last such position of the words that
+     * remain.
      */
-    ff_arena_mark_t mark;
+    ff_arena_mark_t end;
 };
 
 /**
- * Slow-path heap growth: handles both the malloc-realloc and the
- * arena-allocate-new-region modes. The fast path is inlined in
+ * Slow-path heap growth: handles both the malloc-realloc and the arena
+ * modes (see ff_arena_heap_grow()). The fast path is inlined in
  * @ref ff_heap_ensure below.
  *
  * @return false, leaving the heap as it was, if the memory limit, the

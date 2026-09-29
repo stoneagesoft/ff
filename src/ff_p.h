@@ -343,13 +343,13 @@ ff_word_t *ff_parse_word(ff_t *ff, const char *word);
  * `ff_str_valid` requires the string's terminator inside the region.
  *
  * `ff_word_valid` returns true when @p w is currently in the
- * dictionary — the relevant question for `execute`. It scans the
- * dictionary linearly; heap ranges are found by binary search over a
- * sorted index that is rebuilt after the dictionary changes.
+ * dictionary — the relevant question for `execute`. Both are binary
+ * searches: over the dictionary's words sorted by address, and over the
+ * arena's index of heap regions, kept sorted as heaps change.
  * =================================================================== */
 
 /**
- * @brief Out-of-line dictionary-interval validator (slow path).
+ * @brief Out-of-line word-heap validator (slow path).
  *
  * Called by @ref ff_addr_valid below when the inline fast paths
  * (stacks + pad) miss. Embedders should normally call ff_addr_valid;
@@ -387,7 +387,7 @@ bool ff_str_valid(const ff_t *ff, const char *s);
  * Inline because the stack and pad cases dominate hot-path checks
  * under FF_SAFE_MEM — folding the range comparisons into the
  * caller lets the compiler hoist them out of inner loops. The
- * dict-intervals binary search stays out-of-line so call sites
+ * word-heap binary search stays out-of-line so call sites
  * don't bloat.
  */
 static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)

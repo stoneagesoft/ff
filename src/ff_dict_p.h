@@ -155,18 +155,20 @@ void ff_dict_define(ff_dict_t *d, const ff_word_def_t *defs);
 
 
 /**
- * @brief One [lo, hi) range in the dict's sorted interval index.
+ * @brief One live word heap in the arena: the [lo, hi) range of its
+ *        capacity, and whose heap it is.
  *
- * Sorted by `lo`. Used by @ref ff_addr_valid to decide membership in
- * O(log N) instead of linearly scanning every word's heap.
+ * The arena keeps these sorted by `lo` as heaps are allocated, grown,
+ * trimmed and freed, for @ref ff_addr_valid to find the heap containing
+ * an address in O(log N). Addresses are compared as integers.
  */
-typedef struct ff_interval
+typedef struct ff_region
 {
-    const char *lo;        /**< First byte (inclusive). */
-    const char *hi;        /**< One past the last byte. */
-    bool writable;         /**< A data word's heap (ff_word_holds_data()); bytecode can be read
-                                but not written. */
-} ff_interval_t;
+    uintptr_t        lo;    /**< First byte (inclusive). */
+    uintptr_t        hi;    /**< One past the heap's capacity. */
+    const ff_heap_t *owner; /**< The heap: bytecode can be read but not written, a data word's
+                                 heap both (see ff_word_holds_data()). */
+} ff_region_t;
 
 /**
  * @brief One slab in the dict's word-heap arena.
@@ -190,11 +192,11 @@ typedef struct ff_arena_slab
  * @brief Slab arena dispensing word-heap allocations.
  *
  * Replaces N individual mallocs (one per ff_word_t::heap) with a few
- * O(N / slab_size) slab mallocs. Allocations are bump-pointer; growth
- * via @ref ff_heap_grow allocates a fresh region and abandons the
- * old one. Trades a bit of internal fragmentation (wasted tails of
- * grown-and-relocated heaps) for a large reduction in allocator
- * traffic when the dictionary is heavy with small definitions.
+ * O(N / slab_size) slab mallocs. Allocations are bump-pointer. A heap
+ * grows where it lies when it is the newest allocation — the usual case
+ * for the definition being compiled or a data word being filled — and is
+ * otherwise moved to a fresh region, abandoning the old one (see
+ * ff_arena_heap_grow()).
  */
 struct ff_arena
 {
@@ -202,6 +204,9 @@ struct ff_arena
     size_t           default_slab_size; /**< Default `cap` for new slabs. */
     unsigned long    seq;        /**< Sequence number of the newest slab ever made. */
     ff_mem_t        *mem;        /**< Account slabs are charged to, or NULL. */
+    ff_region_t     *regions;    /**< Every live heap's region, sorted by address. */
+    size_t           n_regions;  /**< Entries in @ref regions. */
+    size_t           cap_regions; /**< Allocated length of @ref regions. */
 };
 
 /**
@@ -225,6 +230,29 @@ ff_arena_mark_t ff_arena_mark(const ff_arena_t *a);
 
 /** @brief Free every slab. The arena is left zeroed. */
 void  ff_arena_destroy(ff_arena_t *a);
+
+/**
+ * @brief Give heap @p h room for at least @p need cells, @p want if the
+ *        limit allows.
+ *
+ * The heap grows where it lies when it is the arena's newest allocation:
+ * into its slab's free tail, or, when it is the slab's only region, by
+ * reallocating the slab. Otherwise it moves to a fresh region, its live
+ * cells copied over. Either way the region index and ff_heap::end follow.
+ *
+ * @return false, leaving the heap as it was and the refusal recorded in
+ *         the account, if the limit or the allocator refused it.
+ */
+bool  ff_arena_heap_grow(ff_arena_t *a, ff_heap_t *h, size_t want, size_t need);
+
+/**
+ * @brief Shrink heap @p h's capacity to its size. The arena takes the
+ *        freed tail back if the heap is its newest allocation.
+ */
+void  ff_arena_heap_trim(ff_arena_t *a, ff_heap_t *h);
+
+/** @brief Heap @p h is being freed: drop its region from the index. */
+void  ff_arena_heap_drop(ff_arena_t *a, const ff_heap_t *h);
 
 
 /**
@@ -277,7 +305,13 @@ struct ff_dict
      */
     ff_word_t **words;
     size_t count;          /**< Number of valid user words. */
-    size_t capacity;       /**< Allocated length of @ref words. */
+    size_t capacity;       /**< Allocated length of @ref words and @ref by_addr. */
+
+    /**
+     * The same words sorted by address, so an xt can be checked in
+     * O(log N) (see ff_dict_contains()).
+     */
+    ff_word_t **by_addr;
 
     /**
      * Hash buckets for user words. Lookup falls through to the shared
@@ -299,29 +333,9 @@ struct ff_dict
     uint8_t *builtins_used;
 
     /**
-     * Mutation sequence — bumped on append, forget, and any
-     * heap-realloc that moves a tracked word's data. The interval
-     * index below is rebuilt lazily when @ref intervals_built_at
-     * differs.
-     */
-    unsigned long mutation_seq;
-
-    /**
-     * Sorted interval index over each word's heap, each marked writable
-     * or not (see ff_word_holds_data()). Built lazily by @ref
-     * ff_dict_intervals on first call after a mutation; cached across
-     * queries. @ref ff_addr_valid binary-searches it.
-     */
-    ff_interval_t *intervals;
-    size_t intervals_count;
-    size_t intervals_capacity;
-    unsigned long intervals_built_at;
-
-    /**
-     * Slab arena for word heaps. New non-native words bind their
-     * heap to this arena at append time; the arena's lifetime is
-     * the dict's. Native words (FF_WORD_NATIVE) keep the legacy
-     * malloc path so their pre-arena fn-pointer stash stays valid.
+     * Slab arena for word heaps. Every word binds its heap to this
+     * arena when it joins the dictionary; the arena's lifetime is the
+     * dict's, and it indexes the heaps' regions for ff_addr_valid().
      */
     ff_arena_t arena;
 
@@ -334,16 +348,19 @@ struct ff_dict
 };
 
 /**
- * Refresh and return the sorted interval index, rebuilding from the
- * current heap state if @ref ff_dict::mutation_seq has advanced past
- * @ref ff_dict::intervals_built_at.
- *
- * @param d     Dictionary.
- * @param count Out — number of valid entries in the returned array.
- * @return Sorted-by-lo array of intervals; valid until the next dict
- *         mutation.
+ * @param d    Dictionary.
+ * @param addr Any address.
+ * @return The region of the word heap containing @p addr, or NULL.
+ *         Valid until the dictionary next changes.
  */
-const ff_interval_t *ff_dict_intervals(ff_dict_t *d, size_t *count);
+const ff_region_t *ff_dict_region_at(const ff_dict_t *d, const void *addr);
+
+/**
+ * @param d Dictionary.
+ * @param w Any pointer, as a program may pass for an xt.
+ * @return true if @p w is one of the dictionary's user words.
+ */
+bool ff_dict_contains(const ff_dict_t *d, const ff_word_t *w);
 
 /* --- Helpers exported across word files for case bodies in ff_exec(). --- */
 

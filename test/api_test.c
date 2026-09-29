@@ -423,6 +423,108 @@ static void test_host_calls(void)
     ff_free(ff);
 }
 
+/* The dictionary's indexes match its words exactly: every heap's region
+   is in the arena's index — at its address, to its capacity — the index
+   is sorted without overlaps, and by_addr holds every word in order. */
+static bool indexes_match(const ff_t *ff)
+{
+    const ff_dict_t  *d = &ff->dict;
+    const ff_arena_t *a = &d->arena;
+    size_t with_data = 0;
+    for (size_t i = 0; i < d->count; ++i)
+    {
+        const ff_heap_t *h = &d->words[i]->heap;
+        if (!ff_dict_contains(d, d->words[i]))
+            return false;
+        if (!h->data)
+            continue;
+        ++with_data;
+        const ff_region_t *r = ff_dict_region_at(d, h->data);
+        if (!r || r->lo != (uintptr_t)h->data || r->owner != h
+                || r->hi != (uintptr_t)h->data + h->capacity * sizeof(ff_int_t))
+            return false;
+    }
+    for (size_t i = 1; i < a->n_regions; ++i)
+        if (a->regions[i - 1].hi > a->regions[i].lo)
+            return false;
+    for (size_t i = 1; i < d->count; ++i)
+        if ((uintptr_t)d->by_addr[i - 1] >= (uintptr_t)d->by_addr[i])
+            return false;
+    return a->n_regions == with_data;
+}
+
+/* The arena grows heaps in place when it can and indexes their regions as
+   they change; words are removed singly and wholesale. A random mix of
+   the operations that move things — data words filled past a slab,
+   definitions that go on growing after a word made between `[` and `]`,
+   failed definitions, forgets — must leave the indexes matching the
+   dictionary, and every heap readable where the index says it is. */
+static void test_dict_indexes(void)
+{
+    ff_t *ff = new_engine(1000000000);
+    uint32_t seed = 12345;
+    char src[512];
+    int made = 0;
+    bool ok = ff_eval(ff, ": fill 0 do i , loop ;") == FF_OK;
+    size_t most = 0, peak = 0;
+
+    for (int step = 0; step < 3000 && ok; ++step)
+    {
+        seed = seed * 1103515245u + 12345u;
+        uint32_t r = seed >> 8;
+        switch (r % 6)
+        {
+            case 0:
+                snprintf(src, sizeof src, "variable v%d  %u v%d !",
+                         made, r, made);
+                ++made;
+                break;
+            case 1:
+                snprintf(src, sizeof src, "create c%d  %u fill",
+                         made, r % 3000);
+                ++made;
+                break;
+            case 2:
+                snprintf(src, sizeof src,
+                         ": d%d [ create x%d 1 , ] 1 2 3 4 5 6 7 8 9"
+                         " + + + + + + + + drop ;", made, made);
+                ++made;
+                break;
+            case 3:
+                snprintf(src, sizeof src, ": bad%d 1 2 zork ;", made);
+                break;
+            case 4:
+                if (made == 0)
+                    continue;
+                snprintf(src, sizeof src, "\"forget v%u\" evaluate drop",
+                         r % (unsigned)made);
+                break;
+            default:
+                snprintf(src, sizeof src, "create big%d  %u fill",
+                         made, 5000 + r % 20000);
+                ++made;
+                break;
+        }
+        (void)ff_eval(ff, src);
+        ok = indexes_match(ff);
+        /* The newest data word reads back from where the index says. */
+        const ff_word_t *top = ff_dict_top(&ff->dict);
+        if (ok && top && top->heap.size && ff_word_holds_data(top))
+            ok = ff_addr_valid(ff, &top->heap.data[top->heap.size - 1],
+                               sizeof(ff_int_t));
+        if (top && top->heap.size > most)
+            most = top->heap.size;
+        if (ff->dict.count > peak)
+            peak = ff->dict.count;
+    }
+    CHECK(ok);
+    /* It did fill words past a slab, and grow a sizeable dictionary
+       before `forget` cut it back. */
+    CHECK(most >= 5000 && peak > 200);
+
+    ff_free(ff);
+}
+
 /* A host calling ff_exec() directly gets false for a failed run, and the
    engine is left clean: nothing is still unwinding into the next call. */
 static void test_host_exec(void)
@@ -693,6 +795,7 @@ int main(void)
     test_native_reentry();
     test_native_stack();
     test_host_calls();
+    test_dict_indexes();
     test_host_exec();
 #if FF_WITH_FILES
     test_load_codes();

@@ -270,6 +270,27 @@ the project follows [Semantic Versioning](https://semver.org/).
   - A native word popping through a scope's barrier with the internal
     stack API made the scope's exit slide a negative count of cells;
     it is a stack-underflow error.
+- **Scaling:**
+  - Under `FF_SAFE_MEM`, the index of word heaps was rebuilt and
+    re-sorted after every change to the dictionary, so defining words
+    and checking addresses in turn took quadratic time — untrusted code
+    could burn CPU without tripping the watchdog or the memory limit
+    (32,000 variables defined and stored: 17 s, now 14 ms). The arena
+    now keeps the index sorted as heaps change, and xts are checked by
+    binary search instead of a scan of every word.
+  - The hash table of user words never grew: with 100,000 of them, a
+    lookup of a built-in walked hundreds of entries first (60× slower).
+    It doubles as needed now.
+  - `forget` and every failed definition searched the arena's slabs for
+    each remaining word: with 20,000 larger definitions, about 13 ms
+    each; now 0.1 ms.
+  - A heap that grew was always copied to a fresh region, abandoning
+    the old one: roughly half the memory a program was charged went to
+    dead copies. The arena's newest allocation — the definition being
+    compiled, a data word being filled — now grows where it lies (100
+    definitions of 600 cells: 403 KB instead of 785 KB), and under
+    `FF_SAFE_MEM` an address into it stays valid as it grows. A word's
+    charge against `mem_limit` now includes its index entries.
 
 ### Changed
 

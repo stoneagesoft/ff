@@ -409,19 +409,22 @@ into that same per-word heap.
 
 This decision shapes several other parts of the engine:
 
-- **In-place growth doesn't move addresses.** A word's heap can
-  `realloc` itself larger as the body extends (`,`, `allot`,
-  post-`;` `does>`-clause attachment) without disturbing the addresses
-  baked into any other word's compiled bytecode. A contiguous heap
-  could not grow without invalidating every cross-reference baked
-  during earlier compilations.
+- **In-place growth doesn't move addresses.** A word's heap can grow
+  as the body extends (`,`, `allot`, post-`;` `does>`-clause
+  attachment) without disturbing the addresses baked into any other
+  word's compiled bytecode. A contiguous heap could not grow without
+  invalidating every cross-reference baked during earlier compilations.
+  A heap that is the arena's newest allocation — the definition being
+  compiled, a data word being filled — grows where it lies; one that
+  isn't moves to a fresh region, and the copy it leaves behind is
+  reclaimed only when words are removed.
 
 - **`forget` releases memory cleanly.** Word heaps are carved from a
-  slab arena, and each word records the arena position it started at.
-  When `forget name` cascades through everything defined after
-  `name`, the arena rolls back to where `name` began — slabs made since
-  are freed, and the one it started in is rewound — so a define/forget
-  cycle holds memory steady. Forget cascades for the same reason it
+  slab arena, and each heap records where its region in the arena ends.
+  When `forget name` cascades through everything defined after `name`,
+  the arena rolls back to the end of the last heap still in use — slabs
+  made since are freed, and the one it ends in is rewound — so a
+  define/forget cycle holds memory steady. Forget cascades for the same reason it
   does in standard Forth (later words may have baked in addresses
   pointing at earlier words' bytecode entry points). A definition that
   fails to compile is removed the same way (see *Compiling a
@@ -1134,10 +1137,15 @@ struct ff_dict
     size_t      count;
     size_t      capacity;        /* grows by doubling */
 
+    /* The same words sorted by address: `execute`'s xt check under
+       FF_SAFE_MEM is a binary search. */
+    ff_word_t **by_addr;
+
     /* Hash buckets: each bucket is a singly-linked list (newest first)
        threaded through ff_word::next_bucket. */
     ff_word_t **buckets;
-    size_t      bucket_count;    /* power of two — masking replaces modulo */
+    size_t      bucket_count;    /* power of two — masking replaces modulo;
+                                    doubles once it holds more words */
 
     /* Static pool: one big calloc holding all built-in word structs.
        Each entry carries FF_WORD_STATIC so ff_word_free skips it; the
@@ -1155,14 +1163,15 @@ case and every other byte as it is, so `Dup` finds `dup` but `É` is not
 `é`. On a hit the word's `FF_WORD_USED` flag is set
 — `wordsunused` consults it to report dead definitions.
 
-**Append** (`ff_dict_append`) puts the word at the end of `words` and
-links it at the head of its hash bucket.
+**Append** (`ff_dict_append`) puts the word at the end of `words`, in
+place in `by_addr`, and at the head of its hash bucket; the table
+doubles once it holds more words than buckets, so chains stay short.
 
 **Forget** removes the named word and every word defined after it,
 truncating `words` and rebuilding `buckets` from scratch. It then hands
-the arena back from where the forgotten word began, stopping short of
-any remaining word's heap: a definition that went on growing after a
-word was created between its `[` and `]` has its heap past that point.
+the arena back past the end of the last heap still in use — a
+definition that went on growing after a word was created between its
+`[` and `]` can end beyond words removed with it.
 
 **Remove** (`ff_dict_remove`) takes out one word and leaves the words
 after it in place. The compiler uses it to drop a definition that failed:
@@ -1498,10 +1507,14 @@ extended.
 string arena, so the checks recognise it; the original is memory they
 don't track (and a built-in's name may be read-only).
 
-Word heaps are found by binary search over a sorted interval index,
-rebuilt after the dictionary changes; `ff_word_valid` scans the
-dictionary. Hot interpretive loops slow by roughly 10-20 % under the
-flag; tight `@`/`!`-heavy loops slow more.
+Word heaps are found by binary search over an index of their regions
+that the arena keeps sorted as heaps are allocated, grown, trimmed and
+freed, and an xt by binary search over `by_addr`: a check costs
+O(log N) however the dictionary changes in between. (The index used to
+be rebuilt and re-sorted after every change, so defining words and
+checking addresses in turn took quadratic time.) Hot interpretive loops
+slow by roughly 10-20 % under the flag; tight `@`/`!`-heavy loops slow
+more.
 
 ### What is NOT covered
 

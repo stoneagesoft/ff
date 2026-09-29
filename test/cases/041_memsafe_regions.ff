@@ -1,0 +1,30 @@
+\ ff-test: lines
+\ The FF_SAFE_MEM checks find the word heap an address lies in through an
+\ index the arena keeps up to date as heaps are allocated, grown, trimmed
+\ and freed. It used to be rebuilt and re-sorted after every change, so
+\ defining words and checking addresses in turn took quadratic time.
+\ Runs only in FF_SAFE_MEM builds.
+
+: p 32 emit . ;
+create cz 0 ,  here cz -  constant cell
+
+\ A data word that grows while it is the newest allocation grows where
+\ it lies, so an address into it stays good. It used to move, leaving
+\ the address behind.
+: fill 0 do i , loop ;
+create t 1 ,
+t
+200 fill
+@ p cr
+
+\ One trimmed to its size ends there.
+variable x
+x cell + @
+x @ p cr
+
+\ The heap, and the xt, of a forgotten word are gone.
+create u 5 ,  u  forget u
+@
+: gone ;  ' gone  forget gone
+execute
+clear

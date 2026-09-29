@@ -47,41 +47,35 @@ void ff_heap_init(ff_heap_t *h)
     h->last_op = FF_OP_NONE;
 }
 
+/* Forward decls — implementations live in ff_dict.c next to the
+   arena struct definition. */
+extern void ff_arena_refuse(ff_arena_t *a, size_t bytes);
+extern bool ff_arena_heap_grow(ff_arena_t *a, ff_heap_t *h, size_t want,
+                               size_t need);
+extern void ff_arena_heap_trim(ff_arena_t *a, ff_heap_t *h);
+extern void ff_arena_heap_drop(ff_arena_t *a, const ff_heap_t *h);
+
 /** @copydoc ff_heap_destroy */
 void ff_heap_destroy(ff_heap_t *h)
 {
     /* Arena-owned heaps don't free their data here — the arena
-       lifetime is bound to ff_dict_destroy. */
+       lifetime is bound to ff_dict_destroy — but leave its index. */
     if (h->arena == NULL)
         free(h->data);
+    else
+        ff_arena_heap_drop(h->arena, h);
     memset(h, 0, sizeof(*h));
 }
-
-/* Forward decls — implementations live in ff_dict.c next to the
-   arena struct definition. */
-extern void *ff_arena_alloc(ff_arena_t *a, size_t bytes);
-extern bool  ff_arena_fits(const ff_arena_t *a, size_t bytes);
-extern void  ff_arena_refuse(ff_arena_t *a, size_t bytes);
-extern void  ff_arena_trim(ff_arena_t *a, void *region, size_t old_bytes,
-                           size_t new_bytes);
 
 /** @copydoc ff_heap_trim */
 void ff_heap_trim(ff_heap_t *h)
 {
     if (!h->arena || h->capacity == 0 || h->capacity == h->size)
         return;
-    /* Ask the arena to shrink the reservation in place. The arena
-       no-ops the request when this region isn't at its current bump
-       point (i.e. another word has allocated since this one grew). */
-    size_t old_bytes = h->capacity * sizeof(ff_int_t);
-    size_t new_bytes = h->size * sizeof(ff_int_t);
-    ff_arena_trim(h->arena, h->data, old_bytes, new_bytes);
-    h->capacity = h->size;
-    /* Capacity shrank, so the FF_SAFE_MEM interval index (which keys the
-       upper bound on capacity) is now stale and over-permissive. Bump the
-       mutation counter so it rebuilds before the next address check. */
-    if (h->mutation_seq_p)
-        ++*h->mutation_seq_p;
+    /* The arena takes the freed tail back only if this region is its
+       newest allocation; either way the capacity — and the region the
+       FF_SAFE_MEM checks allow — shrinks to the size. */
+    ff_arena_heap_trim(h->arena, h);
 }
 
 /** @copydoc ff_heap_grow */
@@ -107,40 +101,19 @@ bool ff_heap_grow(ff_heap_t *h, size_t extra)
         }
         nc = doubled;
     }
-    /* Doubling may overshoot what is representable, or what the memory
-       limit leaves room for, when the exact need would still fit. */
-    if (nc > SIZE_MAX / sizeof(ff_int_t)
-            || (h->arena && !ff_arena_fits(h->arena, nc * sizeof(ff_int_t))))
+    /* Doubling may overshoot what is representable. What the memory
+       limit leaves room for the arena decides: a request that fits
+       shouldn't fail for the slack after it. */
+    if (nc > SIZE_MAX / sizeof(ff_int_t))
         nc = need;
-
-    ff_int_t *old_data = h->data;
-    ff_int_t *nd;
     if (h->arena)
-    {
-        /* Allocate a fresh region from the arena and copy the live
-           prefix over. The old region stays in its slab as wasted
-           space — acceptable internal fragmentation in exchange for
-           the malloc-count win when many small words are defined. */
-        nd = (ff_int_t *)ff_arena_alloc(h->arena, nc * sizeof(ff_int_t));
-        if (!nd)
-            return false;
-        if (h->size && old_data)
-            memcpy(nd, old_data, h->size * sizeof(ff_int_t));
-    }
-    else
-    {
-        nd = (ff_int_t *)realloc(old_data, nc * sizeof(ff_int_t));
-        if (!nd)
-            return false;
-    }
+        return ff_arena_heap_grow(h->arena, h, nc, need);
+
+    ff_int_t *nd = (ff_int_t *)realloc(h->data, nc * sizeof(ff_int_t));
+    if (!nd)
+        return false;
     h->data = nd;
     h->capacity = nc;
-
-    /* Realloc / arena-relocation moves the buffer; the dict's sorted
-       interval index is keyed on (lo, hi) pairs, so bump the mutation
-       counter to force a rebuild on the next ff_addr_valid call. */
-    if (h->mutation_seq_p && (h->data != old_data || extra))
-        ++*h->mutation_seq_p;
     return true;
 }
 
