@@ -16,6 +16,7 @@
  */
 
 #include "ff_p.h"
+#include "ff_opcode_meta_p.h"
 #include "ff_real_p.h"
 
 #include <fort/fort.h>
@@ -547,7 +548,7 @@ static ff_int_t ff_throw_from_error(ff_error_t code)
         case FF_ERR_NOT_IN_DEF:   return FF_THROW_COMPILE_ONLY;
         case FF_ERR_FORGET_PROT:  return FF_THROW_BAD_FORGET;
         case FF_ERR_UNSUPPORTED:  return FF_THROW_UNSUPPORTED;
-        case FF_ERR_SCOPE_RSTACK: return FF_THROW_RSTACK_IMBAL;
+        case FF_ERR_RSTACK_IMBAL: return FF_THROW_RSTACK_IMBAL;
         case FF_ERR_ABORTED:      return FF_THROW_INTERRUPT;
         case FF_ERR_FILE_IO:      return FF_THROW_FILE_IO;
         case FF_ERR_OOM:          return FF_THROW_ALLOCATE;
@@ -585,7 +586,7 @@ static ff_error_t ff_error_from_throw(ff_int_t n)
         case FF_THROW_CS_MISMATCH:
         case FF_THROW_BAD_ARG:
         case FF_THROW_NESTING:       return FF_ERR_MALFORMED;
-        case FF_THROW_RSTACK_IMBAL:  return FF_ERR_SCOPE_RSTACK;
+        case FF_THROW_RSTACK_IMBAL:  return FF_ERR_RSTACK_IMBAL;
         case FF_THROW_FILE_IO:       return FF_ERR_FILE_IO;
         case FF_THROW_ALLOCATE:      return FF_ERR_OOM;
         default:
@@ -1121,6 +1122,11 @@ static void ff_compile_scope_unwind(ff_t *ff, int from, int to)
  * they were a return frame. `does>` also ends the running word, so it
  * may not stand where that would skip a loop's or a scope's cleanup.
  *
+ * The built-ins whose code carries a cell the compiler fills in —
+ * `(lit)`'s value, `branch`'s offset, `(xdo)`'s exit address — can't be
+ * compiled by name: with no such cell, they took the next word's code
+ * for it, and jumped by it.
+ *
  * @param ff Engine.
  * @param w  Word to call.
  * @return false, with the error raised, if @p w can't be compiled here.
@@ -1128,6 +1134,14 @@ static void ff_compile_scope_unwind(ff_t *ff, int from, int to)
 static bool ff_compile_call(ff_t *ff, const ff_word_t *w)
 {
     ff_heap_t *h = &ff->compiling->heap;
+
+    ff_op_layout_t layout = ff_opcode_layout(w->opcode);
+    if (layout != FF_OP_LAYOUT_NONE && layout != FF_OP_LAYOUT_WORD)
+    {
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                  "'%s' is internal: only the compiler compiles it.", w->name);
+        return false;
+    }
 
     if (w->opcode == FF_OP_EXIT)
     {
@@ -1791,13 +1805,24 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
        slot hands the caller's value back. The push is checked like any
        other: `catch` and native words re-enter here once per level. */
     ff_int_t *ip = NULL;
+
+    /* Push @p v onto R as a cell of kind @p k (ff_rkind_t), which an
+       FF_SAFE_MEM build records for _FF_RKIND below. Every push onto R
+       goes through here, so a cell's kind is always its latest push's. */
+#if FF_SAFE_MEM
+    #define _FF_RPUSH(v, k) \
+        do { ff->r_kind[R->top] = (uint8_t)(k); ff_stack_push(R, (v)); } while (0)
+#else
+    #define _FF_RPUSH(v, k)  ff_stack_push(R, (v))
+#endif
+
     if (ff_unlikely(R->top + 2 > FF_STACK_SIZE))
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER,
                   "Return stack overflow: %d item(s) would not fit.", 2);
     else
     {
-        ff_stack_push(R, 0);
-        ff_stack_push(R, (ff_int_t)(intptr_t)prev_cur_word);
+        _FF_RPUSH(0, FF_RK_IP);
+        _FF_RPUSH((ff_int_t)(intptr_t)prev_cur_word, FF_RK_WORD);
         ip = w->stub;
     }
 
@@ -2133,11 +2158,34 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
        stand-alone-misuse. There is deliberately no trusted variant of
        _FF_RSO: how deep NEST / DO / DOES_RUNTIME push depends on the
        program's recursion depth, so an overflow is always a
-       user-reachable failure, never an engine bug. */
-#if FF_R_TRUSTED
+       user-reachable failure, never an engine bug. FF_SAFE_MEM keeps the
+       checks: there the code isn't trusted. */
+#if FF_R_TRUSTED && !FF_SAFE_MEM
     #define _FF_RSL_T(n)  ((void)0)
 #else
     #define _FF_RSL_T(n)  _FF_RSL(n)
+#endif
+
+    /* FF_SAFE_MEM: cell @p i from the top of R (which holds more than
+       @p i cells) must be of kind @p k, pushed by the interpreter for
+       what reads it now. A return, `leave` and a loop's back edge check
+       the cells they follow or change; one that finds a cell a program
+       pushed with `>r`, or a frame it took apart, raises -25 instead of
+       going wherever that cell says. */
+#if FF_SAFE_MEM
+    #define _FF_RKIND(i, k) \
+        do { \
+            if (ff_unlikely(ff->r_kind[R->top - 1 - (i)] != (k))) \
+            { \
+                _FF_SYNC(); \
+                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_IMBAL, \
+                          "Return stack imbalance: >r without r>, " \
+                          "or a return frame taken apart."); \
+                goto done; \
+            } \
+        } while (0)
+#else
+    #define _FF_RKIND(i, k)  ((void)0)
 #endif
 
     #define _FF_NEXT()    break
@@ -2278,6 +2326,8 @@ done:
     #undef _FF_RSL
     #undef _FF_RSO
     #undef _FF_RSL_T
+    #undef _FF_RPUSH
+    #undef _FF_RKIND
     #undef _FF_COMPILING
     #undef _FF_NEED_DEF
     #undef _FF_CHECK_THROWN
@@ -2432,9 +2482,6 @@ static const char *ff_region_end(const ff_t *ff, const char *a,
     const char *lo = (const char *)ff->stack.data;
     if (a >= lo && a < lo + sizeof(ff->stack.data))
         return lo + sizeof(ff->stack.data);
-    lo = (const char *)ff->r_stack.data;
-    if (a >= lo && a < lo + sizeof(ff->r_stack.data))
-        return lo + sizeof(ff->r_stack.data);
     for (const ff_pad_slab_t *sl = ff->pad; sl; sl = sl->next)
         if (a >= sl->data && a < sl->data + sl->used)
             return sl->data + sl->used;
@@ -2450,7 +2497,7 @@ static const char *ff_region_end(const ff_t *ff, const char *a,
 /** @copydoc ff_addr_valid_dict */
 bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes)
 {
-    /* Stacks and pad are handled inline by ff_addr_valid; this
+    /* The data stack and pad are handled inline by ff_addr_valid; this
        function only covers the dictionary-heaps binary search. The
        NULL/zero/wrap guards are duplicated here so embedders that
        reach this symbol directly still get a safe answer. */

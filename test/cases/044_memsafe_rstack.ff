@@ -1,0 +1,31 @@
+\ ff-test: lines
+\ With FF_SAFE_MEM the interpreter follows only the return-stack cells
+\ it pushed itself. A return, `leave` or a loop's back edge that meets a
+\ cell a program pushed with `>r`, or a frame it took apart, raises -25
+\ (return stack imbalance). They used to go wherever the cells said:
+\ `16 >r 16 >r` in a definition forged its return address, and the host
+\ crashed. Runs only in FF_SAFE_MEM builds.
+
+: p 32 emit . ;
+
+\ A return through cells pushed with >r.
+: forge 16 >r 16 >r ;
+forge
+' forge catch p cr
+: refill r> r> 2drop 16 >r 16 >r ;
+refill
+
+\ A loop whose body took its frame apart, and a leave with a cell on top.
+: unframe 5 0 do r> r> r> drop drop drop loop ;
+unframe
+: leave-late 5 0 do 1 >r leave loop ;
+leave-late
+
+\ The frames the interpreter pushed still work: dropping a whole one
+\ returns to the caller's caller, and >r ... r> balanced in a loop body
+\ is fine.
+: skip r> r> 2drop ;
+: caller skip 99 p ;
+caller 7 p cr
+: balanced 3 0 do i >r r> p loop ;
+balanced cr

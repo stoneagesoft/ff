@@ -1,12 +1,12 @@
-prefix=@CMAKE_INSTALL_PREFIX@
+prefix=${pcfiledir}/@FF_PC_PREFIX@
 exec_prefix=${prefix}
-libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
-includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+libdir=${pcfiledir}/..
+includedir=${pcfiledir}/@FF_PC_INCLUDEDIR@
 
 Name: ff
 Description: Compact, embeddable Forth interpreter
 URL: https://github.com/mikhailborisov/ff
 Version: @PROJECT_VERSION@
-Libs: -L${libdir} -lff
-Libs.private: -lm -lpthread
+Libs: -L${libdir} @FF_PC_LIBS@
+@FF_PC_LIBS_PRIVATE@
 Cflags: -I${includedir}/ff -I${includedir}

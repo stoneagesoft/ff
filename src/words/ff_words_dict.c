@@ -145,8 +145,6 @@ void ff_w_man_impl(ff_t *ff)
     ff_print_manual(ff, w);
 }
 
-void ff_dump_heap_cells(ff_t *ff, const ff_heap_t *h);
-
 void ff_w_dump_word_impl(ff_t *ff)
 {
     const ff_word_t *w = ff_parse_word(ff, "dump-word");
@@ -176,63 +174,8 @@ void ff_w_dump_word_impl(ff_t *ff)
     ff_printf(ff, "%s", (const char *)ft_to_u8string(table));
     ft_destroy_table(table);
 
-    ff_dump_heap_cells(ff, &w->heap);
-}
-
-void ff_dump_heap_cells(ff_t *ff, const ff_heap_t *h)
-{
-    if (h->size == 0)
-        return;
-
-    const char *addr = (const char *)h->data;
-    size_t size = h->size * sizeof(ff_int_t);
-
-    ft_table_t *table = ft_create_table();
-    ft_set_border_style(table, FT_SOLID_ROUND_STYLE);
-    ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
-    ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
-    ft_set_cell_prop(table, 0, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
-    ft_u8write_ln(table,
-                  "",
-                  "0  1  2  3  4  5  6  7   8  9  A  B  C  D  E  F ",
-                  "0123456789ABCDEF");
-
-    const char *p1 = addr;
-    const char *p2 = addr + size - 1;
-    for (; p1 <= p2; p1 += 16)
-    {
-        char addr_buf[20];
-        snprintf(addr_buf, sizeof(addr_buf), "%0*" PRIxPTR,
-#ifdef FF_32BIT
-                 8,
-#else
-                 16,
-#endif
-                 (uintptr_t)p1);
-
-        char hex[49];
-        memset(hex, 0, sizeof(hex));
-        char *dst = hex;
-        for (const char *p = p1; p - p1 < 16 && p <= p2; ++p)
-        {
-            dst += snprintf(dst, sizeof(hex) - (dst - hex), "%02X", (uint8_t)*p);
-            if (p - p1 == 7)
-                *dst++ = ' ';
-            if (p - p1 < 15)
-                *dst++ = ' ';
-        }
-
-        char ascii[17];
-        memset(ascii, 0, sizeof(ascii));
-        dst = ascii;
-        for (const char *p = p1; p - p1 < 16 && p <= p2; ++p, ++dst)
-            *dst = (*p < 0x20 || (unsigned char)*p > 0x7E) ? '.' : *p;
-
-        ft_u8write_ln(table, addr_buf, hex, ascii);
-    }
-
-    ff_printf(ff, "%s", (const char *)ft_to_u8string(table));
-    ft_destroy_table(table);
+    ff_dump_bytes(ff, (const char *)w->heap.data,
+                  w->heap.size * sizeof(ff_int_t));
 }
 
 /* The built-in word @p opcode runs as, for naming it; NULL for an

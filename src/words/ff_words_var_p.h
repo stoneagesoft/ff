@@ -164,8 +164,8 @@ case FF_OP_DEFER_RUNTIME:
         _FF_RSO(2);
         if (ff->state & FF_STATE_BACKTRACE)
             ff_bt_stack_push(BT, ff->cur_word);
-        ff_stack_push(R, (ff_int_t)(intptr_t)ip);
-        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
+        _FF_RPUSH((ff_int_t)(intptr_t)ip, FF_RK_IP);
+        _FF_RPUSH((ff_int_t)(intptr_t)ff->cur_word, FF_RK_WORD);
         ff->cur_word = target;
         ip = target->stub;
     }

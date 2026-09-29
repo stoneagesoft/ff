@@ -315,6 +315,22 @@ the project follows [Semantic Versioning](https://semver.org/).
   gives; a script's `forget` could remove the host's words. It returns
   `FF_ERR_MALFORMED` for such a name now, warns of shadowing, and
   `forget` leaves registered words in place.
+- **`FF_SAFE_MEM` let a program take control of the host.** A return went
+  wherever the return stack said, so `16 >r 16 >r` in a definition set
+  its return address, and a `leave` or a loop's back edge trusted the
+  cells they met just the same. In safe builds the engine now records
+  what each return-stack cell holds: a return, `leave` or back edge
+  that meets a cell a program pushed with `>r`, or a frame it took
+  apart, raises -25 (`FF_ERR_RSTACK_IMBAL`). Frames the interpreter
+  pushed still work wherever they are (`r> r> 2drop` still returns to
+  the caller's caller). The return stack is no longer memory `@` and
+  `!` accept, and `FF_R_TRUSTED` keeps its checks in a safe build.
+- The built-ins whose code carries a cell the compiler fills in —
+  `(lit)`, `(flit)`, `(strlit)`, `branch`, `?branch`, `(xdo)`, `(x?do)`,
+  `(xloop)`, `(+xloop)` — could be compiled by name, and then took the
+  next word's code for that cell: `branch` jumped by an opcode number,
+  `(xdo)` pushed a loop with a made-up exit. Compiling one by name is
+  now an error (`FF_ERR_MALFORMED`) in every build.
 
 ### Changed
 
@@ -421,6 +437,32 @@ the project follows [Semantic Versioning](https://semver.org/).
   `ff_api_test` covers engine state across calls. CI fails if no tests
   are found; the expected-output files were being excluded by
   `.gitignore`, so CI had run no tests at all.
+- `FF_ERR_SCOPE_RSTACK` is renamed `FF_ERR_RSTACK_IMBAL`: -25 is no
+  longer raised only at `}`.
+- A build that names no `CMAKE_BUILD_TYPE` is a Release build. Every
+  non-Debug build used to get `-O3 -g0` on top of its own flags, which
+  overrode a `-g` or `-O` given in `CMAKE_C_FLAGS` — and in the Debian
+  package, `dpkg-buildflags`' `-g`, leaving the debug symbols out.
+- `ff.pc` links what is installed: `-lff` with the shared library,
+  otherwise `-lff_static -lm`. It named `-lff`, which the default
+  static-only install doesn't have, and put `-lm` in `Libs.private`,
+  which pkg-config reads only for `--static`. Its paths are relative to
+  the file, so it works for an install that was moved or made with
+  `cmake --install --prefix`. The libraries no longer link pthread,
+  which ff doesn't use, and configuring no longer needs pkg-config.
+- `ffsh FILE...` runs the files, as `load` does, and exits with a
+  non-zero status if one fails. `ffsh` reads a line of any length — one
+  past 4 KB was evaluated in two pieces, so a word could be cut in two
+  — prints warnings and `trace` output (both went nowhere), and checks
+  `ff_new()` for NULL.
+- Fuzzing: `-DFF_BUILD_FUZZ=ON -DFF_SAFE_MEM=ON` with Clang configures
+  the fuzzer by itself. The documented command failed at configure time:
+  `-fsanitize=fuzzer` in `CMAKE_C_FLAGS` linked libFuzzer's `main()`
+  into CMake's compiler check. UBSan reports are fatal now, and the
+  build writes `ff.dict`, a dictionary of every word. The harness counts
+  its opcode budget per input — counted per line, it ran about ten
+  inputs a second — formats the output it drops, releases strings after
+  a blank line, and has native words that call back into the engine.
 
 ### Added (language)
 

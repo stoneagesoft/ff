@@ -19,8 +19,8 @@ case FF_OP_DOES_RUNTIME:
         _FF_SO(1);
         if (ff->state & FF_STATE_BACKTRACE)
             ff_bt_stack_push(BT, ff->cur_word);
-        ff_stack_push(R, (ff_int_t)(intptr_t)ip);
-        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
+        _FF_RPUSH((ff_int_t)(intptr_t)ip, FF_RK_IP);
+        _FF_RPUSH((ff_int_t)(intptr_t)ff->cur_word, FF_RK_WORD);
         ff->cur_word = nw;
         ip = nw->does;
         _FF_PUSH_PTR(nw->heap.data);
@@ -290,8 +290,8 @@ case FF_OP_EXECUTE:
         _FF_DROP();
         if (ff->state & FF_STATE_BACKTRACE)
             ff_bt_stack_push(BT, ff->cur_word);
-        ff_stack_push(R, (ff_int_t)(intptr_t)ip);
-        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
+        _FF_RPUSH((ff_int_t)(intptr_t)ip, FF_RK_IP);
+        _FF_RPUSH((ff_int_t)(intptr_t)ff->cur_word, FF_RK_WORD);
         ff->cur_word = tw;
         ip = tw->stub;
     }
@@ -329,6 +329,8 @@ case FF_OP_DOES:
         goto done;
     }
     _FF_RSL_T(2);
+    _FF_RKIND(0, FF_RK_WORD);
+    _FF_RKIND(1, FF_RK_IP);
     ff_dict_top(&ff->dict)->does = ip;
     ff_word_set_opcode(ff_dict_top(&ff->dict), FF_OP_DOES_RUNTIME);
     /* Simulate EXIT to bail out of the definition: pop the 2-cell

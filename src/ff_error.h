@@ -71,13 +71,14 @@ typedef enum ff_error_code
     FF_ERR_NON_UNIQUE,      /**< Newly defined word shadows an existing name (warning). */
     FF_ERR_NOT_IN_DEF,      /**< Compiler-only word invoked outside a `:` definition. */
     FF_ERR_OOM,             /**< Memory allocator returned NULL. */
+    FF_ERR_RSTACK_IMBAL,    /**< Return stack unbalanced: at `}`, or (FF_SAFE_MEM) where a return, `leave`
+                                 or loop meets cells a program pushed with `>r` or a frame taken apart. */
     FF_ERR_RSTACK_OVER,     /**< Return stack overflow. */
     FF_ERR_RSTACK_UNDER,    /**< Return stack underflow. */
     FF_ERR_RUN_COMMENT,     /**< Source ended inside an open `(` comment. */
     FF_ERR_RUN_STRING,      /**< Source ended inside an open string literal. */
     FF_ERR_SCOPE_ARITY,     /**< `}` reached with a cell count the signature didn't declare. */
     FF_ERR_SCOPE_OVER,      /**< Open `{` scopes exceeded FF_SCOPE_DEPTH. */
-    FF_ERR_SCOPE_RSTACK,    /**< `}` reached with the return stack unbalanced. */
     FF_ERR_SCOPE_SIG,       /**< Malformed `{ ( … -- … )` signature. */
     FF_ERR_STACK_OVER,      /**< Data stack overflow. */
     FF_ERR_STACK_UNDER,     /**< Data stack underflow. */

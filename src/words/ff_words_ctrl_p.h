@@ -18,8 +18,8 @@ case FF_OP_NEST:
         ff_word_t *nw = (ff_word_t *)(intptr_t)*ip++;
         if (ff->state & FF_STATE_BACKTRACE)
             ff_bt_stack_push(BT, ff->cur_word);
-        ff_stack_push(R, (ff_int_t)(intptr_t)ip);
-        ff_stack_push(R, (ff_int_t)(intptr_t)ff->cur_word);
+        _FF_RPUSH((ff_int_t)(intptr_t)ip, FF_RK_IP);
+        _FF_RPUSH((ff_int_t)(intptr_t)ff->cur_word, FF_RK_WORD);
         ff->cur_word = nw;
         ip = nw->heap.data;
     }
@@ -44,6 +44,8 @@ case FF_OP_TNEST:
 /** ( -- )  R: ( ret cur -- )  Return from a colon-def. */
 case FF_OP_EXIT:
     _FF_RSL_T(2);
+    _FF_RKIND(0, FF_RK_WORD);
+    _FF_RKIND(1, FF_RK_IP);
     ff->cur_word = (ff_word_t *)(intptr_t)*ff_tos(R);
     R->top--;
     ip = (ff_int_t *)(intptr_t)*ff_tos(R);
@@ -79,10 +81,10 @@ case FF_OP_QBRANCH:
 case FF_OP_XDO:
     _FF_SL(2);
     _FF_RSO(3);
-    ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
+    _FF_RPUSH((ff_int_t)(intptr_t)(ip + *ip), FF_RK_LEAVE);
     ip++;
-    ff_stack_push(R, _FF_NOS);
-    ff_stack_push(R, tos);
+    _FF_RPUSH(_FF_NOS, FF_RK_DATA);
+    _FF_RPUSH(tos, FF_RK_DATA);
     _FF_DROPN(2);
     _FF_NEXT();
 
@@ -97,10 +99,10 @@ case FF_OP_XQDO:
     else
     {
         _FF_RSO(3);
-        ff_stack_push(R, (ff_int_t)(intptr_t)(ip + *ip));
+        _FF_RPUSH((ff_int_t)(intptr_t)(ip + *ip), FF_RK_LEAVE);
         ip++;
-        ff_stack_push(R, _FF_NOS);
-        ff_stack_push(R, tos);
+        _FF_RPUSH(_FF_NOS, FF_RK_DATA);
+        _FF_RPUSH(tos, FF_RK_DATA);
         _FF_DROPN(2);
     }
     _FF_NEXT();
@@ -108,6 +110,7 @@ case FF_OP_XQDO:
 /** ( -- )  Runtime LOOP back-edge: increment index, branch unless done. */
 case FF_OP_XLOOP:
     _FF_RSL_T(3);
+    _FF_RKIND(0, FF_RK_DATA);
     *ff_tos(R) += 1;
     if (*ff_tos(R) >= *ff_nos(R))
     {
@@ -128,6 +131,7 @@ case FF_OP_XLOOP:
 case FF_OP_PXLOOP:
     _FF_SL(1);
     _FF_RSL_T(3);
+    _FF_RKIND(0, FF_RK_DATA);
     {
         /* In unsigned arithmetic, so a step wraps instead of overflowing.
            The boundary was crossed iff index - limit changed sign while
@@ -170,6 +174,7 @@ case FF_OP_I_ADD:
     summing loop `0 N 0 do  i +  loop`. */
 case FF_OP_I_ADD_LOOP:
     _FF_RSL_T(3);
+    _FF_RKIND(0, FF_RK_DATA);
     _FF_SL(1);
     tos += *ff_tos(R);          /* i + */
     *ff_tos(R) += 1;            /* index++ */
@@ -188,6 +193,7 @@ case FF_OP_I_ADD_LOOP:
 /** ( -- )  `leave` — exit innermost counted loop early. */
 case FF_OP_LEAVE:
     _FF_RSL_T(3);
+    _FF_RKIND(2, FF_RK_LEAVE);
     ip = (ff_int_t *)(intptr_t)*ff_sat(R, 2);
     ff_stack_popn(R, 3);
     _FF_NEXT();

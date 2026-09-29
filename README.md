@@ -135,7 +135,7 @@ int main(void)
 Build it against an installed *ff*:
 
 ```sh
-cc -lff main.c -o my_app
+cc main.c $(pkg-config --cflags --libs ff) -o my_app
 ```
 
 Or pick *ff* up via CMake:
@@ -300,10 +300,13 @@ cmake -B build -DFF_SAFE_MEM=ON
 ```
 
 Every address-consuming primitive then validates its pointer against
-the engine's tracked regions (any word's heap, the data and return
-stacks, the pad ring) and raises `FF_ERR_BAD_PTR` cleanly on a miss.
-See [doc/md/20-design.md](doc/md/20-design.md) for the threat model
-and what is — and isn't — covered.
+the engine's tracked regions (any word's heap, the data stack, the
+string arena) and raises `FF_ERR_BAD_PTR` cleanly on a miss, and the
+interpreter follows only the return frames and loop exits it pushed
+itself — a cell pushed with `>r` where a return expects its frame
+raises -25 (`FF_ERR_RSTACK_IMBAL`). See
+[doc/md/20-design.md](doc/md/20-design.md) for the threat model and
+what is — and isn't — covered.
 
 
 ## Repository layout
@@ -317,6 +320,7 @@ src/words/              Built-in word category files.
 src/3rdparty/           Vendored: fort (table rendering), md4c (markdown),
                         utf8 (UTF-8 helpers).
 examples/ffsh/          Reference Forth shell. Standalone CMake project.
+fuzz/                   libFuzzer harness (-DFF_BUILD_FUZZ=ON; see ff_eval_fuzz.c).
 test/cases/             Regression-test source pairs (.ff + expected .out).
 test/bench/             Benchmark sources + run.sh harness.
 doc/md/                 Reference-manual chapters (markdown).

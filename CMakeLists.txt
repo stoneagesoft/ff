@@ -31,7 +31,8 @@ endif()
 # in matched pairs (EXIT, XLOOP, LEAVE, I, J, …); `i` / `j` / `leave`
 # misused outside a loop then go unchecked. Overflow checks always stay:
 # recursion depth is up to the program. Embedder-facing FF_RSL in custom
-# native words is unaffected. ~5% on loop-heavy code.
+# native words is unaffected. ~5% on loop-heavy code. FF_SAFE_MEM keeps
+# the checks: code it runs isn't trusted.
 option(FF_R_TRUSTED "Drop redundant return-stack underflow checks in matched-pair opcodes." OFF)
 if(FF_R_TRUSTED)
     add_compile_definitions(FF_R_TRUSTED=1)
@@ -271,7 +272,28 @@ install(FILES
     COMPONENT development)
 
 # pkg-config support for non-CMake consumers. Generated at configure
-# time; consumers reach it via `pkg-config --cflags --libs ff`.
+# time; consumers reach it via `pkg-config --cflags --libs ff`. Its paths
+# are relative to the file, so the install can be moved or made with
+# `cmake --install --prefix`, as the CMake package can. It links the
+# shared library when there is one, else the archive — which needs libm
+# in Libs: pkg-config lists Libs.private only for --static.
+file(RELATIVE_PATH FF_PC_PREFIX
+     "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig" "${CMAKE_INSTALL_PREFIX}")
+file(RELATIVE_PATH FF_PC_INCLUDEDIR
+     "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig" "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
+string(REGEX REPLACE "/$" "" FF_PC_PREFIX "${FF_PC_PREFIX}")
+string(REGEX REPLACE "/$" "" FF_PC_INCLUDEDIR "${FF_PC_INCLUDEDIR}")
+set(_ff_pc_deps "")
+foreach(_ff_lib ${FF_LIBS})
+    string(APPEND _ff_pc_deps " -l${_ff_lib}")
+endforeach()
+if(TARGET ff_shared)
+    set(FF_PC_LIBS "-lff")
+    set(FF_PC_LIBS_PRIVATE "Libs.private:${_ff_pc_deps}")
+else()
+    set(FF_PC_LIBS "-lff_static${_ff_pc_deps}")
+    set(FF_PC_LIBS_PRIVATE "")
+endif()
 configure_file(
     "${CMAKE_SOURCE_DIR}/cmake/ff.pc.in"
     "${PROJECT_BINARY_DIR}/ff.pc"
@@ -303,9 +325,9 @@ if(FF_BUILD_EXAMPLES)
     add_subdirectory(examples/ffsh)
 endif()
 
-# libFuzzer harness. Off by default; enabling requires Clang plus the
-# `-fsanitize=fuzzer,address,undefined` flags (see fuzz/CMakeLists.txt
-# for the full invocation example).
+# libFuzzer harness. Off by default; enabling needs Clang and
+# FF_SAFE_MEM, and instruments the engine for the fuzzer (see
+# fuzz/ff_eval_fuzz.c for building and running it).
 option(FF_BUILD_FUZZ "Build the libFuzzer harness under fuzz/." OFF)
 if(FF_BUILD_FUZZ)
     add_subdirectory(fuzz)

@@ -36,3 +36,12 @@ defer hook
 tp "direct" cr
 5 ' literal execute
 clear ' (strlit) execute ' branch execute depth p cr
+
+\ Nor can those be compiled by name. With no operand of their own they
+\ took the next word's code for one: `(xdo)` pushed a loop that the
+\ return then took for its frame, `branch` jumped by an opcode.
+: bad1 (lit) ;
+: bad2 3 (xdo) . ;
+: bad3 branch dup ;
+: bad4 postpone (strlit) ; immediate
+: use bad4 ;

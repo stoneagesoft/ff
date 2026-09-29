@@ -88,6 +88,20 @@ typedef struct ff_pad_slab
 } ff_pad_slab_t;
 
 /**
+ * What a return-stack cell holds, kept in FF_SAFE_MEM builds
+ * (ff::r_kind). A return, `leave` and a loop's back edge act only on
+ * cells the interpreter pushed for them: a program's `>r` could
+ * otherwise forge where execution goes next.
+ */
+typedef enum
+{
+    FF_RK_DATA,     /**< A cell `>r` pushed, or a loop's limit or index. */
+    FF_RK_IP,       /**< A return frame's address; NULL returns to the host. */
+    FF_RK_WORD,     /**< A return frame's word, ff::cur_word to go back to. */
+    FF_RK_LEAVE,    /**< Where `leave` exits a loop to. */
+} ff_rkind_t;
+
+/**
  * @struct ff
  * @brief The interpreter instance.
  *
@@ -109,6 +123,9 @@ struct ff
 
     ff_stack_t stack;                   /**< Data stack. */
     ff_stack_t r_stack;                 /**< Return stack. */
+#if FF_SAFE_MEM
+    uint8_t r_kind[FF_STACK_SIZE];      /**< What each r_stack cell holds (ff_rkind_t). */
+#endif
     ff_bt_stack_t bt_stack;             /**< Back-trace stack (when FF_STATE_BACKTRACE is on). */
     ff_int_t *ip;                       /**< Current instruction pointer (NULL when not running). */
 
@@ -349,7 +366,7 @@ ff_word_t *ff_parse_word(ff_t *ff, const char *word);
  *
  * `ff_addr_valid` returns true when [addr, addr + bytes) lies entirely
  * inside one of the engine's tracked regions: the data stack, the
- * return stack, the string arena, or a word's heap. Ranges are checked
+ * string arena, or a word's heap. Ranges are checked
  * against capacity (not size), so a `here`-derived pointer into
  * freshly-allotted but as-yet-unwritten cells is accepted.
  * `ff_addr_writable` leaves out bytecode, which a program could
@@ -366,7 +383,7 @@ ff_word_t *ff_parse_word(ff_t *ff, const char *word);
  * @brief Out-of-line word-heap validator (slow path).
  *
  * Called by @ref ff_addr_valid below when the inline fast paths
- * (stacks + pad) miss. Embedders should normally call ff_addr_valid;
+ * (data stack + pad) miss. Embedders should normally call ff_addr_valid;
  * this is exposed mainly so its signature matches the inline.
  */
 bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes);
@@ -374,7 +391,7 @@ bool ff_addr_valid_dict(const ff_t *ff, const void *addr, size_t bytes);
 bool ff_word_valid(const ff_t *ff, const ff_word_t *w);
 
 /**
- * @brief End of the tracked region that contains @p addr — a stack, the
+ * @brief End of the tracked region that contains @p addr — the data stack, the
  *        live part of a string-arena slab, a word's heap — or NULL if no
  *        tracked region does.
  */
@@ -396,9 +413,9 @@ bool ff_str_valid(const ff_t *ff, const char *s);
 
 /**
  * @brief Range-validate @p addr / @p bytes against this engine's
- *        tracked regions: stacks, string arena, data word heaps.
+ *        tracked regions: data stack, string arena, word heaps.
  *
- * Inline because the stack and pad cases dominate hot-path checks
+ * Inline because the data-stack and pad cases dominate hot-path checks
  * under FF_SAFE_MEM — folding the range comparisons into the
  * caller lets the compiler hoist them out of inner loops. The
  * word-heap binary search stays out-of-line so call sites
@@ -415,18 +432,11 @@ static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
     if (ff_unlikely(end < a))
         return false;
 
-    /* Data stack: inline range check. */
+    /* Data stack: inline range check. (The return stack is no region:
+       a program writing there could forge where execution goes.) */
     {
         const char *lo = (const char *)ff->stack.data;
         const char *hi = lo + sizeof(ff->stack.data);
-        if (a >= lo && end <= hi)
-            return true;
-    }
-
-    /* Return stack: inline range check. */
-    {
-        const char *lo = (const char *)ff->r_stack.data;
-        const char *hi = lo + sizeof(ff->r_stack.data);
         if (a >= lo && end <= hi)
             return true;
     }

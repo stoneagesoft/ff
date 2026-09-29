@@ -557,6 +557,21 @@ static void test_dict_indexes(void)
     ff_free(ff);
 }
 
+/* Of the engine's own memory, a program may address the data stack but
+   not the return stack, whose cells say where execution goes: `@` and
+   `!` took any address in it. */
+static void test_return_stack_untracked(void)
+{
+    ff_t *ff = new_engine(10000000);
+
+    CHECK(ff_addr_valid(ff, ff->stack.data, sizeof(ff_int_t)));
+    CHECK(!ff_addr_valid(ff, ff->r_stack.data, sizeof(ff_int_t)));
+    CHECK(!ff_addr_writable(ff, ff->r_stack.data, sizeof(ff_int_t)));
+    CHECK(ff_addr_extent(ff, ff->r_stack.data) == NULL);
+
+    ff_free(ff);
+}
+
 static int g_non_unique;
 
 static int note_trace(void *ctx, ff_error_t e, const char *fmt, va_list args)
@@ -963,6 +978,7 @@ int main(void)
     test_native_stack();
     test_host_calls();
     test_dict_indexes();
+    test_return_stack_untracked();
     test_real_locale();
     test_register_checks();
     test_native_facilities();

@@ -18,6 +18,14 @@
 # and surfaced here only for use by the helpers below.
 ###########################################################################
 
+# A build that names no type is optimised, as Release. The flags are the
+# build type's: a type or CMAKE_C_FLAGS given (-g, say, or a distro's
+# own) are kept, where every non-Debug build used to get -O3 -g0 on top.
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING
+        "Build type: Debug, Release, RelWithDebInfo or MinSizeRel." FORCE)
+endif()
+
 string(COMPARE EQUAL "${CMAKE_BUILD_TYPE}" "Debug" FF_DEBUG)
 
 if(FF_WASM)
@@ -117,7 +125,6 @@ function(ff_dump_cmake_variables)
 endfunction()
 
 ff_header_dirs("${CMAKE_SOURCE_DIR}/src" FF_INCLUDES)
-set(FF_INCLUDES ${FF_INCLUDES} ${CMAKE_SOURCE_DIR}/src/ff/3rdparty)
 
 ###########
 # General #
@@ -220,25 +227,23 @@ else()
 
     if(FF_DEBUG)
         set(FF_C_FLAGS "${FF_C_FLAGS} -O0 -ggdb")
-        set(FF_CXX_FLAGS "${FF_C_FLAGS} -O0 -ggdb")
+        set(FF_CXX_FLAGS "${FF_CXX_FLAGS} -O0 -ggdb")
     elseif(FF_OS_WASM)
         add_compile_options(-O3 -g0)
         add_link_options(-O1 --no-optimize)
-    else()
-        set(FF_C_FLAGS "${FF_C_FLAGS} -O3 -g0")
-        set(FF_CXX_FLAGS "${FF_C_FLAGS} -O3 -g0")
     endif()
 endif()
 
+# libm, for the real words; MSVC's C runtime has it built in.
+if(NOT FF_OS_WASM AND NOT MSVC)
+    set(FF_LIBS ${FF_LIBS} m)
+endif()
 if(NOT FF_OS_WASM)
-    set(FF_LIBS ${FF_LIBS} pthread m)
     set(FF_DEFINES ${FF_DEFINES}
         -D_GNU_SOURCE
         -D_FILE_OFFSET_BITS=64
         -D_LARGEFILE64_SOURCE)
 endif()
-
-find_package(PkgConfig REQUIRED)
 
 
 ########

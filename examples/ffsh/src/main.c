@@ -1,11 +1,17 @@
 /*
  * ffsh --- fortissimo Forth shell.
  *
+ *   ffsh              read commands from stdin, a line at a time
+ *   ffsh FILE...      run the files in turn, as `load` does, and exit;
+ *                     the status is non-zero if one fails
+ *
  * Uses a minimal fgets-based line reader rather than GNU readline so the
  * same source builds on Linux, macOS, Windows/MinGW, Windows/Clang, and
  * Windows/MSVC without external dependencies. There is no in-line
  * editing or tab completion; each line is simply read from stdin and
- * appended to a per-user history file as it is evaluated.
+ * appended to a per-user history file as it is evaluated. Warnings (a
+ * word redefined, one with no manual) and `trace` output go to stderr,
+ * as errors do.
  *
  * Watchdog demo: Ctrl-C aborts a running evaluation via
  * ff_request_abort() (the async kill-flag path), and an optional
@@ -21,6 +27,7 @@
 #include <ff.h>
 #include <ff_platform.h>
 
+#include <limits.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -41,7 +48,7 @@
 #endif
 
 
-#define FFSH_LINE_SIZE  4096
+#define FFSH_LINE_SIZE  4096    /* initial line buffer; it grows */
 #define FFSH_PATH_SIZE  1024
 /* Final path = dir + path-separator + "history.ff" + NUL. Reserve 32
    bytes of slack so the directory buffer is strictly smaller than the
@@ -103,18 +110,44 @@ static const char *ffsh_history_path(void)
 }
 
 
+/* Read a line of any length: fgets() into a buffer that grows until the
+   line's end is in it. A fixed buffer split a long line in two, and each
+   half was evaluated on its own, cutting a word or a string in half.
+   Returns NULL at end of input. */
 static char *ffsh_readline(const char *prompt)
 {
-    static char buffer[FFSH_LINE_SIZE];
+    static char *buffer;
+    static size_t size;
 
     fputs(prompt, stdout);
     fflush(stdout);
 
-    if (!fgets(buffer, sizeof(buffer), stdin))
+    size_t len = 0;
+    for (;;)
+    {
+        if (size - len < 2)
+        {
+            size_t more = size ? size : FFSH_LINE_SIZE;
+            char *grown = (char *)realloc(buffer, size + more);
+            if (!grown)
+            {
+                fputs("ffsh: out of memory reading a line.\n", stderr);
+                return NULL;
+            }
+            buffer = grown;
+            size += more;
+        }
+        size_t room = size - len;
+        if (!fgets(buffer + len, room > INT_MAX ? INT_MAX : (int)room, stdin))
+            break;
+        len += strlen(buffer + len);
+        if (len > 0 && buffer[len - 1] == '\n')
+            break;
+    }
+    if (len == 0 && (feof(stdin) || ferror(stdin)))
         return NULL;
 
     /* Strip trailing \n and (on Windows) \r. */
-    size_t len = strlen(buffer);
     while (len > 0 && (buffer[len - 1] == '\n' || buffer[len - 1] == '\r'))
         buffer[--len] = '\0';
 
@@ -139,6 +172,20 @@ static int ffsh_vprintf(void *ctx, const char *fmt, va_list args)
     va_copy(args_copy, args);
     const int n = vprintf(fmt, args_copy);
     va_end(args_copy);
+
+    return n;
+}
+
+/* Warnings and `trace` output. Errors don't come here: ff_eval() returns
+   them, and the prompt loop prints them. */
+static int ffsh_vtracef(void *ctx, ff_error_t e, const char *fmt, va_list args)
+{
+    (void) ctx;
+
+    if (FF_ERR_SEV(e) == FF_SEV_WARNING)
+        fputs("Warning: ", stderr);
+    const int n = vfprintf(stderr, fmt, args);
+    fputc('\n', stderr);
 
     return n;
 }
@@ -208,11 +255,32 @@ static void ffsh_install_sigint(void)
 #endif
 }
 
+/* Run the files named on the command line, each as `load` would, and
+   stop at the first that fails. */
+static int ffsh_run_files(ff_t *ff, int n, char **paths, uint32_t timeout_ms)
+{
+    for (int i = 0; i < n; ++i)
+    {
+        g_wd.deadline_ms = timeout_ms ? ffsh_now_ms() + timeout_ms : 0;
+        g_in_eval = 1;
+        ff_error_t ec = ff_load(ff, paths[i]);
+        g_in_eval = 0;
+
+        if (ec != 0)
+        {
+            if (ff_err_line(ff) > 0)
+                fprintf(stderr, "%s:%d: %s\n",
+                        paths[i], ff_err_line(ff), ff_strerror(ff));
+            else
+                fprintf(stderr, "ffsh: %s\n", ff_strerror(ff));
+            return EXIT_FAILURE;
+        }
+    }
+    return EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
-    (void) argc;
-    (void) argv;
-
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
 
@@ -237,12 +305,17 @@ int main(int argc, char **argv)
     {
         .context           = &g_wd,
         .vprintf           = ffsh_vprintf,
-        .vtracef           = NULL,
+        .vtracef           = ffsh_vtracef,
         .watchdog          = timeout_ms ? ffsh_watchdog : NULL,
         .watchdog_interval = 4096
     };
 
     ff_t *ff = ff_new(&p);
+    if (!ff)
+    {
+        fputs("ffsh: out of memory.\n", stderr);
+        return EXIT_FAILURE;
+    }
     g_ff = ff;
 
     /* Load the embedded Forth prelude (see prelude.ff) before the first
@@ -254,6 +327,14 @@ int main(int argc, char **argv)
                 ff_strerror(ff));
 
     ffsh_install_sigint();
+
+    if (argc > 1)
+    {
+        int status = ffsh_run_files(ff, argc - 1, argv + 1, timeout_ms);
+        g_ff = NULL;
+        ff_free(ff);
+        return status;
+    }
 
     ff_printf(ff, "%s\n", ff_banner(ff));
     if (timeout_ms)

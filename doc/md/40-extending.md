@@ -363,10 +363,13 @@ int main(void)
 }
 ~~~
 
-Build against the installed library:
+Build against the installed library — for an install where pkg-config
+doesn't look, such as `/opt/ff`, first point `PKG_CONFIG_PATH` at its
+`lib/pkgconfig`:
 
 ~~~
-cc -I/opt/ff/include/ff my_ext.c -L/opt/ff/lib -lff_static -lm
+export PKG_CONFIG_PATH=/opt/ff/lib/pkgconfig
+cc my_ext.c $(pkg-config --cflags --libs ff) -o my_ext
 ~~~
 
 

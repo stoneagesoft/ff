@@ -782,7 +782,7 @@ stack of name→index maps with no cross-talk.
 
 At `}`, `FF_OP_SCOPE_EXIT` checks that the scope produced exactly its
 declared number of cells (`FF_ERR_SCOPE_ARITY` otherwise), asserts the
-return stack is back to its entry depth (`FF_ERR_SCOPE_RSTACK`), then
+return stack is back to its entry depth (`FF_ERR_RSTACK_IMBAL`), then
 slides the produced cells down over the consumed inputs with a single
 `memmove` and restores the floor.
 
@@ -1194,20 +1194,25 @@ reference from the def-table string literals (no `strdup`).
 The return stack (`ff->r_stack`) is a second `ff_stack_t` that serves
 three purposes:
 
-1. **Call/return**: when a colon-definition is entered (via
-   `FF_OP_NEST`), the caller's `ip` is pushed; `FF_OP_EXIT` pops it to
-   resume. A `NULL` return address signals the outermost level — the
-   word was called from C, not from another Forth word — and causes
-   `ff_exec` to return.
+1. **Call/return**: entering a word — `FF_OP_NEST` for a colon
+   definition, and `execute`, deferred words and `does>` words alike —
+   pushes a two-cell frame: the caller's `ip`, then the caller's word
+   (`ff->cur_word`, on top). `FF_OP_EXIT` pops both to resume. A `NULL`
+   return address signals the outermost level — the word was called
+   from C, not from another Forth word — and causes `ff_exec` to return.
 
-2. **Loop counters**: `FF_OP_XDO` pushes the loop limit, the loop index,
-   and the after-loop address. `FF_OP_XLOOP` and `FF_OP_PXLOOP` update
-   and test the index in place. `FF_OP_LEAVE` discards all three and
-   jumps past the loop.
+2. **Loop counters**: `FF_OP_XDO` pushes the after-loop address, the
+   loop limit and the loop index (on top). `FF_OP_XLOOP` and
+   `FF_OP_PXLOOP` update and test the index in place. `FF_OP_LEAVE`
+   discards all three and jumps to the after-loop address.
 
 3. **Temporary storage**: the words `>r`, `r>`, and `r@` let Forth code
    stash and retrieve values across calls that would otherwise discard
    them.
+
+A safe build records which of these each cell is, so that a program's
+`>r` can't pose as a frame or a loop (*Memory safety*, *The return
+stack*).
 
 
 ## Backtrace stack
@@ -1456,7 +1461,7 @@ engine is compiled:
 | `FF_SAFE_MEM` | Validates every address, string, execution token and file stream a word takes from the stack; see *Memory safety*. |
 | `FF_WITH_SYSTEM` | ON by default. OFF leaves out the `system` word, for a build that can't run commands whatever the host allows (or a C library without `system()`). |
 | `FF_WITH_FILES` | ON by default. OFF leaves out the file words (`fopen` … `stderr`) and `load`; the host's `ff_load()` stays. |
-| `FF_R_TRUSTED` | Drops the `_FF_RSL` underflow checks inside opcodes the compiler emits in matched pairs (`EXIT`, `XLOOP`, `PXLOOP`, `LEAVE`, `UNLOOP`, `LOOP_I`, `LOOP_J`, and the `i +` / `r@ +` superinstructions). Well-formed code can't fail them; the compiler rejects `leave` outside a loop, but `i` or `j` misused outside one then go unchecked. Overflow checks are never dropped, since recursion depth is up to the program. The embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. |
+| `FF_R_TRUSTED` | Drops the `_FF_RSL` underflow checks inside opcodes the compiler emits in matched pairs (`EXIT`, `XLOOP`, `PXLOOP`, `LEAVE`, `UNLOOP`, `LOOP_I`, `LOOP_J`, and the `i +` / `r@ +` superinstructions). Well-formed code can't fail them; the compiler rejects `leave` outside a loop, but `i` or `j` misused outside one then go unchecked. Overflow checks are never dropped, since recursion depth is up to the program. The embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. A safe build (`FF_SAFE_MEM`) keeps the checks. |
 | `FF_LTO` | Enables link-time optimisation (`-flto` / `/GL` via CMake's `INTERPROCEDURAL_OPTIMIZATION`). Lets the compiler inline across translation-unit boundaries — particularly `ff_exec` ↔ `ff_dict_lookup` ↔ `ff_word_native_fn`. Typically 2-5 %. |
 | `FF_PGO=GENERATE` / `USE` | Profile-guided optimisation. Two-pass build: first an instrumented build that writes `*.profraw` when run against a representative workload, then `llvm-profdata merge`, then a second build with `FF_PGO=USE -DFF_PGO_DATA=path/to/merged.profdata`. Typical gain on dispatch-bound code: 5-15 %. |
 
@@ -1505,8 +1510,9 @@ normally.
 | `,`, `c,`, `allot` | the newest word, which they extend, is a data word |
 | `execute`, `catch`, deferred words, `>name`, `>body` | the xt is a word in the dictionary |
 | file words | a stream the program opened itself, or `stdin` / `stdout` / `stderr` (not for `fclose`) |
+| a return (`;`, `exit`), `does>`, `leave`, a loop's back edge | the return-stack cells it follows or changes are the ones the interpreter pushed for it (see *The return stack* below) |
 
-The tracked regions are the data and return stacks, the live part of
+The tracked regions are the data stack, the live part of
 each string-arena slab, and every word's heap. Of the heaps, only data
 words' — `create`, `variable`, `constant`, `array`, `string`, `defer`,
 `does>` words (`ff_word_holds_data`) — are writable. A colon
@@ -1520,6 +1526,41 @@ extended.
 `>name` and `strerror` hand out a copy of the name or message in the
 string arena, so the checks recognise it; the original is memory they
 don't track (and a built-in's name may be read-only).
+
+### The return stack
+
+The return stack holds what the interpreter follows: return frames (an
+address and the word it goes back into) and each counted loop's exit
+address, among the cells a program pushes with `>r` and the loops'
+limits and indexes. A program that could put its own cell where the
+interpreter expects one of these would choose where execution goes —
+`16 >r 16 >r` at the end of a definition used to set its return address.
+So a safe build records what each return-stack cell holds, in
+`ff::r_kind` — one byte a cell, set with each push (`FF_RK_DATA`,
+`FF_RK_IP`, `FF_RK_WORD`, `FF_RK_LEAVE`):
+
+- a return, and `does>` ending its defining word, take the top two
+  cells only as a frame the interpreter pushed: a word, above its
+  return address;
+- `leave` takes the exit address only from a cell a `do` pushed as one;
+- a loop's back edge changes the index in place only if the top cell is
+  data, never a frame.
+
+Anything else raises -25 (`FF_ERR_RSTACK_IMBAL`): `>r` without `r>`, or a
+frame taken apart and rebuilt from data. Genuine frames still work
+wherever they are, so `r> r> 2drop` still makes a word return to its
+caller's caller. The return stack is not a tracked region either: `@`
+and `!` don't take addresses in it. And `FF_R_TRUSTED`, which drops the
+underflow checks of `exit`, `leave` and the loop words, keeps them in a
+safe build. The cost is a byte store per push and a compare for each
+cell checked: 1–5 % on the benchmarks, most where words are called.
+
+The built-ins whose code carries a cell the compiler fills in — `(lit)`
+and `(flit)`'s value, `(strlit)`'s string, `branch`, `?branch` and the
+loop words' offsets — can't be compiled by name, in any build: there
+the next word's code stood in for that cell, and `branch` jumped by an
+opcode number. Run by name (at the prompt, or through `execute`) they
+do nothing, since their stub has no such cell.
 
 Word heaps are found by binary search over an index of their regions
 that the arena keeps sorted as heaps are allocated, grown, trimmed and

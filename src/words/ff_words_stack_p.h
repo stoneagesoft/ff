@@ -202,7 +202,7 @@ case FF_OP_PICK:
 case FF_OP_TO_R:
     _FF_SL(1);
     _FF_RSO(1);
-    ff_stack_push(R, tos);
+    _FF_RPUSH(tos, FF_RK_DATA);
     _FF_DROP();
     _FF_NEXT();
 

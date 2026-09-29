@@ -134,7 +134,7 @@ case FF_OP_SCOPE_UNWIND:
         if (ff_unlikely(R->top != r_top))
         {
             _FF_SYNC();
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_RSTACK,
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_IMBAL,
                       "Scope left the return stack unbalanced "
                       "(depth %d, expected %d).",
                       (int)R->top, (int)r_top);
