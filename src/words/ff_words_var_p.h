@@ -78,22 +78,23 @@ case FF_OP_FORGET:
             /* It would cut the open definition out from under the
                compiler too. */
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FORGET_PROT,
-                      "Can't forget while '%s' is being defined.",
+                      FF_TR(ff, FF_TR_EN("Can't forget while '%s' is being defined."),
+                                FF_TR_RU("Нельзя забывать слова, пока определяется «%s».")),
                       ff->compiling->name);
             goto done;
         }
         size_t at = ff_dict_index(&ff->dict, name);
         if (at == (size_t)-1)
         {
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                      "'%s' undefined.", name);
+            ff_fail_undefined(ff, name);
             goto done;
         }
         const ff_word_t *running = ff_word_running_from(ff, at);
         if (running)
         {
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FORGET_PROT,
-                      "Can't forget '%s' while '%s' is running.",
+                      FF_TR(ff, FF_TR_EN("Can't forget '%s' while '%s' is running."),
+                                FF_TR_RU("Нельзя забыть «%s», пока выполняется «%s».")),
                       name, running->name);
             goto done;
         }
@@ -101,8 +102,9 @@ case FF_OP_FORGET:
         if (host)
         {
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FORGET_PROT,
-                      "Can't forget '%s': it would take '%s', which the "
-                      "host registered.", name, host->name);
+                      FF_TR(ff, FF_TR_EN("Can't forget '%s': it would take '%s', which the "
+                                         "host registered."),
+                                FF_TR_RU("Нельзя забыть «%s»: вместе с ним ушло бы «%s», которое зарегистрировал хост.")), name, host->name);
             goto done;
         }
         ff_dict_truncate(&ff->dict, at);
@@ -157,7 +159,8 @@ case FF_OP_DEFER_RUNTIME:
         {
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
-                      "Deferred word '%s' has no action assigned.", nw->name);
+                      FF_TR(ff, FF_TR_EN("Deferred word '%s' has no action assigned."),
+                                FF_TR_RU("Отложенному слову «%s» не назначено действие.")), nw->name);
             goto done;
         }
         _FF_CHECK_XT(target);
@@ -204,7 +207,8 @@ case FF_OP_IS:
         if (w->opcode != FF_OP_DEFER_RUNTIME)
         {
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED,
-                      "'%s' is not a deferred word.", w->name);
+                      FF_TR(ff, FF_TR_EN("'%s' is not a deferred word."),
+                                FF_TR_RU("«%s» — не отложенное слово.")), w->name);
             goto done;
         }
         if (compiling)

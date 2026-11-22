@@ -15,7 +15,6 @@
 
 #include "ff_opcode_meta_p.h"
 
-#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -98,17 +97,6 @@ static void ff_word_init_common(ff_word_t *w, ff_word_fn code,
     }
 
     ff_word_build_stub(w);
-
-    /* Parse manual: find description after first newline. */
-    if (manual)
-    {
-        const char *p = manual;
-        while (*p && isspace((unsigned char)*p))
-            p++;
-        w->man_desc = strchr(p, '\n');
-        if (w->man_desc)
-            w->man_desc++;
-    }
 }
 
 

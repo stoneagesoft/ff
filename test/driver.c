@@ -23,6 +23,9 @@
  *   mem=N     Memory limit in bytes (ff_platform::mem_limit; default 256 MiB,
  *             so a runaway allocation fails the test instead of the machine).
  *   deny=N    Capabilities to withhold (ff_platform::deny, FF_CAP_* bits).
+ *   lang=L    Language of the engine's texts (ff_platform::lang, e.g. ru;
+ *             default English). Cases using it are registered only when
+ *             FF_WITH_TR is on, and are named *_ru.
  */
 
 #include <ff.h>
@@ -168,7 +171,8 @@ static char *read_file(const char *path, size_t *out_size)
 
 /* Parse the optional `\ ff-test:` directive on the first line. */
 static void parse_directive(const char *src, bool *per_line, uint64_t *budget,
-                            size_t *mem, uint32_t *deny)
+                            size_t *mem, uint32_t *deny,
+                            char *lang, size_t lang_size)
 {
     static const char tag[] = "\\ ff-test:";
     if (strncmp(src, tag, sizeof(tag) - 1) != 0)
@@ -196,6 +200,11 @@ static void parse_directive(const char *src, bool *per_line, uint64_t *budget,
             *mem = (size_t)strtoull(w + 4, NULL, 10);
         else if (len > 5 && strncmp(w, "deny=", 5) == 0)
             *deny = (uint32_t)strtoul(w + 5, NULL, 0);
+        else if (len > 5 && strncmp(w, "lang=", 5) == 0 && len - 5 < lang_size)
+        {
+            memcpy(lang, w + 5, len - 5);
+            lang[len - 5] = '\0';
+        }
     }
 }
 
@@ -262,7 +271,8 @@ int main(int argc, char **argv)
     uint64_t budget = FF_TEST_OPCODE_BUDGET;
     size_t mem = FF_TEST_MEM_LIMIT;
     uint32_t deny = 0;
-    parse_directive(src, &per_line, &budget, &mem, &deny);
+    char lang[16] = "";
+    parse_directive(src, &per_line, &budget, &mem, &deny, lang, sizeof(lang));
 
     test_ctx_t ctx =
     {
@@ -284,6 +294,7 @@ int main(int argc, char **argv)
         .watchdog_interval = 65536,
         .deny              = deny,
         .mem_limit         = mem,
+        .lang              = lang[0] ? lang : NULL,
     };
 
     ff_t *ff = ff_new(&p);

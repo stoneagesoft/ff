@@ -963,6 +963,152 @@ static void test_abort_request_nested(void)
     ff_free(ff);
 }
 
+/* @return true if @p s is whole UTF-8: no character cut short. */
+static bool utf8_valid(const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p)
+    {
+        size_t n = *p < 0x80 ? 1
+                 : (*p & 0xe0) == 0xc0 ? 2
+                 : (*p & 0xf0) == 0xe0 ? 3
+                 : (*p & 0xf8) == 0xf0 ? 4 : 0;
+        if (!n)
+            return false;
+        for (size_t i = 1; i < n; ++i)
+            if ((p[i] & 0xc0) != 0x80)
+                return false;
+        p += n;
+    }
+    return true;
+}
+
+/* The language of an engine's texts (ff_tr.h): set at ff_new() and on
+   the fly, picked by tag in any order, falling back to English, read
+   out of a text kept for later, and cut only between characters. */
+static void test_translations(void)
+{
+    ff_t *ff = new_engine(1000000);
+    CHECK(strcmp(ff_lang(ff), "en") == 0);
+    CHECK(ff_eval(ff, "zork") == FF_ERR_UNDEFINED);
+    CHECK(strcmp(ff_strerror(ff), "'zork' undefined.") == 0);
+
+#if FF_WITH_TR
+    /* Picking: the language asked for, whatever the order; English when
+       that one is missing or empty; a locale name names its language. */
+    CHECK(strcmp(ff_tr("ru", FF_TR_EN("Yes"), FF_TR_RU("Да")), "Да") == 0);
+    CHECK(strcmp(ff_tr("ru", FF_TR_RU("Да"), FF_TR_EN("Yes")), "Да") == 0);
+    CHECK(strcmp(ff_tr("en", FF_TR_RU("Да"), FF_TR_EN("Yes")), "Yes") == 0);
+    CHECK(strcmp(ff_tr("de", FF_TR_EN("Yes"), FF_TR_RU("Да")), "Yes") == 0);
+    CHECK(strcmp(ff_tr(NULL, FF_TR_EN("Yes"), FF_TR_RU("Да")), "Yes") == 0);
+    CHECK(strcmp(ff_tr("ru", FF_TR_EN("Yes"), FF_TR_RU("")), "Yes") == 0);
+    CHECK(strcmp(ff_tr("ru_RU.UTF-8", FF_TR_EN("Yes"), FF_TR_RU("Да")), "Да") == 0);
+    CHECK(strcmp(ff_tr("ru", "Same", FF_TR_RU("")), "Same") == 0);
+    CHECK(strcmp(FF_TR_LANG("ru", FF_TR_RU("Да"), FF_TR_EN("Yes")), "Да") == 0);
+    CHECK(strcmp(FF_TR_LANG("ru", FF_TR_EN("Yes")), "Yes") == 0);
+
+    /* A text kept for later: what precedes the first tag is shared. */
+    static const char stored[] = "( n -- )  " FF_TR_JOIN(FF_TR_EN("Drop\nText"),
+                                                        FF_TR_RU("Сбросить\nТекст"));
+    char buf[64];
+    CHECK(ff_tr_copy("ru", stored, buf, sizeof(buf)) == strlen("( n -- )  Сбросить\nТекст"));
+    CHECK(strcmp(buf, "( n -- )  Сбросить\nТекст") == 0);
+    ff_tr_copy("en", stored, buf, sizeof(buf));
+    CHECK(strcmp(buf, "( n -- )  Drop\nText") == 0);
+    ff_tr_copy("de", stored, buf, sizeof(buf));
+    CHECK(strcmp(buf, "( n -- )  Drop\nText") == 0);
+    ff_tr_copy("ru", "Plain", buf, sizeof(buf));
+    CHECK(strcmp(buf, "Plain") == 0);
+    ff_tr_copy("ru", NULL, buf, sizeof(buf));
+    CHECK(strcmp(buf, "") == 0);
+    /* 11 bytes fit: the shared 10 and half of "С" — which goes. */
+    ff_tr_copy("ru", stored, buf, 12);
+    CHECK(strcmp(buf, "( n -- )  ") == 0);
+
+    /* Locale names: the languages ff has texts in, and nothing else. */
+    CHECK(ff_tr_lang_of("ru_RU.UTF-8") && strcmp(ff_tr_lang_of("ru_RU.UTF-8"), "ru") == 0);
+    CHECK(ff_tr_lang_of("RU") && strcmp(ff_tr_lang_of("RU"), "ru") == 0);
+    CHECK(ff_tr_lang_of("en@quot") && strcmp(ff_tr_lang_of("en@quot"), "en") == 0);
+    CHECK(ff_tr_lang_of("en-GB") && strcmp(ff_tr_lang_of("en-GB"), "en") == 0);
+    CHECK(ff_tr_lang_of("C") == NULL);
+    CHECK(ff_tr_lang_of("POSIX") == NULL);
+    CHECK(ff_tr_lang_of("rus") == NULL);
+    CHECK(ff_tr_lang_of("de_DE") == NULL);
+    CHECK(ff_tr_lang_of("") == NULL);
+    CHECK(ff_tr_lang_of(NULL) == NULL);
+
+    /* An engine's language, switched on the fly: the next message is in
+       it. A language ff has no texts in is kept, and ff's show English. */
+    ff_set_lang(ff, "ru_RU.UTF-8");
+    CHECK(strcmp(ff_lang(ff), "ru") == 0);
+    CHECK(ff_eval(ff, "zork") == FF_ERR_UNDEFINED);
+    CHECK(strcmp(ff_strerror(ff), "Слово «zork» не определено.") == 0);
+    CHECK(ff_eval(ff, "drop") == FF_ERR_STACK_UNDER);
+    CHECK(strcmp(ff_strerror(ff), "В стеке не хватает элементов: нужно 1.") == 0);
+    ff_set_lang(ff, "de");
+    CHECK(strcmp(ff_lang(ff), "de") == 0);
+    CHECK(ff_eval(ff, "zork") == FF_ERR_UNDEFINED);
+    CHECK(strcmp(ff_strerror(ff), "'zork' undefined.") == 0);
+    ff_set_lang(ff, "C");
+    CHECK(strcmp(ff_lang(ff), "en") == 0);
+    ff_set_lang(ff, NULL);
+    CHECK(strcmp(ff_lang(ff), "en") == 0);
+
+    /* A host's native word with a translated manual. */
+    static const ff_native_word_t words[] =
+    {
+        FF_NATIVE("square", nat_square,
+                  FF_TR_EN("( n -- n*n )  Square\nSquares *n*."),
+                  FF_TR_RU("( n -- n*n )  Квадрат\nВозводит *n* в квадрат.")),
+        FF_NATIVE_END
+    };
+    CHECK(ff_register(ff, words) == FF_OK);
+    reset_output();
+    CHECK(ff_eval(ff, "man square") == FF_OK);
+    CHECK(strstr(g_out, "Square") && strstr(g_out, "Squares n."));
+    ff_set_lang(ff, "ru");
+    reset_output();
+    CHECK(ff_eval(ff, "man square") == FF_OK);
+    CHECK(strstr(g_out, "Квадрат") && strstr(g_out, "Возводит n в квадрат."));
+    CHECK(!strstr(g_out, "Square"));
+
+    /* An error message cut to fit its buffer loses a whole character,
+       never half of one: two bytes, then two-byte letters past the end. */
+    char lng[FF_ERROR_MSG_SIZE * 2];
+    size_t at = 0;
+    lng[at++] = 'x';
+    lng[at++] = 'y';
+    while (at + 2 < sizeof(lng))
+    {
+        memcpy(lng + at, "я", 2);
+        at += 2;
+    }
+    lng[at] = '\0';
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_APPLICATION, "%s", lng);
+    CHECK(utf8_valid(ff_strerror(ff)));
+    CHECK(strlen(ff_strerror(ff)) == FF_ERROR_MSG_SIZE - 2);
+#else
+    /* Without translations: English only, whatever is asked for. */
+    ff_set_lang(ff, "ru");
+    CHECK(strcmp(ff_lang(ff), "en") == 0);
+    CHECK(strcmp(FF_TR(ff, FF_TR_EN("Yes"), FF_TR_RU("Да")), "Yes") == 0);
+    CHECK(ff_tr_lang_of("ru") == NULL);
+    CHECK(ff_tr_lang_of("en_US") && strcmp(ff_tr_lang_of("en_US"), "en") == 0);
+    (void) utf8_valid;
+#endif
+    ff_free(ff);
+
+#if FF_WITH_TR
+    /* The language a host gives ff_new(). */
+    ff_platform_t p = { .vprintf = capture_vprintf, .lang = "ru" };
+    ff = ff_new(&p);
+    CHECK(ff && strcmp(ff_lang(ff), "ru") == 0);
+    CHECK(ff_eval(ff, "1 0 /") == FF_ERR_DIV_ZERO);
+    CHECK(strcmp(ff_strerror(ff), "Деление на ноль.") == 0);
+    ff_free(ff);
+#endif
+}
+
 int main(void)
 {
     test_state_after_errors();
@@ -992,6 +1138,7 @@ int main(void)
 #if FF_WITH_SYSTEM && FF_WITH_FILES
     test_sandbox();
 #endif
+    test_translations();
 
     if (g_failures)
         fprintf(stderr, "%d check(s) failed.\n", g_failures);

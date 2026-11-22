@@ -194,8 +194,8 @@ struct ff_word
     ff_heap_t heap;             /**< Compiled bytecode (colon-defs) or data (create & co.). */
     ff_sig_t *sigs;             /**< Scope signatures by bytecode offset, for `see`; NULL if none. */
     size_t sigs_len;            /**< Count of @ref sigs. */
-    const char *manual;         /**< Markdown manual entry; may be NULL. */
-    const char *man_desc;       /**< Points into @ref manual past the first newline. */
+    const char *manual;         /**< Markdown manual entry, every language in one string (read
+                                     with ff_tr_copy()); may be NULL. */
     struct ff_word *next_bucket;/**< Singly-linked dict hash chain (newest-first). */
 };
 

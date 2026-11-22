@@ -89,11 +89,13 @@ case FF_OP_ROLL:
             _FF_SYNC();
             if (idx < 0)
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                          "Negative roll index.");
+                          FF_TR(ff, FF_TR_EN("Negative roll index."),
+                                    FF_TR_RU("Отрицательный индекс roll.")));
             else
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                          "Stack underflow: roll index %" FF_PRIdCELL
-                          " reaches past the stack.", idx);
+                          FF_TR(ff, FF_TR_EN("Stack underflow: roll index %" FF_PRIdCELL
+                                             " reaches past the stack."),
+                                    FF_TR_RU("В стеке не хватает элементов: индекс roll %" FF_PRIdCELL " выходит за стек.")), idx);
             goto done;
         }
         --S->top;
@@ -187,11 +189,13 @@ case FF_OP_PICK:
             _FF_SYNC();
             if (idx < 0)
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                          "Negative pick index.");
+                          FF_TR(ff, FF_TR_EN("Negative pick index."),
+                                    FF_TR_RU("Отрицательный индекс pick.")));
             else
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                          "Stack underflow: pick index %" FF_PRIdCELL
-                          " reaches past the stack.", idx);
+                          FF_TR(ff, FF_TR_EN("Stack underflow: pick index %" FF_PRIdCELL
+                                             " reaches past the stack."),
+                                    FF_TR_RU("В стеке не хватает элементов: индекс pick %" FF_PRIdCELL " выходит за стек.")), idx);
             goto done;
         }
         tos = _FF_SAT((size_t)idx + 1);

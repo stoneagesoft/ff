@@ -69,12 +69,18 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
     if (!w->manual)
     {
         ff_tracef(ff, FF_SEV_WARNING | FF_ERR_NO_MAN,
-                  "No manual for '%s'.", w->name);
+                  FF_TR(ff, FF_TR_EN("No manual for '%s'."),
+                            FF_TR_RU("Нет справки для «%s».")), w->name);
         return;
     }
 
-    /* The manual's first line is the prototype; the rest is the synopsis. */
-    const char *p = w->manual;
+    /* The manual in the engine's language: the stack effect every
+       language shares, then that language's title and text. */
+    char man[FF_MAN_SIZE];
+    ff_tr_copy(ff_lang(ff), w->manual, man, sizeof(man));
+
+    /* Its first line is the prototype; the rest is the synopsis. */
+    const char *p = man;
     while (*p && (*p == ' ' || *p == '\t'))
         ++p;
     const char *nl = strchr(p, '\n');
@@ -86,6 +92,8 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
         plen = sizeof(proto) - 1;
     memcpy(proto, p, plen);
     proto[plen] = '\0';
+    if (proto + plen != proto_end)
+        ff_utf8_cut(proto);
 
     const char *synopsis = nl ? nl + 1 : "";
 
@@ -104,8 +112,11 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
        independent paragraphs separate visually; for a single fort
        cell that creates spurious blank lines after the last
        paragraph. Trim them. */
-    if ((size_t)synlen > sizeof(synbuf))
-        synlen = (int)sizeof(synbuf) - 1;
+    if ((size_t)synlen >= sizeof(synbuf))
+    {
+        ff_utf8_cut(synbuf);
+        synlen = (int)strlen(synbuf);
+    }
     while (synlen > 0
            && (synbuf[synlen - 1] == '\n' || synbuf[synlen - 1] == ' '))
         synbuf[--synlen] = '\0';
@@ -117,7 +128,10 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
-    ft_u8write_ln(table, "Name", "Prototype", "Immediate");
+    ft_u8write_ln(table,
+                  FF_TR(ff, FF_TR_EN("Name"), FF_TR_RU("Имя")),
+                  FF_TR(ff, FF_TR_EN("Prototype"), FF_TR_RU("Прототип")),
+                  FF_TR(ff, FF_TR_EN("Immediate"), FF_TR_RU("Немедленное")));
 
     /* Data row: matching values. */
     ft_set_cell_prop(table, 1, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
@@ -160,8 +174,14 @@ void ff_w_dump_word_impl(ff_t *ff)
     ft_set_cell_prop(table, 1, 4, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_RIGHT);
     ft_set_cell_prop(table, 1, 5, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_RIGHT);
     ft_set_cell_prop(table, 1, 6, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_RIGHT);
-    ft_u8write_ln(table, "Word", "Immediate", "Used", "Native",
-                  "Does", "Heap, cells", "Heap, bytes");
+    ft_u8write_ln(table,
+                  FF_TR(ff, FF_TR_EN("Word"), FF_TR_RU("Слово")),
+                  FF_TR(ff, FF_TR_EN("Immediate"), FF_TR_RU("Немедленное")),
+                  FF_TR(ff, FF_TR_EN("Used"), FF_TR_RU("Использовано")),
+                  FF_TR(ff, FF_TR_EN("Native"), FF_TR_RU("Нативное")),
+                  "Does",
+                  FF_TR(ff, FF_TR_EN("Heap, cells"), FF_TR_RU("Куча, ячеек")),
+                  FF_TR(ff, FF_TR_EN("Heap, bytes"), FF_TR_RU("Куча, байт")));
     ft_u8printf_ln(table, "%s|%s|%s|%s|%p|%zu|%zu",
                    w->name,
                    ff_tick(w->flags & FF_WORD_IMMEDIATE),
@@ -937,7 +957,8 @@ void ff_w_see_impl(ff_t *ff)
 
     if (ff_word_is_native(w))
     {
-        ff_printf(ff, "%s is a native word.\n", w->name);
+        ff_printf(ff, FF_TR(ff, FF_TR_EN("%s is a native word.\n"),
+                                FF_TR_RU("%s — нативное слово.\n")), w->name);
         return;
     }
 
@@ -952,9 +973,16 @@ void ff_w_see_impl(ff_t *ff)
     }
     if (w->opcode == FF_OP_CREATE_RUNTIME)
     {
-        ff_printf(ff, "create %s  ( %zu cell%s reserved )\n",
-                  w->name, w->heap.size,
-                  w->heap.size == 1 ? "" : "s");
+        /* Whole sentences for one cell and for many: the Russian names
+           the count without agreeing with it, so it is the same in both. */
+        if (w->heap.size == 1)
+            ff_printf(ff, FF_TR(ff, FF_TR_EN("create %s  ( %zu cell reserved )\n"),
+                                    FF_TR_RU("create %s  ( зарезервировано ячеек: %zu )\n")),
+                      w->name, w->heap.size);
+        else
+            ff_printf(ff, FF_TR(ff, FF_TR_EN("create %s  ( %zu cells reserved )\n"),
+                                    FF_TR_RU("create %s  ( зарезервировано ячеек: %zu )\n")),
+                      w->name, w->heap.size);
         return;
     }
     if (w->opcode == FF_OP_ARRAY_RUNTIME)
@@ -969,7 +997,8 @@ void ff_w_see_impl(ff_t *ff)
                 ? (const ff_word_t *)(intptr_t)w->heap.data[0]
                 : NULL;
         if (target && ff_word_valid(ff, target))
-            ff_printf(ff, "defer %s  ( currently: ' %s is %s )\n",
+            ff_printf(ff, FF_TR(ff, FF_TR_EN("defer %s  ( currently: ' %s is %s )\n"),
+                                    FF_TR_RU("defer %s  ( сейчас: ' %s is %s )\n")),
                       w->name, target->name, w->name);
         else
             ff_printf(ff, "defer %s\n", w->name);
@@ -982,12 +1011,16 @@ void ff_w_see_impl(ff_t *ff)
     {
         const ff_word_t *parent =
             w->does ? see_word_for_pointer(ff, w->does) : NULL;
-        ff_printf(ff, "\\ %s — built by `does>` clause%s%s%s\n",
-                  w->name,
-                  parent ? " in `" : "",
-                  parent ? parent->name : "",
-                  parent ? "`" : "");
-        ff_printf(ff, "%s  \\ parameter field:", w->name);
+        if (parent)
+            ff_printf(ff, FF_TR(ff, FF_TR_EN("\\ %s — built by `does>` clause in `%s`\n"),
+                                    FF_TR_RU("\\ %s — создано через `does>` в `%s`\n")),
+                      w->name, parent->name);
+        else
+            ff_printf(ff, FF_TR(ff, FF_TR_EN("\\ %s — built by `does>` clause\n"),
+                                    FF_TR_RU("\\ %s — создано через `does>`\n")),
+                      w->name);
+        ff_printf(ff, FF_TR(ff, FF_TR_EN("%s  \\ parameter field:"),
+                                FF_TR_RU("%s  \\ поле параметров:")), w->name);
         for (size_t i = 0; i < w->heap.size; ++i)
             ff_printf(ff, " %" FF_PRIdCELL, w->heap.data[i]);
         ff_printf(ff, "\n");
@@ -1029,30 +1062,48 @@ void ff_w_see_impl(ff_t *ff)
 
 const ff_word_def_t FF_DICT_WORDS[] =
 {
-    _FF_W("words", FF_OP_WORDS,
-      "( -- )  List words defined\n"
-      "Defined words are listed, from the most recently defined to the first defined.\n"
-      "\n"
-      "See also: **wordsused**, **wordsunused**"),
-    _FF_W("wordsused", FF_OP_WORDSUSED,
-      "( -- )  List words used\n"
-      "The words used by this program are listed on standard output.\n"
-      "\n"
-      "See also: **words**, **wordsunused**"),
-    _FF_W("wordsunused", FF_OP_WORDSUNUSED,
-      "( -- )  List words not used\n"
-      "The words not used by this program are listed on standard output.\n"
-      "\n"
-      "See also: **words**, **wordsused**"),
-    _FF_W("man", FF_OP_MAN,
-      "w ( -- )  Print manual\n"
-      "Prints prototype and manual for the dictionary word *w*."),
-    _FF_W("dump-word", FF_OP_DUMP_WORD,
-      "w ( -- )  Word dump\n"
-      "Prints word *w*'s metadata and memory dump of its heap."),
-    _FF_W("see", FF_OP_SEE,
-      "w ( -- )  De-compile word\n"
-      "Translate compiled word *w* back to the source code."),
+    _FF_W("words", FF_OP_WORDS, "( -- )",
+      FF_TR_EN("List words defined\n"
+               "Defined words are listed, from the most recently defined to the first defined.\n"
+               "\n"
+               "See also: **wordsused**, **wordsunused**"),
+      FF_TR_RU("Список определённых слов\n"
+               "Печатает определённые слова, от последнего определённого к первому.\n"
+               "\n"
+               "См. также: **wordsused**, **wordsunused**")),
+    _FF_W("wordsused", FF_OP_WORDSUSED, "( -- )",
+      FF_TR_EN("List words used\n"
+               "The words used by this program are listed on standard output.\n"
+               "\n"
+               "See also: **words**, **wordsunused**"),
+      FF_TR_RU("Список использованных слов\n"
+               "Печатает в стандартный вывод слова, использованные программой.\n"
+               "\n"
+               "См. также: **words**, **wordsunused**")),
+    _FF_W("wordsunused", FF_OP_WORDSUNUSED, "( -- )",
+      FF_TR_EN("List words not used\n"
+               "The words not used by this program are listed on standard output.\n"
+               "\n"
+               "See also: **words**, **wordsused**"),
+      FF_TR_RU("Список неиспользованных слов\n"
+               "Печатает в стандартный вывод слова, не использованные программой.\n"
+               "\n"
+               "См. также: **words**, **wordsused**")),
+    _FF_W("man", FF_OP_MAN, "w ( -- )",
+      FF_TR_EN("Print manual\n"
+               "Prints prototype and manual for the dictionary word *w*."),
+      FF_TR_RU("Напечатать справку\n"
+               "Печатает прототип и справку для слова словаря *w*.")),
+    _FF_W("dump-word", FF_OP_DUMP_WORD, "w ( -- )",
+      FF_TR_EN("Word dump\n"
+               "Prints word *w*'s metadata and memory dump of its heap."),
+      FF_TR_RU("Дамп слова\n"
+               "Печатает сведения о слове *w* и дамп памяти его кучи.")),
+    _FF_W("see", FF_OP_SEE, "w ( -- )",
+      FF_TR_EN("De-compile word\n"
+               "Translate compiled word *w* back to the source code."),
+      FF_TR_RU("Декомпилировать слово\n"
+               "Переводит скомпилированное слово *w* обратно в исходный текст.")),
     FF_WEND
 };
 

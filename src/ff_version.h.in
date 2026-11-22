@@ -6,3 +6,9 @@
 #define FF_VERSION        "@FF_VERSION_MAJOR@.@FF_VERSION_MINOR@.@FF_VERSION_PATCH@"
 #define FF_BUILD_TIME     "@FF_BUILD_TIME@"
 #define FF_GIT_HASH       "@FF_GIT_HASH@"
+
+/* 1 when the library was built with the translations of its texts (CMake
+   FF_WITH_TR), 0 when it keeps English only. Here, rather than on the
+   compiler's command line, so that a host compiles against the setting
+   the library was built with (see ff_tr.h). */
+#define FF_WITH_TR        @FF_WITH_TR_01@

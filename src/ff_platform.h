@@ -151,6 +151,9 @@ typedef struct ff_platform
                                     0 = no limit. */
     ff_open_file_fn open_file; /**< Opens files for Forth code; if NULL, fopen(). */
     ff_run_command_fn run_command; /**< Runs `system` commands; if NULL, system(). */
+    const char *lang;          /**< Language of ff's texts — messages, `man` entries: a code or locale
+                                    name ("ru", "ru_RU.UTF-8"), read once by ff_new() (ff_set_lang()
+                                    changes it later). NULL = English. */
 } ff_platform_t;
 
 #ifdef __cplusplus

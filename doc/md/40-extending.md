@@ -297,6 +297,42 @@ the host reads the code back with `ff_throw_code()`. ANS Forth leaves
 positive codes, and those below -4095, to programs.
 
 
+## Translated manuals and messages
+
+An engine shows ff's texts in the language its host sets
+(`ff_platform_t::lang`, `ff_set_lang()`). Your words can follow it with
+the same markers ff uses (`ff_tr.h`, included by `ff.h`). A manual takes
+its translations, each marked, in any order — the first line of each is
+the prototype:
+
+~~~{.c}
+ff_native_word_t words[] = {
+    FF_NATIVE("square", square,
+              FF_TR_EN("( n -- n^2 )  Square\nSquares *n*."),
+              FF_TR_RU("( n -- n^2 )  Квадрат\nВозводит *n* в квадрат.")),
+    FF_NATIVE_END,
+};
+~~~
+
+`man square` shows the engine's language, or English when the word has
+none in it. A plain manual, or NULL, works as before.
+
+A message picks its text when it is raised, with `FF_TR`:
+
+~~~{.c}
+ff_tracef(ff, FF_SEV_ERROR | FF_ERR_APPLICATION,
+          FF_TR(ff, FF_TR_EN("bad input: %d"),
+                    FF_TR_RU("неверный ввод: %d")), x);
+~~~
+
+GCC and Clang check every translation's conversions against the
+arguments, as for a plain format. Write whole sentences, not pieces to
+put together, and keep the conversions in the same order. With no
+engine at hand, `FF_TR_LANG(lang, ...)` takes a language code instead.
+A library built with `FF_WITH_TR=OFF` keeps English only, and the
+markers reduce to the English literal.
+
+
 ## Complete example
 
 A single-file example adding a `clamp` word `( n lo hi -- n' )`:

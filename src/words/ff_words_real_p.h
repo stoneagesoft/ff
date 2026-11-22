@@ -48,7 +48,8 @@ case FF_OP_FDIV:
     if (ff_get_real(&tos) == 0.0)
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO, "Division by real zero.");
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO, FF_TR(ff, FF_TR_EN("Division by real zero."),
+                                                                FF_TR_RU("Деление на вещественный ноль.")));
         goto done;
     }
     ff_set_real(&tos, ff_get_real(&_FF_NOS) / ff_get_real(&tos));

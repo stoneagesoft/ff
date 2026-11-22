@@ -19,6 +19,9 @@
  * the ff_platform_t.watchdog polling callback. Both unwind cleanly to
  * the prompt with FF_ERR_ABORTED; the prompt's fgets is signal-safe
  * thanks to SA_RESTART on POSIX.
+ *
+ * Language: messages and `man` entries come in the user's language when
+ * ff has it (see ffsh_detect_lang()), English otherwise.
  */
 
 #include "ffsh_version.h"
@@ -37,6 +40,7 @@
 
 #if defined(_WIN32)
 #  include <direct.h>
+#  include <wchar.h>
 #  include <windows.h>
 #  define ffsh_mkdir(p) _mkdir(p)
 #  define FFSH_PATH_SEP '\\'
@@ -54,6 +58,82 @@
    bytes of slack so the directory buffer is strictly smaller than the
    final-path buffer; that's what GCC's -Wformat-truncation verifies. */
 #define FFSH_DIR_SIZE   (FFSH_PATH_SIZE - 32)
+
+
+/* The language of the session, a code ff knows ("en", "ru"): set once by
+   main() before anything is printed, and handed to the engine. */
+static const char *g_lang = "en";
+
+#if FF_WITH_TR
+/* The language to show texts in, picked once at start-up the way gettext
+   picks a program's. On Windows: the first of the user's display
+   languages that ff speaks. Elsewhere: the locale of messages — LC_ALL,
+   else LC_MESSAGES, else LANG — and ahead of it the first language of
+   the colon-separated $LANGUAGE that ff speaks; except under the C or
+   POSIX locale, where $LANGUAGE is ignored, so that a script run with
+   LC_ALL=C gets English. English when ff speaks none of them. */
+static const char *ffsh_detect_lang(void)
+{
+#if defined(_WIN32)
+    const char *found = NULL;
+    ULONG count = 0;
+    ULONG size = 0;
+    if (GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count, NULL, &size) && size)
+    {
+        /* A double-NUL-terminated list of names like "ru-RU", most
+           preferred first. */
+        WCHAR *names = (WCHAR *)malloc(size * sizeof(WCHAR));
+        if (names && GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &count,
+                                                 names, &size))
+        {
+            for (const WCHAR *n = names; *n && !found; n += wcslen(n) + 1)
+            {
+                char code[16] = { 0 };
+                for (size_t i = 0; i < sizeof(code) - 1 && n[i]; ++i)
+                    code[i] = (char)n[i];   /* a language name is ASCII */
+                found = ff_tr_lang_of(code);
+            }
+        }
+        free(names);
+    }
+    return found ? found : "en";
+#else
+    const char *locale = NULL;
+    static const char *const vars[] = { "LC_ALL", "LC_MESSAGES", "LANG" };
+    for (size_t i = 0; i < sizeof(vars) / sizeof(vars[0]) && !locale; ++i)
+    {
+        const char *v = getenv(vars[i]);
+        if (v && *v)
+            locale = v;
+    }
+    if (!locale
+            || strcmp(locale, "C") == 0
+            || strncmp(locale, "C.", 2) == 0
+            || strcmp(locale, "POSIX") == 0)
+        return "en";
+
+    const char *list = getenv("LANGUAGE");
+    for (const char *p = list; p && *p; )
+    {
+        const char *end = strchr(p, ':');
+        size_t n = end ? (size_t)(end - p) : strlen(p);
+        char item[32];
+        if (n > 0 && n < sizeof(item))
+        {
+            memcpy(item, p, n);
+            item[n] = '\0';
+            const char *lang = ff_tr_lang_of(item);
+            if (lang)
+                return lang;
+        }
+        p = end ? end + 1 : p + n;
+    }
+
+    const char *lang = ff_tr_lang_of(locale);
+    return lang ? lang : "en";
+#endif
+}
+#endif
 
 
 /* Resolve the per-user history file path:
@@ -131,7 +211,10 @@ static char *ffsh_readline(const char *prompt)
             char *grown = (char *)realloc(buffer, size + more);
             if (!grown)
             {
-                fputs("ffsh: out of memory reading a line.\n", stderr);
+                fputs(FF_TR_LANG(g_lang,
+                                 FF_TR_EN("ffsh: out of memory reading a line.\n"),
+                                 FF_TR_RU("ffsh: не хватает памяти для чтения строки.\n")),
+                      stderr);
                 return NULL;
             }
             buffer = grown;
@@ -183,7 +266,8 @@ static int ffsh_vtracef(void *ctx, ff_error_t e, const char *fmt, va_list args)
     (void) ctx;
 
     if (FF_ERR_SEV(e) == FF_SEV_WARNING)
-        fputs("Warning: ", stderr);
+        fputs(FF_TR_LANG(g_lang, FF_TR_EN("Warning: "), FF_TR_RU("Предупреждение: ")),
+              stderr);
     const int n = vfprintf(stderr, fmt, args);
     fputc('\n', stderr);
 
@@ -284,6 +368,10 @@ int main(int argc, char **argv)
     setbuf(stdout, NULL);
     setbuf(stderr, NULL);
 
+#if FF_WITH_TR
+    g_lang = ffsh_detect_lang();
+#endif
+
     /* Parse FFSH_TIMEOUT_MS. 0 / unset / unparseable disables the
        polling time-budget. The async Ctrl-C path stays on regardless. */
     uint32_t timeout_ms = 0;
@@ -307,13 +395,15 @@ int main(int argc, char **argv)
         .vprintf           = ffsh_vprintf,
         .vtracef           = ffsh_vtracef,
         .watchdog          = timeout_ms ? ffsh_watchdog : NULL,
-        .watchdog_interval = 4096
+        .watchdog_interval = 4096,
+        .lang              = g_lang
     };
 
     ff_t *ff = ff_new(&p);
     if (!ff)
     {
-        fputs("ffsh: out of memory.\n", stderr);
+        fputs(FF_TR_LANG(g_lang, FF_TR_EN("ffsh: out of memory.\n"),
+                                 FF_TR_RU("ffsh: не хватает памяти.\n")), stderr);
         return EXIT_FAILURE;
     }
     g_ff = ff;
@@ -323,7 +413,9 @@ int main(int argc, char **argv)
        engine. A failure here is non-fatal — the shell is still usable,
        the user is just missing the shortcuts — so we warn and continue. */
     if (ff_eval(ff, FFSH_PRELUDE) != 0)
-        fprintf(stderr, "Warning: prelude failed to load: %s\n",
+        fprintf(stderr, FF_TR(ff, FF_TR_EN("Warning: prelude failed to load: %s\n"),
+                                  FF_TR_RU("Предупреждение: не удалось загрузить "
+                                           "прелюдию: %s\n")),
                 ff_strerror(ff));
 
     ffsh_install_sigint();
@@ -338,8 +430,12 @@ int main(int argc, char **argv)
 
     ff_printf(ff, "%s\n", ff_banner(ff));
     if (timeout_ms)
-        ff_printf(ff, "Watchdog: aborting after %u ms per line.\n", timeout_ms);
-    ff_printf(ff, "Press Ctrl-C to abort a running evaluation.\n");
+        ff_printf(ff, FF_TR(ff, FF_TR_EN("Watchdog: aborting after %u ms per line.\n"),
+                                FF_TR_RU("Сторожевой таймер: прерывание через %u мс "
+                                         "на строку.\n")),
+                  timeout_ms);
+    ff_printf(ff, FF_TR(ff, FF_TR_EN("Press Ctrl-C to abort a running evaluation.\n"),
+                            FF_TR_RU("Нажмите Ctrl-C, чтобы прервать выполнение.\n")));
 
     for (;;)
     {
@@ -362,7 +458,8 @@ int main(int argc, char **argv)
             ffsh_history_append(line);
 
             if (ec != 0)
-                fprintf(stderr, "Error: %s\n", ff_strerror(ff));
+                fprintf(stderr, FF_TR(ff, FF_TR_EN("Error: %s\n"), FF_TR_RU("Ошибка: %s\n")),
+                        ff_strerror(ff));
         }
     }
 

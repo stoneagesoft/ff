@@ -52,6 +52,19 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `ff_release_strings()` frees the transient string arena between calls,
   for long-running hosts: it otherwise only grows, until the memory
   limit makes every allocation fail.
+- **Translations.** Error messages, warnings, `man` entries, table
+  labels and the prose `see` prints come in English or Russian. Each
+  engine's language is set by `ff_platform_t.lang` and can change at any
+  time with `ff_set_lang()`; `ff_lang()` reports it. Texts are written in
+  place with each literal marked, `FF_TR_EN()` / `FF_TR_RU()`, in any
+  order, and `FF_TR()` picks one when a message is raised; GCC and Clang
+  check every translation of a format against the call's arguments. A
+  host's native words take translated manuals in `FF_NATIVE()` and
+  translated messages with `FF_TR()`. `ffsh` follows the user's locale
+  (`LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`; the display languages on
+  Windows). `FF_WITH_TR=OFF` builds an English-only library, and
+  `FF_TR_ONLY=ru` a check build that fails on any text missing its
+  Russian. New header `ff_tr.h`.
 
 ### Fixed
 
@@ -334,6 +347,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `FF_NATIVE()` / `FF_NATIVE_I()` take a manual's translations as
+  further arguments; a single manual, or NULL, is written as before.
+- The errors the dispatch loop's checks raise go through out-of-line
+  cold functions (`ff_fail_*` in `ff_p.h`): the hot part of `ff_exec` is
+  half the size it was, and runs the same instructions.
 - **One exception mechanism.** Every error is an exception carrying an
   ANS THROW code (-4 stack underflow, -10 division by zero, -13 undefined
   word, …), so `catch` catches errors as well as `throw`s. `abort` and

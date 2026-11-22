@@ -58,6 +58,10 @@
 /** @brief Bytes reserved for the most recent error message. */
 #define FF_ERROR_MSG_SIZE   512
 
+/** @brief Bytes for a `man` entry in one language, its Markdown before
+ *         rendering (the longest built-in one needs about 1.7 KB). */
+#define FF_MAN_SIZE         4096
+
 /** @brief Initial line buffer size for ff_load(); longer lines grow it. */
 #define FF_LOAD_LINE_SIZE   4096
 

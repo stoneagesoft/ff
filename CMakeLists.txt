@@ -51,6 +51,34 @@ if(NOT FF_WITH_FILES)
     add_compile_definitions(FF_WITH_FILES=0)
 endif()
 
+# Translations of ff's texts: messages, `man` entries, table labels. With
+# FF_WITH_TR ON every engine shows them in the language it is set to
+# (ff_platform::lang, ff_set_lang()); OFF keeps English only, with no
+# translated text or translation code in the library. The setting goes
+# into ff_version.h, so that hosts compile against the same one.
+option(FF_WITH_TR "Include the translations of ff's texts (Russian)." ON)
+if(FF_WITH_TR)
+    set(FF_WITH_TR_01 1)
+else()
+    set(FF_WITH_TR_01 0)
+endif()
+
+# Check build, for CI and translators: keep the texts of this one
+# language only (ru), so that every text missing it fails to compile. The
+# library it makes speaks that language alone; build it, don't ship it.
+set(FF_TR_ONLY "" CACHE STRING
+    "Check build: keep only this language's texts (ru); missing ones fail to compile.")
+if(FF_TR_ONLY)
+    string(TOUPPER "${FF_TR_ONLY}" _ff_tr_only)
+    if(NOT FF_WITH_TR)
+        message(FATAL_ERROR "FF_TR_ONLY needs FF_WITH_TR=ON.")
+    endif()
+    if(NOT _ff_tr_only STREQUAL "RU")
+        message(FATAL_ERROR "FF_TR_ONLY must be ru or empty (got: ${FF_TR_ONLY}).")
+    endif()
+    add_compile_definitions(FF_TR_ONLY_${_ff_tr_only}=1)
+endif()
+
 # Link-time optimisation. Lets the compiler optimise across
 # translation-unit boundaries — particularly useful here because
 # ff_exec calls into ff_dict_lookup, ff_word_native_fn, etc.

@@ -757,3 +757,49 @@ Wrong
 i++;
 j--;
 ```
+
+## Texts people read
+
+Every text the engine shows people — a message, a warning, a `man`
+entry, a table label — is written in every language *ff* has, each
+literal marked with its language. See *Translations* in the design
+chapter.
+
+Right
+
+```c
+ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+          FF_TR(ff, FF_TR_EN("'%s' undefined."),
+                    FF_TR_RU("Слово «%s» не определено.")), name);
+```
+
+Wrong
+
+```c
+ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED, "'%s' undefined.", name);
+```
+
+Write whole sentences. A sentence built from translated pieces doesn't
+survive translation: in Russian its words agree with the pieces.
+
+Right
+
+```c
+if (kind == FF_TOKEN_STRING)
+    ff_tracef(ff, e, FF_TR(ff, FF_TR_EN("'%s' needs a string literal."),
+                               FF_TR_RU("После «%s» нужен строковый литерал.")), word);
+else
+    ff_tracef(ff, e, FF_TR(ff, FF_TR_EN("'%s' needs a name."),
+                               FF_TR_RU("После «%s» нужно имя.")), word);
+```
+
+Wrong
+
+```c
+ff_tracef(ff, e, "'%s' needs %s.", word,
+          kind == FF_TOKEN_STRING ? "a string literal" : "a name");
+```
+
+A message raised at several places, or by a check macro that expands at
+many, is raised by one `ff_fail_*` function in `ff_p.h`, declared
+`FF_COLD`, rather than written out at each.

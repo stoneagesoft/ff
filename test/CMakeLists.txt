@@ -92,6 +92,11 @@ foreach(case_file ${TEST_CASES})
     if(case_name MATCHES "files" AND NOT FF_WITH_FILES)
         continue()
     endif()
+    # Cases in another language (`lang=` directive, named *_ru) need the
+    # translations.
+    if(case_name MATCHES "_ru$" AND NOT FF_WITH_TR)
+        continue()
+    endif()
     if(EXISTS "${out}")
         add_test(NAME ${case_name}
                  COMMAND ff_test_driver "${in}" "${out}")

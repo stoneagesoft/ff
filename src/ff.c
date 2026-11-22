@@ -82,6 +82,8 @@ ff_t *ff_new(const ff_platform_t *p)
         return NULL;
 
     ff->platform = *p;
+    memcpy(ff->lang, "en", sizeof(ff->lang));
+    ff_set_lang(ff, p->lang);
 
     ff->base = FF_BASE_DEC;
 
@@ -168,14 +170,19 @@ ff_error_t ff_register(ff_t *ff, const ff_native_word_t *words)
 {
     for (const ff_native_word_t *w = words; w && w->name; ++w)
     {
-        if (!ff_name_readable(w->name) || !w->fn)
+        if (!w->fn)
             return FF_ERR_CODE(ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                                         "Can't register '%s': %s.", w->name,
-                                         w->fn ? "not a name the interpreter can read"
-                                               : "no function"));
+                FF_TR(ff, FF_TR_EN("Can't register '%s': no function."),
+                          FF_TR_RU("Нельзя зарегистрировать «%s»: нет функции.")),
+                w->name));
+        if (!ff_name_readable(w->name))
+            return FF_ERR_CODE(ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                FF_TR(ff, FF_TR_EN("Can't register '%s': not a name the interpreter can read."),
+                          FF_TR_RU("Нельзя зарегистрировать «%s»: интерпретатор не прочтёт "
+                                   "такое имя.")),
+                w->name));
         if (ff_dict_lookup(&ff->dict, w->name))
-            ff_tracef(ff, FF_SEV_WARNING | FF_ERR_NON_UNIQUE,
-                      "'%s' isn't unique.", w->name);
+            ff_warn_not_unique(ff, w->name);
         ff_word_t *nw = ff_dict_append(&ff->dict,
                                        w->immediate
                                            ? ff_im_word_new(w->name, w->fn, FF_OP_NONE, w->manual)
@@ -223,11 +230,9 @@ static bool ff_api_stack_fail(ff_t *ff, bool over)
     if (!ff_idle(ff))
     {
         if (over)
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_OVER,
-                      "Stack overflow: 1 item(s) would not fit.");
+            ff_fail_stack_over(ff, 1);
         else
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                      "Stack underflow: 1 item(s) expected.");
+            ff_fail_stack_under(ff, 1);
     }
     return false;
 }
@@ -288,7 +293,9 @@ bool ff_pop_str(ff_t *ff, const char **out)
     if (!ff_str_valid(ff, s))
     {
         if (!ff_idle(ff))
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, "Bad string address.");
+            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
+                      FF_TR(ff, FF_TR_EN("Bad string address."),
+                                FF_TR_RU("Неверный адрес строки.")));
         return false;
     }
 #endif
@@ -503,8 +510,8 @@ static bool ff_eval_room(ff_t *ff, ff_error_t *ec)
 {
     if (ff_unlikely(ff->stack.top >= FF_STACK_SIZE))
     {
-        *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_OVER,
-                        "Stack overflow: %d item(s) would not fit.", 1);
+        ff_fail_stack_over(ff, 1);
+        *ec = FF_SEV_ERROR | FF_ERR_STACK_OVER;
         return false;
     }
     return true;
@@ -608,6 +615,22 @@ static bool ff_throw_is_fatal(ff_int_t code)
     return code == FF_THROW_INTERRUPT || code == FF_THROW_QUIT;
 }
 
+/** @copydoc ff_utf8_cut */
+void ff_utf8_cut(char *s)
+{
+    size_t len = strlen(s);
+    size_t i = len;
+    while (i > 0 && ((unsigned char)s[i - 1] & 0xc0) == 0x80)
+        --i;    /* continuation bytes */
+    if (i == 0)
+        return;
+
+    const unsigned char lead = (unsigned char)s[i - 1];
+    const size_t need = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+    if (len - (i - 1) < need)
+        s[i - 1] = '\0';
+}
+
 /**
  * Put an exception carrying THROW code @p code in flight.
  *
@@ -649,7 +672,9 @@ static void ff_raisev(ff_t *ff, ff_int_t code, ff_error_t e,
 
     ff->error = e;
     ff_error_locate(ff, &ff->error_line, &ff->error_pos);
-    vsnprintf(ff->error_msg, sizeof(ff->error_msg), fmt, args);
+    if (vsnprintf(ff->error_msg, sizeof(ff->error_msg), fmt, args)
+            >= (int)sizeof(ff->error_msg))
+        ff_utf8_cut(ff->error_msg);
 
     /* Raised with nothing running — by the host itself, through
        ff_tracef() — there is nothing to unwind: the error is recorded
@@ -693,7 +718,213 @@ static void ff_throw(ff_t *ff, ff_int_t code)
         (void)ff_exc_begin(ff, code);
     else
         ff_raise(ff, code, FF_SEV_ERROR | ff_error_from_throw(code),
-                 "Uncaught exception %" FF_PRIdCELL ".", code);
+                 FF_TR(ff, FF_TR_EN("Uncaught exception %" FF_PRIdCELL "."),
+                           FF_TR_RU("Неперехваченное исключение %" FF_PRIdCELL ".")),
+                 code);
+}
+
+
+/* ===================================================================
+ * The errors the checks raise (declared in ff_p.h).
+ * =================================================================== */
+
+/** @copydoc ff_fail_stack_under */
+void ff_fail_stack_under(ff_t *ff, int n)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
+              FF_TR(ff, FF_TR_EN("Stack underflow: %d item(s) expected."),
+                        FF_TR_RU("В стеке не хватает элементов: нужно %d.")), n);
+}
+
+/** @copydoc ff_fail_stack_over */
+void ff_fail_stack_over(ff_t *ff, int n)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_OVER,
+              FF_TR(ff, FF_TR_EN("Stack overflow: %d item(s) would not fit."),
+                        FF_TR_RU("Переполнение стека: не помещается ещё %d.")), n);
+}
+
+/** @copydoc ff_fail_rstack_under */
+void ff_fail_rstack_under(ff_t *ff, int n)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_UNDER,
+              FF_TR(ff, FF_TR_EN("Return stack underflow: %d item(s) expected."),
+                        FF_TR_RU("В стеке возвратов не хватает элементов: нужно %d.")), n);
+}
+
+/** @copydoc ff_fail_rstack_over */
+void ff_fail_rstack_over(ff_t *ff, int n)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER,
+              FF_TR(ff, FF_TR_EN("Return stack overflow: %d item(s) would not fit."),
+                        FF_TR_RU("Переполнение стека возвратов: не помещается ещё %d.")), n);
+}
+
+/** @copydoc ff_fail_rstack_imbalance */
+void ff_fail_rstack_imbalance(ff_t *ff)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_IMBAL,
+              FF_TR(ff, FF_TR_EN("Return stack imbalance: >r without r>, "
+                                 "or a return frame taken apart."),
+                        FF_TR_RU("Нарушен баланс стека возвратов: >r без r> "
+                                 "или разобранный кадр возврата.")));
+}
+
+/** @copydoc ff_fail_not_compiling */
+void ff_fail_not_compiling(ff_t *ff)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
+              FF_TR(ff, FF_TR_EN("Compiler word outside definition."),
+                        FF_TR_RU("Слово компиляции вне определения.")));
+}
+
+/** @copydoc ff_fail_no_definition */
+void ff_fail_no_definition(ff_t *ff)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
+              FF_TR(ff, FF_TR_EN("No current definition."),
+                        FF_TR_RU("Нет текущего определения.")));
+}
+
+/** @copydoc ff_fail_bad_addr */
+void ff_fail_bad_addr(ff_t *ff, const void *addr, size_t bytes)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
+              FF_TR(ff, FF_TR_EN("Bad pointer: %p (size %zu)."),
+                        FF_TR_RU("Неверный указатель: %p (размер %zu).")), addr, bytes);
+}
+
+/** @copydoc ff_fail_bad_write */
+void ff_fail_bad_write(ff_t *ff, const void *addr, size_t bytes)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
+              FF_TR(ff, FF_TR_EN("Bad pointer for a write: %p (size %zu)."),
+                        FF_TR_RU("Неверный указатель для записи: %p (размер %zu).")),
+              addr, bytes);
+}
+
+/** @copydoc ff_fail_bad_xt */
+void ff_fail_bad_xt(ff_t *ff, const void *w)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
+              FF_TR(ff, FF_TR_EN("Bad execution token: %p."),
+                        FF_TR_RU("Неверный токен исполнения: %p.")), w);
+}
+
+/** @copydoc ff_fail_bad_str */
+void ff_fail_bad_str(ff_t *ff, const void *s)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
+              FF_TR(ff, FF_TR_EN("Bad string: %p."),
+                        FF_TR_RU("Неверная строка: %p.")), s);
+}
+
+/** @copydoc ff_fail_bad_file */
+void ff_fail_bad_file(ff_t *ff, const void *f)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
+              FF_TR(ff, FF_TR_EN("Bad file stream: %p."),
+                        FF_TR_RU("Неверный файловый поток: %p.")), f);
+}
+
+/** @copydoc ff_fail_code_word */
+void ff_fail_code_word(ff_t *ff, const char *word)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
+              FF_TR(ff, FF_TR_EN("'%s' holds code, not data."),
+                        FF_TR_RU("«%s» содержит код, а не данные.")), word);
+}
+
+/** @copydoc ff_fail_bad_size */
+void ff_fail_bad_size(ff_t *ff, const char *word, ff_int_t n)
+{
+    ff_raise(ff, FF_THROW_BAD_ARG, FF_SEV_ERROR | FF_ERR_MALFORMED,
+             FF_TR(ff, FF_TR_EN("%s: invalid size %" FF_PRIdCELL "."),
+                       FF_TR_RU("%s: недопустимый размер %" FF_PRIdCELL ".")), word, n);
+}
+
+/** @copydoc ff_fail_denied */
+void ff_fail_denied(ff_t *ff, const char *word)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED,
+              FF_TR(ff, FF_TR_EN("'%s' is not permitted."),
+                        FF_TR_RU("Слово «%s» запрещено.")), word);
+}
+
+/** @copydoc ff_fail_division */
+void ff_fail_division(ff_t *ff, bool overflow)
+{
+    if (overflow)
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO,
+                  FF_TR(ff, FF_TR_EN("Division overflow (most-negative / -1)."),
+                            FF_TR_RU("Переполнение при делении "
+                                     "(наименьшее отрицательное / -1).")));
+    else
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO,
+                  FF_TR(ff, FF_TR_EN("Division by zero."),
+                            FF_TR_RU("Деление на ноль.")));
+}
+
+/** @copydoc ff_fail_open_file */
+void ff_fail_open_file(ff_t *ff, const char *path, int err)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
+              FF_TR(ff, FF_TR_EN("Failed to open file '%s': %s."),
+                        FF_TR_RU("Не удалось открыть файл «%s»: %s.")),
+              path, strerror(err));
+}
+
+/** @copydoc ff_warn_not_unique */
+void ff_warn_not_unique(ff_t *ff, const char *name)
+{
+    ff_tracef(ff, FF_SEV_WARNING | FF_ERR_NON_UNIQUE,
+              FF_TR(ff, FF_TR_EN("'%s' isn't unique."),
+                        FF_TR_RU("Слово «%s» не уникально.")), name);
+}
+
+/** @copydoc ff_fail_undefined */
+ff_error_t ff_fail_undefined(ff_t *ff, const char *name)
+{
+    return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+                     FF_TR(ff, FF_TR_EN("'%s' undefined."),
+                               FF_TR_RU("Слово «%s» не определено.")), name);
+}
+
+/** @copydoc ff_fail_token_long */
+ff_error_t ff_fail_token_long(ff_t *ff)
+{
+    return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                     FF_TR(ff, FF_TR_EN("Token longer than %d bytes."),
+                               FF_TR_RU("Лексема длиннее %d байт.")),
+                     FF_TOKEN_SIZE - 1);
+}
+
+/** @copydoc ff_fail_bad_escape */
+ff_error_t ff_fail_bad_escape(ff_t *ff)
+{
+    return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
+                     FF_TR(ff, FF_TR_EN("Invalid escape sequence in string literal."),
+                               FF_TR_RU("Неверная escape-последовательность "
+                                        "в строковом литерале.")));
+}
+
+/** @copydoc ff_fail_open_string */
+ff_error_t ff_fail_open_string(ff_t *ff)
+{
+    return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_STRING,
+                     FF_TR(ff, FF_TR_EN("Unterminated string literal."),
+                               FF_TR_RU("Строковый литерал не закрыт.")));
+}
+
+/**
+ * Raise ABORT (THROW -1), for `abort` and for ff_abort() called from a
+ * running native word.
+ * @param ff Engine.
+ */
+static FF_COLD void ff_fail_abort(ff_t *ff)
+{
+    ff_raise(ff, FF_THROW_ABORT, FF_SEV_ERROR | FF_ERR_ABORTED,
+             FF_TR(ff, FF_TR_EN("Aborted."), FF_TR_RU("Прервано.")));
 }
 
 /**
@@ -713,14 +944,20 @@ static bool ff_mem_check(ff_t *ff)
     m->failed = false;
     if (m->oom)
         ff_raise(ff, FF_THROW_ALLOCATE, FF_SEV_ERROR | FF_ERR_OOM,
-                 "Out of memory allocating %zu bytes.", m->refused);
+                 FF_TR(ff, FF_TR_EN("Out of memory allocating %zu bytes."),
+                           FF_TR_RU("Не хватает памяти (запрошено байт: %zu).")),
+                 m->refused);
     else if (m->limit && m->refused != SIZE_MAX)
         ff_raise(ff, FF_THROW_DICT_OVER, FF_SEV_ERROR | FF_ERR_HEAP_OVER,
-                 "Memory limit reached: %zu more bytes wanted, %zu of %zu in use.",
+                 FF_TR(ff, FF_TR_EN("Memory limit reached: %zu more bytes wanted, "
+                                    "%zu of %zu in use."),
+                           FF_TR_RU("Достигнут предел памяти: запрошено ещё байт: %zu, "
+                                    "занято %zu из %zu.")),
                  m->refused, m->used, m->limit);
     else
         ff_raise(ff, FF_THROW_DICT_OVER, FF_SEV_ERROR | FF_ERR_HEAP_OVER,
-                 "Allocation too large.");
+                 FF_TR(ff, FF_TR_EN("Allocation too large."),
+                           FF_TR_RU("Слишком большой запрос памяти.")));
     return true;
 }
 
@@ -794,23 +1031,35 @@ const char *ff_parse(ff_t *ff, const char *word, ff_token_t kind)
     ff_token_t tok = ff->input
                          ? ff_tokenizer_next(t, ff->input, &ff->input_pos)
                          : FF_TOKEN_NULL;
-    const char *what = kind == FF_TOKEN_STRING ? "a string literal" : "a name";
 
+    /* Whole sentences per kind of token: a translation can't be put
+       together from pieces, its words agree with what is wanted. */
     if (t->truncated)
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                  "Token longer than %d bytes.", FF_TOKEN_SIZE - 1);
+        ff_fail_token_long(ff);
     else if (t->bad_escape)
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                  "Invalid escape sequence in string literal.");
+        ff_fail_bad_escape(ff);
     else if (tok == FF_TOKEN_NULL && (t->state & FF_TOK_STATE_STRING))
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_STRING,
-                  "Unterminated string literal.");
+        ff_fail_open_string(ff);
+    else if (tok == FF_TOKEN_NULL && kind == FF_TOKEN_STRING)
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
+                  FF_TR(ff, FF_TR_EN("'%s' needs a string literal after it on the same line."),
+                            FF_TR_RU("После «%s» на той же строке нужен строковый литерал.")),
+                  word);
     else if (tok == FF_TOKEN_NULL)
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
-                  "'%s' needs %s after it on the same line.", word, what);
+                  FF_TR(ff, FF_TR_EN("'%s' needs a name after it on the same line."),
+                            FF_TR_RU("После «%s» на той же строке нужно имя.")),
+                  word);
+    else if (tok != kind && kind == FF_TOKEN_STRING)
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
+                  FF_TR(ff, FF_TR_EN("'%s' needs a string literal, got '%s'."),
+                            FF_TR_RU("«%s» ждёт строковый литерал, а получено «%s».")),
+                  word, t->token);
     else if (tok != kind)
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MISSING,
-                  "'%s' needs %s, got '%s'.", word, what, t->token);
+                  FF_TR(ff, FF_TR_EN("'%s' needs a name, got '%s'."),
+                            FF_TR_RU("«%s» ждёт имя, а получено «%s».")),
+                  word, t->token);
     else
         return t->token;
     return NULL;
@@ -824,7 +1073,7 @@ ff_word_t *ff_parse_word(ff_t *ff, const char *word)
         return NULL;
     ff_word_t *w = ff_dict_lookup(&ff->dict, name);
     if (!w)
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED, "'%s' undefined.", name);
+        ff_fail_undefined(ff, name);
     return w;
 }
 
@@ -851,8 +1100,7 @@ static ff_word_t *ff_def_new(ff_t *ff, const char *word, ff_opcode_t op)
     else
     {
         if (ff_dict_lookup(&ff->dict, name))
-            ff_tracef(ff, FF_SEV_WARNING | FF_ERR_NON_UNIQUE,
-                      "'%s' isn't unique.", name);
+            ff_warn_not_unique(ff, name);
         if (!ff_dict_append(&ff->dict, ff_word_new(name, NULL, op, NULL)))
             ff_mem_refuse(&ff->dict.mem, cost, true);
     }
@@ -1023,7 +1271,9 @@ static bool ff_cf_push(ff_t *ff, ff_cf_kind_t kind, const char *opener,
     if (ff->n_cf >= FF_CF_DEPTH)
     {
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                  "Control structures nested deeper than %d.", FF_CF_DEPTH);
+                  FF_TR(ff, FF_TR_EN("Control structures nested deeper than %d."),
+                            FF_TR_RU("Управляющие структуры вложены глубже предела: %d.")),
+                  FF_CF_DEPTH);
         return false;
     }
     ff_cf_t *c = &ff->cf[ff->n_cf++];
@@ -1051,21 +1301,24 @@ static ff_cf_t *ff_cf_top(ff_t *ff, ff_cf_kind_t kind, const char *closer,
     if (ff->n_cf == 0)
     {
         ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                 "'%s' without '%s'.", closer, expect);
+                 FF_TR(ff, FF_TR_EN("'%s' without '%s'."),
+                           FF_TR_RU("«%s» без «%s».")), closer, expect);
         return NULL;
     }
     ff_cf_t *c = &ff->cf[ff->n_cf - 1];
     if (c->scope != ff->n_csig)
     {
         ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                 "'%s' can't close the '%s' outside this '{' scope.",
+                 FF_TR(ff, FF_TR_EN("'%s' can't close the '%s' outside this '{' scope."),
+                           FF_TR_RU("«%s» не может закрыть «%s» вне этой области «{».")),
                  closer, c->opener);
         return NULL;
     }
     if (c->kind != kind)
     {
         ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                 "'%s' can't close '%s'.", closer, c->opener);
+                 FF_TR(ff, FF_TR_EN("'%s' can't close '%s'."),
+                           FF_TR_RU("«%s» не может закрыть «%s».")), closer, c->opener);
         return NULL;
     }
     return c;
@@ -1139,7 +1392,9 @@ static bool ff_compile_call(ff_t *ff, const ff_word_t *w)
     if (layout != FF_OP_LAYOUT_NONE && layout != FF_OP_LAYOUT_WORD)
     {
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                  "'%s' is internal: only the compiler compiles it.", w->name);
+                  FF_TR(ff, FF_TR_EN("'%s' is internal: only the compiler compiles it."),
+                            FF_TR_RU("«%s» — внутреннее слово: его компилирует "
+                                     "только компилятор.")), w->name);
         return false;
     }
 
@@ -1164,7 +1419,8 @@ static bool ff_compile_call(ff_t *ff, const ff_word_t *w)
         if (i == 0)
         {
             ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                     "'leave' outside 'do' ... 'loop'.");
+                     FF_TR(ff, FF_TR_EN("'leave' outside 'do' ... 'loop'."),
+                               FF_TR_RU("«leave» вне «do» ... «loop».")));
             return false;
         }
         ff_compile_scope_unwind(ff, ff->n_csig, ff->cf[i - 1].scope);
@@ -1176,13 +1432,16 @@ static bool ff_compile_call(ff_t *ff, const ff_word_t *w)
             {
                 ff_raise(ff, FF_THROW_CS_MISMATCH,
                          FF_SEV_ERROR | FF_ERR_MALFORMED,
-                         "'does>' inside '%s' ... 'loop'.", ff->cf[i].opener);
+                         FF_TR(ff, FF_TR_EN("'does>' inside '%s' ... 'loop'."),
+                                   FF_TR_RU("«does>» внутри «%s» ... «loop».")),
+                         ff->cf[i].opener);
                 return false;
             }
         if (ff->n_csig > 0)
         {
             ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                     "'does>' inside a '{' scope.");
+                     FF_TR(ff, FF_TR_EN("'does>' inside a '{' scope."),
+                               FF_TR_RU("«does>» внутри области «{».")));
             return false;
         }
     }
@@ -1272,15 +1531,20 @@ static bool ff_sig_finish(ff_t *ff, ff_csig_t *cs, ff_error_t *ec)
     if (cs->var_in && !cs->var_out)
     {
         *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                        "'( ... -- )' with a counted output: an output count "
-                        "can't be verified once inputs are variadic. "
-                        "Declare '-- ...' instead.");
+                        FF_TR(ff, FF_TR_EN("'( ... -- )' with a counted output: an output count "
+                                           "can't be verified once inputs are variadic. "
+                                           "Declare '-- ...' instead."),
+                                  FF_TR_RU("«( ... -- )» со счётным выходом: при переменном "
+                                           "числе входов число выходов не проверить. "
+                                           "Объявите «-- ...».")));
         return false;
     }
     if (cs->nouts > 255)
     {
         *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                        "Scope declares too many outputs (max 255).");
+                        FF_TR(ff, FF_TR_EN("Scope declares too many outputs (max 255)."),
+                                  FF_TR_RU("Область объявляет слишком много выходов "
+                                           "(максимум 255).")));
         return false;
     }
 
@@ -1335,7 +1599,10 @@ static bool ff_sig_token(ff_t *ff, const char *tk, ff_error_t *ec)
             if (strcmp(tk, "(") != 0)
             {
                 *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                                "'{' must be followed by '( … -- … )'; got '%s'.",
+                                FF_TR(ff, FF_TR_EN("'{' must be followed by '( … -- … )'; "
+                                                   "got '%s'."),
+                                          FF_TR_RU("После «{» должно идти «( … -- … )», "
+                                                   "а получено «%s».")),
                                 tk);
                 return false;
             }
@@ -1351,7 +1618,8 @@ static bool ff_sig_token(ff_t *ff, const char *tk, ff_error_t *ec)
             if (strcmp(tk, ")") == 0)
             {
                 *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                                "Scope signature needs a '--'.");
+                                FF_TR(ff, FF_TR_EN("Scope signature needs a '--'."),
+                                          FF_TR_RU("В сигнатуре области нужен «--».")));
                 return false;
             }
             if (strcmp(tk, "...") == 0)
@@ -1363,7 +1631,9 @@ static bool ff_sig_token(ff_t *ff, const char *tk, ff_error_t *ec)
                 if (cs->nargs > 0)
                 {
                     *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                                    "'...' can't be combined with named inputs.");
+                                    FF_TR(ff, FF_TR_EN("'...' can't be combined with named inputs."),
+                                              FF_TR_RU("«...» нельзя сочетать с именованными "
+                                                       "входами.")));
                     return false;
                 }
                 cs->var_in = true;
@@ -1372,13 +1642,17 @@ static bool ff_sig_token(ff_t *ff, const char *tk, ff_error_t *ec)
             if (cs->var_in)
             {
                 *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                                "Named input '%s' can't follow '...'.", tk);
+                                FF_TR(ff, FF_TR_EN("Named input '%s' can't follow '...'."),
+                                          FF_TR_RU("Именованный вход «%s» не может идти "
+                                                   "после «...».")), tk);
                 return false;
             }
             if (cs->nargs >= FF_SCOPE_ARGS_MAX)
             {
                 *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                                "Scope declares more than %d inputs.",
+                                FF_TR(ff, FF_TR_EN("Scope declares more than %d inputs."),
+                                          FF_TR_RU("Область объявляет слишком много входов "
+                                                   "(максимум %d).")),
                                 FF_SCOPE_ARGS_MAX);
                 return false;
             }
@@ -1386,7 +1660,8 @@ static bool ff_sig_token(ff_t *ff, const char *tk, ff_error_t *ec)
             if (!cs->names[cs->nargs])
             {
                 *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
-                                "Out of memory.");
+                                FF_TR(ff, FF_TR_EN("Out of memory."),
+                                          FF_TR_RU("Не хватает памяти.")));
                 return false;
             }
             cs->nargs++;
@@ -1399,7 +1674,8 @@ static bool ff_sig_token(ff_t *ff, const char *tk, ff_error_t *ec)
             if (strcmp(tk, "--") == 0)
             {
                 *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                                "Scope signature has more than one '--'.");
+                                FF_TR(ff, FF_TR_EN("Scope signature has more than one '--'."),
+                                          FF_TR_RU("В сигнатуре области больше одного «--».")));
                 return false;
             }
             if (strcmp(tk, "...") == 0)
@@ -1410,7 +1686,9 @@ static bool ff_sig_token(ff_t *ff, const char *tk, ff_error_t *ec)
             if (cs->var_out)
             {
                 *ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                                "Named output '%s' can't follow '...'.", tk);
+                                FF_TR(ff, FF_TR_EN("Named output '%s' can't follow '...'."),
+                                          FF_TR_RU("Именованный выход «%s» не может идти "
+                                                   "после «...».")), tk);
                 return false;
             }
             /* Output names are documentation; only the count is enforced. */
@@ -1497,14 +1775,12 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
            truncated number mis-parse, so reject it outright. */
         if (t->truncated)
         {
-            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                           "Token longer than %d bytes.", FF_TOKEN_SIZE - 1);
+            ec = ff_fail_token_long(ff);
             goto out;
         }
         if (t->bad_escape)
         {
-            ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                           "Invalid escape sequence in string literal.");
+            ec = ff_fail_bad_escape(ff);
             goto out;
         }
 
@@ -1522,7 +1798,10 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
             if (tok != FF_TOKEN_WORD)
             {
                 ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_SIG,
-                               "'%s' is not a name a scope signature can bind.",
+                               FF_TR(ff, FF_TR_EN("'%s' is not a name a scope signature "
+                                                  "can bind."),
+                                         FF_TR_RU("«%s» — не имя, которое может связать "
+                                                  "сигнатура области.")),
                                t->token);
                 goto out;
             }
@@ -1556,8 +1835,7 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
                     ff_word_t *w = ff_dict_lookup(d, t->token);
                     if (!w)
                     {
-                        ec = ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
-                                       "'%s' undefined.", t->token);
+                        ec = ff_fail_undefined(ff, t->token);
                         goto out;
                     }
                     /* Compiling, a word is compiled unless it is
@@ -1655,8 +1933,7 @@ out:
     {
         ff->tokenizer.state &= ~FF_TOK_STATE_STRING;
         if (!(ff->state & FF_STATE_THROWN))
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_STRING,
-                      "Unterminated string literal.");
+            ff_fail_open_string(ff);
     }
 
     ff->input = prev_input;
@@ -1701,7 +1978,8 @@ static FF_NOINLINE void ff_fix_range_error(ff_t *ff, ff_real_t r)
     char num[40];
     ff_real_format(num, sizeof(num), "%g", (double)r);
     ff_raise(ff, FF_THROW_BAD_ARG, FF_SEV_ERROR | FF_ERR_MALFORMED,
-             "fix: %s doesn't fit a cell.", num);
+             FF_TR(ff, FF_TR_EN("fix: %s doesn't fit a cell."),
+                       FF_TR_RU("fix: %s не помещается в ячейку.")), num);
 }
 
 /**
@@ -1720,7 +1998,12 @@ static FF_NOINLINE void ff_print_stack(ff_t *ff)
     ft_set_cell_prop(tbl, FT_ANY_ROW, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
     ft_set_cell_prop(tbl, FT_ANY_ROW, 4, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
     ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
-    ft_u8write_ln(tbl, "#", "Dec", "Hex", "Real", "ASCII", "Ptr");
+    ft_u8write_ln(tbl, "#",
+                  FF_TR(ff, FF_TR_EN("Dec"), FF_TR_RU("Десят.")),
+                  FF_TR(ff, FF_TR_EN("Hex"), FF_TR_RU("Шестн.")),
+                  FF_TR(ff, FF_TR_EN("Real"), FF_TR_RU("Вещ.")),
+                  "ASCII",
+                  FF_TR(ff, FF_TR_EN("Ptr"), FF_TR_RU("Указ.")));
     for (size_t n = 0; n < S->top; ++n)
     {
         ff_int_t v = S->data[n];
@@ -1752,7 +2035,9 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
        left ready; from a native word, it stops the word that called it. */
     if (!w)
     {
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, "No word to execute.");
+        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR,
+                  FF_TR(ff, FF_TR_EN("No word to execute."),
+                            FF_TR_RU("Нет слова для исполнения.")));
         return false;
     }
 
@@ -1817,8 +2102,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
 #endif
 
     if (ff_unlikely(R->top + 2 > FF_STACK_SIZE))
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER,
-                  "Return stack overflow: %d item(s) would not fit.", 2);
+        ff_fail_rstack_over(ff, 2);
     else
     {
         _FF_RPUSH(0, FF_RK_IP);
@@ -1900,8 +2184,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely((int)(S->top - floor) < (int)(n))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER, \
-                          "Stack underflow: %d item(s) expected.", (int)(n)); \
+                ff_fail_stack_under(ff, (int)(n)); \
                 goto done; \
             } \
         } while (0)
@@ -1910,8 +2193,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely((int)S->top + (int)(n) > FF_STACK_SIZE)) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_OVER, \
-                          "Stack overflow: %d item(s) would not fit.", (int)(n)); \
+                ff_fail_stack_over(ff, (int)(n)); \
                 goto done; \
             } \
         } while (0)
@@ -1920,8 +2202,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely((int)R->top < (int)(n))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_UNDER, \
-                          "Return stack underflow: %d item(s) expected.", (int)(n)); \
+                ff_fail_rstack_under(ff, (int)(n)); \
                 goto done; \
             } \
         } while (0)
@@ -1930,8 +2211,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely((int)R->top + (int)(n) > FF_STACK_SIZE)) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER, \
-                          "Return stack overflow: %d item(s) would not fit.", (int)(n)); \
+                ff_fail_rstack_over(ff, (int)(n)); \
                 goto done; \
             } \
         } while (0)
@@ -1940,8 +2220,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(!(ff->state & FF_STATE_COMPILING))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF, \
-                          "Compiler word outside definition."); \
+                ff_fail_not_compiling(ff); \
                 goto done; \
             } \
         } while (0)
@@ -1952,8 +2231,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(!ff_dict_top(&ff->dict))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF, \
-                          "No current definition."); \
+                ff_fail_no_definition(ff); \
                 goto done; \
             } \
         } while (0)
@@ -2001,9 +2279,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(cond)) \
             { \
                 _FF_SYNC(); \
-                ff_raise(ff, FF_THROW_BAD_ARG, FF_SEV_ERROR | FF_ERR_MALFORMED, \
-                         "%s: invalid size %" FF_PRIdCELL ".", (word), \
-                         (ff_int_t)(n)); \
+                ff_fail_bad_size(ff, (word), (ff_int_t)(n)); \
                 goto done; \
             } \
         } while (0)
@@ -2015,8 +2291,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(ff->platform.deny & (cap))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED, \
-                          "'%s' is not permitted.", (word)); \
+                ff_fail_denied(ff, (word)); \
                 goto done; \
             } \
         } while (0)
@@ -2035,9 +2310,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(!ff_addr_valid(ff, (addr), (size_t)(bytes)))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                          "Bad pointer: %p (size %zu).", \
-                          (const void *)(addr), (size_t)(bytes)); \
+                ff_fail_bad_addr(ff, (const void *)(addr), (size_t)(bytes)); \
                 goto done; \
             } \
         } while (0)
@@ -2048,9 +2321,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(!ff_addr_writable(ff, (addr), (size_t)(bytes)))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                          "Bad pointer for a write: %p (size %zu).", \
-                          (const void *)(addr), (size_t)(bytes)); \
+                ff_fail_bad_write(ff, (const void *)(addr), (size_t)(bytes)); \
                 goto done; \
             } \
         } while (0)
@@ -2059,8 +2330,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(!ff_word_valid(ff, (w)))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                          "Bad execution token: %p.", (const void *)(w)); \
+                ff_fail_bad_xt(ff, (const void *)(w)); \
                 goto done; \
             } \
         } while (0)
@@ -2069,8 +2339,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(!ff_str_valid(ff, (const char *)(intptr_t)(s)))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                          "Bad string: %p.", (const void *)(intptr_t)(s)); \
+                ff_fail_bad_str(ff, (const void *)(intptr_t)(s)); \
                 goto done; \
             } \
         } while (0)
@@ -2082,8 +2351,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
                                            (std_too)))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                          "Bad file stream: %p.", (const void *)(intptr_t)(f)); \
+                ff_fail_bad_file(ff, (const void *)(intptr_t)(f)); \
                 goto done; \
             } \
         } while (0)
@@ -2094,8 +2362,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(!ff_word_holds_data(w))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                          "'%s' holds code, not data.", (w)->name); \
+                ff_fail_code_word(ff, (w)->name); \
                 goto done; \
             } \
         } while (0)
@@ -2178,9 +2445,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             if (ff_unlikely(ff->r_kind[R->top - 1 - (i)] != (k))) \
             { \
                 _FF_SYNC(); \
-                ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_IMBAL, \
-                          "Return stack imbalance: >r without r>, " \
-                          "or a return frame taken apart."); \
+                ff_fail_rstack_imbalance(ff); \
                 goto done; \
             } \
         } while (0)
@@ -2248,7 +2513,8 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
 #if FF_SAFE_MEM
                 _FF_SYNC();
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BAD_OPCODE,
-                          "Bad opcode 0x%llx.",
+                          FF_TR(ff, FF_TR_EN("Bad opcode 0x%llx."),
+                                    FF_TR_RU("Неверный код операции 0x%llx.")),
                           (unsigned long long)*(ip - 1));
                 goto done;
 #else
@@ -2268,7 +2534,8 @@ _watchdog_abort:
     _FF_SYNC();
     FF_ABORT_CLEAR(&ff->abort_requested);
     ff_raise(ff, FF_THROW_INTERRUPT, FF_SEV_ERROR | FF_ERR_ABORTED,
-             "Aborted after %llu opcodes.",
+             FF_TR(ff, FF_TR_EN("Aborted after %llu opcodes."),
+                       FF_TR_RU("Прервано (выполнено операций: %llu).")),
              (unsigned long long)ff->opcodes_run);
 
 done:
@@ -2410,8 +2677,7 @@ ff_error_t ff_load(ff_t *ff, const char *path)
 
     FILE *f = ff_open_file(ff, path, "r");
     if (!f)
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
-                  "Failed to open file '%s': %s.", path, strerror(errno));
+        ff_fail_open_file(ff, path, errno);
     else
     {
         char *line = NULL;
@@ -2435,7 +2701,8 @@ ff_error_t ff_load(ff_t *ff, const char *path)
         {
             if (oom)
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
-                          "Out of memory reading '%s'.", path);
+                          FF_TR(ff, FF_TR_EN("Out of memory reading '%s'."),
+                                    FF_TR_RU("Не хватает памяти для чтения «%s».")), path);
             /* A runaway comment. The comment state is dropped once
                reported: left set, it would swallow whatever the caller
                evaluates next. */
@@ -2443,7 +2710,8 @@ ff_error_t ff_load(ff_t *ff, const char *path)
             {
                 ff->tokenizer.state &= ~FF_TOK_STATE_COMMENT;
                 ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RUN_COMMENT,
-                          "Runaway ( comment.");
+                          FF_TR(ff, FF_TR_EN("Runaway ( comment."),
+                                    FF_TR_RU("Комментарий «(» не закрыт.")));
             }
         }
     }
@@ -2557,8 +2825,7 @@ void ff_abort(ff_t *ff)
        reset happens when the exception reaches the outermost call. */
     if (ff->exec_depth > 0 || ff->eval_depth > 0)
     {
-        ff_raise(ff, FF_THROW_ABORT, FF_SEV_ERROR | FF_ERR_ABORTED,
-                 "Aborted.");
+        ff_fail_abort(ff);
         return;
     }
     ff_reset(ff);

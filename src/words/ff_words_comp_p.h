@@ -36,7 +36,8 @@ case FF_OP_LBRACE:
     {
         _FF_SYNC();
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_OVER,
-                  "Scopes nested deeper than %d.", FF_CSCOPE_DEPTH);
+                  FF_TR(ff, FF_TR_EN("Scopes nested deeper than %d."),
+                            FF_TR_RU("Области вложены глубже предела: %d.")), FF_CSCOPE_DEPTH);
         goto done;
     }
     {
@@ -59,14 +60,16 @@ case FF_OP_RBRACE:
     {
         _FF_SYNC();
         ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                 "'}' without a matching '{'.");
+                 FF_TR(ff, FF_TR_EN("'}' without a matching '{'."),
+                           FF_TR_RU("«}» без парной «{».")));
         goto done;
     }
     if (ff_unlikely(ff->n_cf > 0 && ff->cf[ff->n_cf - 1].scope == ff->n_csig))
     {
         _FF_SYNC();
         ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                 "'%s' still open at '}'.", ff->cf[ff->n_cf - 1].opener);
+                 FF_TR(ff, FF_TR_EN("'%s' still open at '}'."),
+                           FF_TR_RU("«%s» всё ещё открыто у «}».")), ff->cf[ff->n_cf - 1].opener);
         goto done;
     }
     {
@@ -105,7 +108,8 @@ case FF_OP_RBRACKET:
     {
         _FF_SYNC();
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
-                  "No definition to resume.");
+                  FF_TR(ff, FF_TR_EN("No definition to resume."),
+                            FF_TR_RU("Нет определения, которое можно продолжить.")));
         goto done;
     }
     ff->state |= FF_STATE_COMPILING;
@@ -183,7 +187,8 @@ case FF_OP_POSTPONE_RUNTIME:
         if (ff_unlikely(!(ff->state & FF_STATE_COMPILING)))
         {
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
-                      "A postponed word ran with no definition being compiled.");
+                      FF_TR(ff, FF_TR_EN("A postponed word ran with no definition being compiled."),
+                                FF_TR_RU("Слово, отложенное postpone, выполнено вне компиляции определения.")));
             goto done;
         }
         if (!ff_compile_call(ff, w))
@@ -206,7 +211,8 @@ case FF_OP_COLON:
     {
         _FF_SYNC();
         ff_raise(ff, FF_THROW_NESTING, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                 "':' inside the definition of '%s'.", ff->compiling->name);
+                 FF_TR(ff, FF_TR_EN("':' inside the definition of '%s'."),
+                           FF_TR_RU("«:» внутри определения «%s».")), ff->compiling->name);
         goto done;
     }
     _FF_SYNC();
@@ -221,14 +227,16 @@ case FF_OP_SEMICOLON:
     {
         _FF_SYNC();
         ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                 "Definition ended with %d scope(s) still open.", ff->n_csig);
+                 FF_TR(ff, FF_TR_EN("Definition ended with %d scope(s) still open."),
+                           FF_TR_RU("Определение закончилось при открытых областях: %d.")), ff->n_csig);
         goto done;
     }
     if (ff_unlikely(ff->n_cf != 0))
     {
         _FF_SYNC();
         ff_raise(ff, FF_THROW_CS_MISMATCH, FF_SEV_ERROR | FF_ERR_MALFORMED,
-                 "'%s' still open at ';'.", ff->cf[ff->n_cf - 1].opener);
+                 FF_TR(ff, FF_TR_EN("'%s' still open at ';'."),
+                           FF_TR_RU("«%s» всё ещё открыто у «;».")), ff->cf[ff->n_cf - 1].opener);
         goto done;
     }
     {
@@ -312,7 +320,8 @@ case FF_OP_DOES:
     {
         _FF_SYNC();
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
-                  "does> used outside a defining word.");
+                  FF_TR(ff, FF_TR_EN("does> used outside a defining word."),
+                            FF_TR_RU("does> использовано вне определяющего слова.")));
         goto done;
     }
     /* Only a word `create` made: the does> clause replaces its run-time
@@ -324,7 +333,8 @@ case FF_OP_DOES:
     {
         _FF_SYNC();
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF,
-                  "does> needs a word made by create; '%s' isn't one.",
+                  FF_TR(ff, FF_TR_EN("does> needs a word made by create; '%s' isn't one."),
+                            FF_TR_RU("does> нужно слово, созданное create; «%s» не такое.")),
                   ff_dict_top(&ff->dict)->name);
         goto done;
     }

@@ -85,7 +85,8 @@ void ff_print_memstat(ff_t *ff)
     if (!f)
     {
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED,
-                  "Failed to open file '%s': %s",
+                  FF_TR(ff, FF_TR_EN("Failed to open file '%s': %s"),
+                            FF_TR_RU("Не удалось открыть файл «%s»: %s")),
                   statm_path, strerror(errno));
         return;
     }
@@ -98,7 +99,8 @@ void ff_print_memstat(ff_t *ff)
     if (n != 7)
     {
         ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNSUPPORTED,
-                  "Invalid or unsupported content of '%s'.",
+                  FF_TR(ff, FF_TR_EN("Invalid or unsupported content of '%s'."),
+                            FF_TR_RU("Неверное или неподдерживаемое содержимое «%s».")),
                   statm_path);
         return;
     }
@@ -115,13 +117,25 @@ void ff_print_memstat(ff_t *ff)
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
     ft_set_cell_prop(table, 0, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
     ft_set_cell_prop(table, 0, 1, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
-    ft_u8write_ln(table, "Memory area", "Size in bytes");
-    ft_u8printf_ln(table, "Resident|%ld", (long)(resident * page_size));
-    ft_u8printf_ln(table, "Shared|%ld", (long)(shared * page_size));
-    ft_u8printf_ln(table, "Code|%ld", (long)(text * page_size));
-    ft_u8printf_ln(table, "Data + stack|%ld", (long)(data * page_size));
+    ft_u8write_ln(table,
+                  FF_TR(ff, FF_TR_EN("Memory area"), FF_TR_RU("Область памяти")),
+                  FF_TR(ff, FF_TR_EN("Size in bytes"), FF_TR_RU("Размер, байт")));
+    ft_u8printf_ln(table, "%s|%ld",
+                   FF_TR(ff, FF_TR_EN("Resident"), FF_TR_RU("Резидентная")),
+                   (long)(resident * page_size));
+    ft_u8printf_ln(table, "%s|%ld",
+                   FF_TR(ff, FF_TR_EN("Shared"), FF_TR_RU("Разделяемая")),
+                   (long)(shared * page_size));
+    ft_u8printf_ln(table, "%s|%ld",
+                   FF_TR(ff, FF_TR_EN("Code"), FF_TR_RU("Код")),
+                   (long)(text * page_size));
+    ft_u8printf_ln(table, "%s|%ld",
+                   FF_TR(ff, FF_TR_EN("Data + stack"), FF_TR_RU("Данные и стек")),
+                   (long)(data * page_size));
     ft_add_separator(table);
-    ft_u8printf_ln(table, "Total|%ld", (long)(size * page_size));
+    ft_u8printf_ln(table, "%s|%ld",
+                   FF_TR(ff, FF_TR_EN("Total"), FF_TR_RU("Всего")),
+                   (long)(size * page_size));
 
     ff_printf(ff, "%s", (const char *)ft_to_u8string(table));
     ft_destroy_table(table);
@@ -131,22 +145,34 @@ void ff_print_memstat(ff_t *ff)
 
 const ff_word_def_t FF_DEBUG_WORDS[] =
 {
-    _FF_W("trace", FF_OP_TRACE,
-      "( n -- )  Trace mode\n"
-      "If *n* is nonzero, trace mode is enabled. If *n* is zero, trace mode is turned off."),
-    _FF_W("backtrace", FF_OP_BACKTRACE,
-      "( n -- )  Walk-back mode\n"
-      "If *n* is nonzero, a back trace through active words\n"
-      "will be performed whenever an error occurs during execution.\n"
-      "If *n* is zero, the back trace is suppressed."),
-    _FF_W("dump", FF_OP_DUMP,
-      "( a n -- )  Memory dump\n"
-      "Print memory dump *n* bytes in length starting at address *a*."),
+    _FF_W("trace", FF_OP_TRACE, "( n -- )",
+      FF_TR_EN("Trace mode\n"
+               "If *n* is nonzero, trace mode is enabled. If *n* is zero, trace mode is turned off."),
+      FF_TR_RU("Режим трассировки\n"
+               "Если *n* не равно нулю, трассировка включается. Если *n* равно нулю,\n"
+               "трассировка выключается.")),
+    _FF_W("backtrace", FF_OP_BACKTRACE, "( n -- )",
+      FF_TR_EN("Walk-back mode\n"
+               "If *n* is nonzero, a back trace through active words\n"
+               "will be performed whenever an error occurs during execution.\n"
+               "If *n* is zero, the back trace is suppressed."),
+      FF_TR_RU("Обратная трассировка\n"
+               "Если *n* не равно нулю, при каждой ошибке во время выполнения\n"
+               "печатается цепочка активных слов.\n"
+               "Если *n* равно нулю, цепочка не печатается.")),
+    _FF_W("dump", FF_OP_DUMP, "( a n -- )",
+      FF_TR_EN("Memory dump\n"
+               "Print memory dump *n* bytes in length starting at address *a*."),
+      FF_TR_RU("Дамп памяти\n"
+               "Печатает дамп памяти длиной *n* байт, начиная с адреса *a*.")),
 #ifdef FF_OS_UNIX
-    _FF_W("memstat", FF_OP_MEMSTAT,
-      "( -- )  Print memory status\n"
-      "Prints current memory usage of the process\n"
-      "(resident set, shared, code, data, total)."),
+    _FF_W("memstat", FF_OP_MEMSTAT, "( -- )",
+      FF_TR_EN("Print memory status\n"
+               "Prints current memory usage of the process\n"
+               "(resident set, shared, code, data, total)."),
+      FF_TR_RU("Состояние памяти\n"
+               "Печатает, сколько памяти сейчас занимает процесс\n"
+               "(резидентная, разделяемая, код, данные, всего).")),
 #endif
     FF_WEND
 };

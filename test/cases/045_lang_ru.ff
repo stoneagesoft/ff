@@ -1,0 +1,15 @@
+\ ff-test: lang=ru
+\ The engine's texts in Russian: what `see` says about words it can't
+\ show as source, and a `man` entry (the stack effect shared by every
+\ language, the title and text in Russian).
+see dup
+create buf 8 allot
+see buf
+defer hook
+see hook
+' dup is hook
+see hook
+: maker create , does> @ ;
+5 maker five
+see five
+man dup

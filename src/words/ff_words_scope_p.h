@@ -37,14 +37,16 @@ case FF_OP_SCOPE_ENTER:
         {
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                      "Stack underflow: scope expected %d input(s).", nargs);
+                      FF_TR(ff, FF_TR_EN("Stack underflow: scope expected %d input(s)."),
+                                FF_TR_RU("В стеке не хватает элементов: области нужно входов: %d.")), nargs);
             goto done;
         }
         if (ff_unlikely(ff->n_scopes >= FF_SCOPE_DEPTH))
         {
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_OVER,
-                      "Too many open scopes (max %d).", FF_SCOPE_DEPTH);
+                      FF_TR(ff, FF_TR_EN("Too many open scopes (max %d)."),
+                                FF_TR_RU("Слишком много открытых областей (максимум %d).")), FF_SCOPE_DEPTH);
             goto done;
         }
 
@@ -94,7 +96,8 @@ case FF_OP_SCOPE_UNWIND:
         {
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_BROKEN,
-                      "Scope exit with no open scope.");
+                      FF_TR(ff, FF_TR_EN("Scope exit with no open scope."),
+                                FF_TR_RU("Выход из области, когда ни одна не открыта.")));
             goto done;
         }
 
@@ -106,7 +109,8 @@ case FF_OP_SCOPE_UNWIND:
         {
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_STACK_UNDER,
-                      "Stack underflow: popped below the scope's barrier.");
+                      FF_TR(ff, FF_TR_EN("Stack underflow: popped below the scope's barrier."),
+                                FF_TR_RU("В стеке не хватает элементов: снятие ниже барьера области.")));
             goto done;
         }
 
@@ -121,7 +125,8 @@ case FF_OP_SCOPE_UNWIND:
         {
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_SCOPE_ARITY,
-                      "Scope declared %d output(s) but left %d.",
+                      FF_TR(ff, FF_TR_EN("Scope declared %d output(s) but left %d."),
+                                FF_TR_RU("Область объявила выходов: %d, а оставила: %d.")),
                       nouts, (int)produced);
             goto done;
         }
@@ -135,8 +140,9 @@ case FF_OP_SCOPE_UNWIND:
         {
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_IMBAL,
-                      "Scope left the return stack unbalanced "
-                      "(depth %d, expected %d).",
+                      FF_TR(ff, FF_TR_EN("Scope left the return stack unbalanced "
+                                         "(depth %d, expected %d)."),
+                                FF_TR_RU("Область нарушила баланс стека возвратов (глубина %d, ожидалось %d).")),
                       (int)R->top, (int)r_top);
             goto done;
         }

@@ -99,3 +99,50 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build --output-on-failure --no-tests=error
+
+  english-only:
+    name: No translations (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Configure without translations
+        run: >
+          cmake -G Ninja -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DFF_BUILD_TESTS=ON
+          -DFF_BUILD_EXAMPLES=ON
+          -DFF_WITH_TR=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure --no-tests=error
+
+  translations:
+    name: Russian texts complete (Linux)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      # Keeps the Russian texts only: a message or a manual missing its
+      # Russian fails to compile, and every Russian format is checked
+      # against its call's arguments. Built, not tested or shipped.
+      - name: Configure the Russian-only check build
+        run: >
+          cmake -G Ninja -B build
+          -DCMAKE_BUILD_TYPE=Release
+          -DFF_BUILD_EXAMPLES=ON
+          -DFF_TR_ONLY=ru
+
+      - name: Build
+        run: cmake --build build --parallel

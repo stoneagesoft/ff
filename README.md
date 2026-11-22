@@ -72,6 +72,12 @@ host-supplied native words.
   Forth code can use, withholds `system`, file access and `load` (or
   routes them through its own callbacks), and bounds run time with a
   watchdog. Allocation failures raise errors instead of crashing.
+- **Messages and manuals in Russian too.** Every engine shows its error
+  messages, warnings and `man` entries in the language its host sets —
+  English or Russian — and can switch at any time; `ffsh` follows the
+  user's locale. A host's own words can carry translated manuals the
+  same way. A build without translations (`FF_WITH_TR=OFF`) is
+  English-only and carries none of it.
 - **Strings are C strings.** No counted-string convention; every
   string-valued word returns or accepts a single `char *` to a NUL-
   terminated sequence. `s!`, `s+`, `strlen`, `strcmp` are one-line
@@ -235,6 +241,7 @@ Configurable options:
 | `FF_BUILD_TESTS`       | OFF     | Build the regression-test driver and register it with `ctest` |
 | `FF_BUILD_EXAMPLES`    | OFF     | Build the bundled example programs (currently `ffsh`) as part of the main build |
 | `FF_SAFE_MEM`          | OFF     | Validate every fetch/store/execute pointer (see below) |
+| `FF_WITH_TR`           | ON      | Include the translations (Russian) of messages and `man` entries; OFF is English-only |
 | `BUILD_SHARED_LIBS`    | OFF     | Shorthand: equivalent to `FF_BUILD_SHARED=ON`     |
 
 Run the test suite:

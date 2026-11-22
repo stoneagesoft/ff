@@ -48,16 +48,15 @@ case FF_OP_FOPEN:
         if (slot < 0)
         {
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
-                      "Too many open files (%d).", FF_OPEN_FILES_MAX);
+                      FF_TR(ff, FF_TR_EN("Too many open files (%d)."),
+                                FF_TR_RU("Слишком много открытых файлов (%d).")), FF_OPEN_FILES_MAX);
             goto done;
         }
         FILE *f = ff_open_file(ff, (const char *)(intptr_t)tos,
                                (const char *)(intptr_t)_FF_NOS);
         if (!f)
         {
-            ff_tracef(ff, FF_SEV_ERROR | FF_ERR_FILE_IO,
-                      "Failed to open file '%s': %s.",
-                      (const char *)(intptr_t)tos, strerror(errno));
+            ff_fail_open_file(ff, (const char *)(intptr_t)tos, errno);
             goto done;
         }
         ff->files[slot] = f;

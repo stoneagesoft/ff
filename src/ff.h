@@ -12,6 +12,7 @@
 #pragma once
 
 #include <ff_error.h>
+#include <ff_tr.h>
 #include <ff_version.h>
 
 #include <stdarg.h>
@@ -329,13 +330,20 @@ typedef struct ff_native_word
     const char *name;       /**< Forth name; NULL terminates the table. */
     bool        immediate;  /**< true = compile-time (immediate) word. */
     ff_word_fn  fn;         /**< Implementation. */
-    const char *manual;     /**< Optional help text (first line = prototype); may be NULL. */
+    const char *manual;     /**< Optional help text (first line = prototype); may be NULL. Translated,
+                                 every language in one string (see FF_TR_JOIN in ff_tr.h). */
 } ff_native_word_t;
 
-/** @brief Table row for an ordinary native word. */
-#define FF_NATIVE(name, fn, man)    { (name), false, (fn), (man) }
-/** @brief Table row for an immediate native word. */
-#define FF_NATIVE_I(name, fn, man)  { (name), true,  (fn), (man) }
+/**
+ * @brief Table row for an ordinary native word. The manual is one text
+ *        or NULL, or its translations, 1 to FF_TR_MAX of them, each
+ *        marked: `FF_TR_EN("( n -- n*n )  Square"), FF_TR_RU("…")`.
+ *        `man` shows the engine's language (ff_set_lang()).
+ */
+#define FF_NATIVE(name, fn, ...)    { (name), false, (fn), FF_TR_JOIN(__VA_ARGS__) }
+/** @brief Table row for an immediate native word; the manual as for
+ *         FF_NATIVE. */
+#define FF_NATIVE_I(name, fn, ...)  { (name), true,  (fn), FF_TR_JOIN(__VA_ARGS__) }
 /** @brief Sentinel terminating a native-word table. */
 #define FF_NATIVE_END               { NULL, false, NULL, NULL }
 

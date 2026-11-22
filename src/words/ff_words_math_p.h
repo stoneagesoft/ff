@@ -63,9 +63,7 @@ case FF_OP_DIV:
     if (tos == 0 || (tos == -1 && _FF_NOS == FF_INT_MIN))
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO,
-                  tos == 0 ? "Division by zero."
-                           : "Division overflow (most-negative / -1).");
+        ff_fail_division(ff, tos != 0);
         goto done;
     }
     tos = _FF_NOS / tos;
@@ -78,9 +76,7 @@ case FF_OP_MOD:
     if (tos == 0 || (tos == -1 && _FF_NOS == FF_INT_MIN))
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO,
-                  tos == 0 ? "Division by zero."
-                           : "Division overflow (most-negative / -1).");
+        ff_fail_division(ff, tos != 0);
         goto done;
     }
     tos = _FF_NOS % tos;
@@ -186,9 +182,7 @@ case FF_OP_DIVMOD:
     if (tos == 0 || (tos == -1 && _FF_NOS == FF_INT_MIN))
     {
         _FF_SYNC();
-        ff_tracef(ff, FF_SEV_ERROR | FF_ERR_DIV_ZERO,
-                  tos == 0 ? "Division by zero."
-                           : "Division overflow (most-negative / -1).");
+        ff_fail_division(ff, tos != 0);
         goto done;
     }
     {
@@ -288,7 +282,8 @@ case FF_OP_SET_BASE:
         default:
             _FF_SYNC();
             ff_tracef(ff, FF_SEV_ERROR | FF_ERR_APPLICATION,
-                      "Unsupported base %" FF_PRIdCELL ".", tos);
+                      FF_TR(ff, FF_TR_EN("Unsupported base %" FF_PRIdCELL "."),
+                                FF_TR_RU("Неподдерживаемое основание %" FF_PRIdCELL ".")), tos);
             goto done;
     }
     _FF_DROP();

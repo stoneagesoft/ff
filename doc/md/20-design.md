@@ -97,6 +97,8 @@ The installed header surface is organised in two tiers.
   `ff_free`, `ff_exec`, `ff_load`, `ff_abort`, `ff_printf`, `ff_tracef`.
 - `ff_error.h` — error codes and severity flags.
 - `ff_platform.h` — `ff_platform_t` I/O callback struct.
+- `ff_tr.h` — translations: the language markers, `FF_TR`, the
+  language of an engine (see *Translations*).
 
 A typical program that just wants to evaluate Forth source includes
 only `ff.h` and `ff_platform.h`.
@@ -127,7 +129,7 @@ definitions (no corresponding struct body):
 **Implementation files** in `src/` (one `.c` per subsystem):
 
 `ff.c`, `ff_dict.c`, `ff_word.c`, `ff_heap.c`, `ff_stack.c`,
-`ff_bt_stack.c`, `ff_tokenizer.c`.
+`ff_bt_stack.c`, `ff_tokenizer.c`, `ff_tr.c`.
 
 To write custom native C words, include `ff_p.h` — it re-exports every
 public and private header the engine itself uses. The `_p.h` suffix
@@ -1107,6 +1109,13 @@ sit after the few calls out to C that can raise (`FF_OP_CALL`, `catch`,
 `evaluate`, `load`, the introspection helpers), which are off the hot
 path anyway.
 
+The errors themselves are raised out of line. The checks the dispatch
+loop makes at hundreds of places — stack depth, compile state, the
+safe-mode pointer checks — each call an `ff_fail_*` function
+(`ff_p.h`) when they fail, declared cold: the message is formatted, and
+translated, in one place rather than at every check, and GCC moves the
+failing paths out of the hot part of `ff_exec` altogether.
+
 
 ### Unified trace gate
 
@@ -1461,6 +1470,8 @@ engine is compiled:
 | `FF_SAFE_MEM` | Validates every address, string, execution token and file stream a word takes from the stack; see *Memory safety*. |
 | `FF_WITH_SYSTEM` | ON by default. OFF leaves out the `system` word, for a build that can't run commands whatever the host allows (or a C library without `system()`). |
 | `FF_WITH_FILES` | ON by default. OFF leaves out the file words (`fopen` … `stderr`) and `load`; the host's `ff_load()` stays. |
+| `FF_WITH_TR` | ON by default. OFF keeps ff's texts English only, with no translated text or translation code in the library; see *Translations*. |
+| `FF_TR_ONLY=ru` | A check build: keeps the Russian texts only, so a text missing one fails to compile; see *Translations*. Not for shipping. |
 | `FF_R_TRUSTED` | Drops the `_FF_RSL` underflow checks inside opcodes the compiler emits in matched pairs (`EXIT`, `XLOOP`, `PXLOOP`, `LEAVE`, `UNLOOP`, `LOOP_I`, `LOOP_J`, and the `i +` / `r@ +` superinstructions). Well-formed code can't fail them; the compiler rejects `leave` outside a loop, but `i` or `j` misused outside one then go unchecked. Overflow checks are never dropped, since recursion depth is up to the program. The embedder-facing `FF_RSL` in custom native words is unaffected. ~5 % on loop-heavy code. A safe build (`FF_SAFE_MEM`) keeps the checks. |
 | `FF_LTO` | Enables link-time optimisation (`-flto` / `/GL` via CMake's `INTERPROCEDURAL_OPTIMIZATION`). Lets the compiler inline across translation-unit boundaries — particularly `ff_exec` ↔ `ff_dict_lookup` ↔ `ff_word_native_fn`. Typically 2-5 %. |
 | `FF_PGO=GENERATE` / `USE` | Profile-guided optimisation. Two-pass build: first an instrumented build that writes `*.profraw` when run against a representative workload, then `llvm-profdata merge`, then a second build with `FF_PGO=USE -DFF_PGO_DATA=path/to/merged.profdata`. Typical gain on dispatch-bound code: 5-15 %. |
@@ -1801,3 +1812,120 @@ output, and non-ANSI terminals. Set to 1 when building for an
 interactive terminal embedding. Custom hosts that need both at
 runtime can simply call the relevant function directly — both ship in
 the library regardless of the flag.
+
+
+## Translations
+
+Every text the engine shows people — error messages, warnings, `man`
+entries, the labels of the tables `man`, `.s`, `dump-word` and
+`memstat` print, the prose `see` puts in its comments — is written where
+it is used, in each language it has. A literal is marked with its
+language, and `FF_TR` picks, when it runs, the one in the engine's
+language ([src/ff_tr.h](src/ff_tr.h)):
+
+~~~{.c}
+ff_tracef(ff, FF_SEV_ERROR | FF_ERR_UNDEFINED,
+          FF_TR(ff, FF_TR_EN("'%s' undefined."),
+                    FF_TR_RU("Слово «%s» не определено.")), name);
+~~~
+
+A marker puts a tag in front of its literal: the byte 0x1E (ASCII RS)
+and the language's two-letter ISO 639-1 code. `FF_TR` passes each
+translation to `ff_tr()` as an argument of its own, in whatever order
+they are written, and `ff_tr()` returns the text tagged with the
+engine's language, else the English one. A translation not written yet
+is left out, or written `FF_TR_RU("")`, and shows in English. A text
+takes one to `FF_TR_MAX` translations (two: English and Russian); a new
+language raises the maximum, which changes the macro definitions in
+`ff_tr.h`, never a call site.
+
+`ff_tr()` is declared with `format_arg` on every translation, as
+`gettext()` is on its message, so GCC and Clang check each translation
+of a format against the arguments of the call it is passed to.
+
+### Texts kept for later
+
+The built-in words' manuals live in the static word tables, which every
+engine shares — and each engine may show a different language, and
+switch. So a table row keeps every language, and `man` picks one when
+it runs. The row macros write the translations next to each other into
+one string: the stack effect, the same in every language, then each
+language's title and text:
+
+~~~{.c}
+_FF_W("dup", FF_OP_DUP, "( n -- n n )",
+      FF_TR_EN("Duplicate\n"
+               "Duplicates the value at the top of the stack."),
+      FF_TR_RU("Дублировать\n"
+               "Дублирует значение на вершине стека.")),
+~~~
+
+`ff_tr_copy()` reads such a string: whatever precedes the first tag,
+then the text in the language asked for, else the English one. A string
+with no tag is the same in every language, so a plain manual keeps
+working. `FF_NATIVE()` takes a host word's manual either way: one text,
+or marked translations.
+
+A stored text is never used as a format: once it is in a variable, no
+build can check its conversions. `man` hands its manual to the Markdown
+renderer and to fort as text.
+
+### The language of an engine
+
+Each engine has a language of its own. `ff_platform_t::lang` gives it
+to `ff_new()`, `ff_set_lang()` changes it at any time — the next message
+raised or manual shown follows — and `ff_lang()` reports it. It takes a
+code or a locale name ("ru", "ru_RU.UTF-8"); NULL, "C" and "POSIX" are
+English. A language ff has no texts in is kept, for the host's own
+texts, and ff's show in English. Engines share nothing but the built-in
+tables, which are read-only, so engines in different languages run side
+by side.
+
+The library never reads the environment. `ffsh` picks the language at
+start-up the way gettext picks a program's: the locale of messages
+(`LC_ALL`, else `LC_MESSAGES`, else `LANG`), and ahead of it the first
+language of `$LANGUAGE` that ff has texts in — except under the C or
+POSIX locale, where `$LANGUAGE` is ignored, so that a script run with
+`LC_ALL=C` gets English. On Windows it takes the first of the user's
+display languages that ff has. `ff_tr_lang_of()` tells which languages
+those are.
+
+### Writing translated texts
+
+- **Whole sentences.** A sentence put together from translated pieces
+  doesn't survive translation: in Russian the verb agrees with the noun
+  put into it ("нужно имя", "нужен строковый литерал"). Branch on the
+  case and write out each sentence.
+- **No number agreement.** Russian has three plural forms. A message
+  names a count after a colon or in parentheses ("нужно элементов: %d"),
+  never with a noun that would have to agree with it; English keeps
+  "item(s)", or writes the singular and the plural out.
+- **The same conversions, in the same order.** Positional arguments
+  (`%1$s`) are POSIX, not ISO C, and MSVC's printf rejects them. A
+  translation may use fewer of a call's arguments, never others.
+- **Names in «» in Russian**, as in '' in English. Forth words, stack
+  effects, error codes and the source `see` prints are the same in
+  every language.
+
+### Builds
+
+`FF_WITH_TR` (ON by default) turns the whole of it on or off. OFF keeps
+English only: every marker but English expands to nothing, `FF_TR` is
+the English literal, and the library carries no translated text and no
+translation code. The setting is written into the generated
+`ff_version.h`, so a host compiles against the one the library was
+built with.
+
+`FF_TR_ONLY=ru` makes a check build for CI and translators. It keeps
+the Russian texts only, so a call or a table row missing one fails to
+compile, and checks every Russian format as a plain literal. Build the
+library and `ffsh` with it, not the tests, and don't ship it.
+
+### Cost
+
+None while Forth code runs: translation code runs only when a text is
+shown — an error raised, a manual printed — and then picks among two
+tags. The checks in the dispatch loop raise their errors out of line
+(see *Exceptions stay off the hot path*), so the translations add
+nothing to `ff_exec`'s hot part. They add about 48 KB of read-only text
+to the library.

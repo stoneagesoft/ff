@@ -196,6 +196,11 @@ struct ff
        must stop: the outermost API call settles whatever reaches it. */
     int             eval_depth;
     int             exec_depth;
+
+    /** Language the engine shows its texts in: a two-letter code (see
+        ff_set_lang()). Last, with the other cold fields, so that it moves
+        none of the hot ones. */
+    char lang[3];
 };
 
 
@@ -226,6 +231,96 @@ struct ff
 #else
 #  define FF_NOINLINE
 #endif
+
+/**
+ * @def FF_COLD
+ * @brief An out-of-line function that runs only when something has gone
+ *        wrong: GCC and Clang place it away from the hot code and treat
+ *        the paths that call it as unlikely.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+#  define FF_COLD __attribute__((cold, noinline))
+#else
+#  define FF_COLD FF_NOINLINE
+#endif
+
+
+/* ===================================================================
+ * The errors the checks raise.
+ *
+ * The check macros below and their dispatch-context twins in ff_exec
+ * (`_FF_SL` & co.) expand at hundreds of places, most of them inside
+ * ff_exec. Each raises its error through one of these functions, kept
+ * out of line, so that a failed check costs a call where it fails and
+ * nothing else: the message and its formatting live here once, not at
+ * every expansion inside the dispatch loop.
+ * =================================================================== */
+
+/** @brief Raise "stack underflow": @p n items were needed. */
+FF_COLD void ff_fail_stack_under(ff_t *ff, int n);
+/** @brief Raise "stack overflow": @p n more items would not fit. */
+FF_COLD void ff_fail_stack_over(ff_t *ff, int n);
+/** @brief Raise "return stack underflow": @p n items were needed. */
+FF_COLD void ff_fail_rstack_under(ff_t *ff, int n);
+/** @brief Raise "return stack overflow": @p n more items would not fit. */
+FF_COLD void ff_fail_rstack_over(ff_t *ff, int n);
+/** @brief Raise "return stack imbalance" (FF_SAFE_MEM: a return, `leave`
+ *         or loop met a cell the program pushed, or a frame taken apart). */
+FF_COLD void ff_fail_rstack_imbalance(ff_t *ff);
+/** @brief Raise "compiler word outside a definition". */
+FF_COLD void ff_fail_not_compiling(ff_t *ff);
+/** @brief Raise "no current definition" (a word acting on the newest
+ *         word, on an engine that has none). */
+FF_COLD void ff_fail_no_definition(ff_t *ff);
+/** @brief Raise "bad pointer": @p bytes at @p addr are not in a tracked
+ *         region (FF_SAFE_MEM). */
+FF_COLD void ff_fail_bad_addr(ff_t *ff, const void *addr, size_t bytes);
+/** @brief Raise "bad pointer for a write": @p bytes at @p addr can't be
+ *         written (FF_SAFE_MEM). */
+FF_COLD void ff_fail_bad_write(ff_t *ff, const void *addr, size_t bytes);
+/** @brief Raise "bad execution token" (FF_SAFE_MEM). */
+FF_COLD void ff_fail_bad_xt(ff_t *ff, const void *w);
+/** @brief Raise "bad string" (FF_SAFE_MEM). */
+FF_COLD void ff_fail_bad_str(ff_t *ff, const void *s);
+/** @brief Raise "bad file stream" (FF_SAFE_MEM). */
+FF_COLD void ff_fail_bad_file(ff_t *ff, const void *f);
+/** @brief Raise "@p word holds code, not data" (FF_SAFE_MEM). */
+FF_COLD void ff_fail_code_word(ff_t *ff, const char *word);
+/** @brief Raise "@p word: invalid size @p n" (THROW -24). */
+FF_COLD void ff_fail_bad_size(ff_t *ff, const char *word, ff_int_t n);
+/** @brief Raise "@p word is not permitted" (withheld by
+ *         ff_platform::deny). */
+FF_COLD void ff_fail_denied(ff_t *ff, const char *word);
+/** @brief Raise a division's error: by zero, or, with @p overflow, the
+ *         most negative number divided by -1. */
+FF_COLD void ff_fail_division(ff_t *ff, bool overflow);
+/** @brief Raise "failed to open file @p path", with the text of errno
+ *         value @p err. */
+FF_COLD void ff_fail_open_file(ff_t *ff, const char *path, int err);
+/** @brief Warn that a word named @p name already exists — the new one
+ *         shadows it. */
+FF_COLD void ff_warn_not_unique(ff_t *ff, const char *name);
+
+/* These return the error raised, as ff_tracef() does, for callers that
+   pass it on. */
+
+/** @brief Raise "@p name undefined". */
+FF_COLD ff_error_t ff_fail_undefined(ff_t *ff, const char *name);
+/** @brief Raise "token longer than FF_TOKEN_SIZE - 1 bytes" (the lexer
+ *         cut it short). */
+FF_COLD ff_error_t ff_fail_token_long(ff_t *ff);
+/** @brief Raise "invalid escape sequence in a string literal". */
+FF_COLD ff_error_t ff_fail_bad_escape(ff_t *ff);
+/** @brief Raise "unterminated string literal". */
+FF_COLD ff_error_t ff_fail_open_string(ff_t *ff);
+
+/**
+ * @brief Drop a character a cut at a byte count left half-written at the
+ *        end of @p s: a text cut to fit its buffer must stay valid UTF-8,
+ *        and a translated one is mostly characters of two bytes.
+ * @param s NUL-terminated text, cut at an arbitrary byte.
+ */
+void ff_utf8_cut(char *s);
 
 
 /* ===================================================================
@@ -262,8 +357,7 @@ struct ff
     do { \
         if (ff_unlikely((int)((e)->stack.top - (e)->stack.floor) < (int)(n))) \
         { \
-            ff_tracef(e, FF_SEV_ERROR | FF_ERR_STACK_UNDER, \
-                      "Stack underflow: %d item(s) expected.", (int)(n)); \
+            ff_fail_stack_under((e), (int)(n)); \
             return; \
         } \
     } while (0)
@@ -277,8 +371,7 @@ struct ff
     do { \
         if (ff_unlikely((int)(e)->stack.top + (int)(n) > FF_STACK_SIZE)) \
         { \
-            ff_tracef(e, FF_SEV_ERROR | FF_ERR_STACK_OVER, \
-                      "Stack overflow: %d item(s) would not fit.", (int)(n)); \
+            ff_fail_stack_over((e), (int)(n)); \
             return; \
         } \
     } while (0)
@@ -292,8 +385,7 @@ struct ff
     do { \
         if (ff_unlikely((int)(e)->r_stack.top < (int)(n))) \
         { \
-            ff_tracef(e, FF_SEV_ERROR | FF_ERR_RSTACK_UNDER, \
-                      "Return stack underflow: %d item(s) expected.", (int)(n)); \
+            ff_fail_rstack_under((e), (int)(n)); \
             return; \
         } \
     } while (0)
@@ -307,8 +399,7 @@ struct ff
     do { \
         if (ff_unlikely((int)(e)->r_stack.top + (int)(n) > FF_STACK_SIZE)) \
         { \
-            ff_tracef(e, FF_SEV_ERROR | FF_ERR_RSTACK_OVER, \
-                      "Return stack overflow: %d item(s) would not fit.", (int)(n)); \
+            ff_fail_rstack_over((e), (int)(n)); \
             return; \
         } \
     } while (0)
@@ -322,8 +413,7 @@ struct ff
     do { \
         if (ff_unlikely(!((e)->state & FF_STATE_COMPILING))) \
         { \
-            ff_tracef(e, FF_SEV_ERROR | FF_ERR_NOT_IN_DEF, \
-                      "Compiler word outside definition."); \
+            ff_fail_not_compiling(e); \
             return; \
         } \
     } while (0)
@@ -482,9 +572,7 @@ static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
        do { \
            if (ff_unlikely(!ff_addr_writable((e), (addr), (size_t)(bytes)))) \
            { \
-               ff_tracef(e, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                         "Bad pointer for a write: %p (size %zu).", \
-                         (const void *)(addr), (size_t)(bytes)); \
+               ff_fail_bad_write((e), (const void *)(addr), (size_t)(bytes)); \
                return; \
            } \
        } while (0)
@@ -492,8 +580,7 @@ static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
        do { \
            if (ff_unlikely(!ff_str_valid((e), (const char *)(s)))) \
            { \
-               ff_tracef(e, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                         "Bad string: %p.", (const void *)(s)); \
+               ff_fail_bad_str((e), (const void *)(s)); \
                return; \
            } \
        } while (0)
@@ -501,9 +588,7 @@ static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
        do { \
            if (ff_unlikely(!ff_addr_valid((e), (addr), (size_t)(bytes)))) \
            { \
-               ff_tracef(e, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                         "Bad pointer: %p (size %zu).", \
-                         (const void *)(addr), (size_t)(bytes)); \
+               ff_fail_bad_addr((e), (const void *)(addr), (size_t)(bytes)); \
                return; \
            } \
        } while (0)
@@ -511,8 +596,7 @@ static inline bool ff_addr_valid(const ff_t *ff, const void *addr, size_t bytes)
        do { \
            if (ff_unlikely(!ff_word_valid((e), (w)))) \
            { \
-               ff_tracef(e, FF_SEV_ERROR | FF_ERR_BAD_PTR, \
-                         "Bad execution token: %p.", (const void *)(w)); \
+               ff_fail_bad_xt((e), (const void *)(w)); \
                return; \
            } \
        } while (0)

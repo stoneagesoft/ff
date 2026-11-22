@@ -234,7 +234,7 @@ case FF_OP_QUIT:
     evaluation resets the engine and returns FF_ERR_ABORTED. */
 case FF_OP_ABORT:
     _FF_SYNC();
-    ff_raise(ff, FF_THROW_ABORT, FF_SEV_ERROR | FF_ERR_ABORTED, "Aborted.");
+    ff_fail_abort(ff);
     goto done;
 
 /** ( n -- | i*x n -- )  `throw` — non-zero raises an exception; the
