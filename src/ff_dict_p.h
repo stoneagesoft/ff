@@ -414,6 +414,26 @@ void ff_w_dump_word_impl(struct ff *ff);
  */
 void ff_w_see_impl(struct ff *ff);
 
+/**
+ * Implementation of `lang@` — push a copy of the engine's language code.
+ * @param ff Engine instance, its stack in memory.
+ */
+void ff_w_lang_fetch_impl(struct ff *ff);
+
+/**
+ * Implementation of `lang!` — set the engine's language from the string
+ * on the stack; -24 if it names no language.
+ * @param ff Engine instance, its stack in memory.
+ */
+void ff_w_lang_store_impl(struct ff *ff);
+
+/**
+ * Implementation of `.langs` — list the languages ff has texts in,
+ * marking the engine's.
+ * @param ff Engine instance.
+ */
+void ff_w_dot_langs_impl(struct ff *ff);
+
 /* --- Built-in registration tables defined alongside their case bodies. --- */
 
 extern const ff_word_def_t FF_ARRAY_WORDS[];   /**< Array words (`array`, `array-runtime`). */
@@ -431,6 +451,7 @@ extern const ff_word_def_t FF_REAL_WORDS[];    /**< Floating-point math. */
 extern const ff_word_def_t FF_STACK2_WORDS[];  /**< Double-cell stack ops (`2dup`, …). */
 extern const ff_word_def_t FF_STACK_WORDS[];   /**< Stack ops (`dup`, `swap`, `pick`, …). */
 extern const ff_word_def_t FF_STRING_WORDS[];  /**< String ops (`s!`, `s+`, `strlen`, …). */
+extern const ff_word_def_t FF_TR_WORDS[];      /**< Language of the texts (`lang@`, `lang!`, `.langs`). */
 extern const ff_word_def_t FF_VAR_WORDS[];     /**< Definitions (`create`, `variable`, …). */
 
 /**

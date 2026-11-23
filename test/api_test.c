@@ -1037,22 +1037,51 @@ static void test_translations(void)
     CHECK(ff_tr_lang_of("") == NULL);
     CHECK(ff_tr_lang_of(NULL) == NULL);
 
+    /* The languages ff has texts in, English first, with their names. */
+    CHECK(strcmp(ff_tr_langs()[0], "en") == 0);
+    CHECK(strcmp(ff_tr_langs()[1], "ru") == 0);
+    CHECK(ff_tr_langs()[2] == NULL);
+    CHECK(strcmp(ff_tr_lang_name("ru_RU.UTF-8"), "Русский") == 0);
+    CHECK(strcmp(ff_tr_lang_name("en"), "English") == 0);
+    CHECK(ff_tr_lang_name("de") == NULL);
+
     /* An engine's language, switched on the fly: the next message is in
-       it. A language ff has no texts in is kept, and ff's show English. */
-    ff_set_lang(ff, "ru_RU.UTF-8");
+       it. What is set is the language in effect: English for one ff has
+       no texts in; a name that names no language changes nothing. */
+    CHECK(strcmp(ff_set_lang(ff, "ru_RU.UTF-8"), "ru") == 0);
     CHECK(strcmp(ff_lang(ff), "ru") == 0);
     CHECK(ff_eval(ff, "zork") == FF_ERR_UNDEFINED);
     CHECK(strcmp(ff_strerror(ff), "Слово «zork» не определено.") == 0);
     CHECK(ff_eval(ff, "drop") == FF_ERR_STACK_UNDER);
     CHECK(strcmp(ff_strerror(ff), "В стеке не хватает элементов: нужно 1.") == 0);
-    ff_set_lang(ff, "de");
-    CHECK(strcmp(ff_lang(ff), "de") == 0);
+    CHECK(ff_set_lang(ff, "rus") == NULL);
+    CHECK(ff_set_lang(ff, "") == NULL);
+    CHECK(strcmp(ff_lang(ff), "ru") == 0);
+    CHECK(strcmp(ff_set_lang(ff, "de"), "en") == 0);
+    CHECK(strcmp(ff_lang(ff), "en") == 0);
     CHECK(ff_eval(ff, "zork") == FF_ERR_UNDEFINED);
     CHECK(strcmp(ff_strerror(ff), "'zork' undefined.") == 0);
-    ff_set_lang(ff, "C");
+    ff_set_lang(ff, "ru");
+    CHECK(strcmp(ff_set_lang(ff, "C.UTF-8"), "en") == 0);
+    ff_set_lang(ff, "ru");
+    CHECK(strcmp(ff_set_lang(ff, NULL), "en") == 0);
+
+    /* The same from Forth: lang@ leaves a copy, which `type` takes in a
+       safe build too; lang! of a name that names no language is -24 and
+       changes nothing; .langs marks the language in effect. */
+    reset_output();
+    CHECK(ff_eval(ff, "lang@ type  \"ru_RU.UTF-8\" lang!  lang@ type") == FF_OK);
+    CHECK(strcmp(g_out, "enru") == 0);
+    reset_output();
+    CHECK(ff_eval(ff, "\"rus\" ' lang! catch . drop  lang@ type") == FF_OK);
+    CHECK(strcmp(g_out, "-24ru") == 0);
+    reset_output();
+    CHECK(ff_eval(ff, ".langs") == FF_OK);
+    CHECK(strcmp(g_out, "  en  English\n* ru  Русский\n") == 0);
+    CHECK(ff_eval(ff, "\"de\" lang!") == FF_OK);
     CHECK(strcmp(ff_lang(ff), "en") == 0);
-    ff_set_lang(ff, NULL);
-    CHECK(strcmp(ff_lang(ff), "en") == 0);
+    CHECK(ff_eval(ff, "lang!") == FF_ERR_STACK_UNDER);
+    CHECK(strcmp(ff_strerror(ff), "Stack underflow: 1 item(s) expected.") == 0);
 
     /* A host's native word with a translated manual. */
     static const ff_native_word_t words[] =
@@ -1089,11 +1118,16 @@ static void test_translations(void)
     CHECK(strlen(ff_strerror(ff)) == FF_ERROR_MSG_SIZE - 2);
 #else
     /* Without translations: English only, whatever is asked for. */
-    ff_set_lang(ff, "ru");
+    CHECK(strcmp(ff_set_lang(ff, "ru"), "en") == 0);
     CHECK(strcmp(ff_lang(ff), "en") == 0);
+    CHECK(ff_set_lang(ff, "rus") == NULL);
     CHECK(strcmp(FF_TR(ff, FF_TR_EN("Yes"), FF_TR_RU("Да")), "Yes") == 0);
     CHECK(ff_tr_lang_of("ru") == NULL);
     CHECK(ff_tr_lang_of("en_US") && strcmp(ff_tr_lang_of("en_US"), "en") == 0);
+    CHECK(strcmp(ff_tr_langs()[0], "en") == 0 && ff_tr_langs()[1] == NULL);
+    reset_output();
+    CHECK(ff_eval(ff, "\"ru\" lang!  lang@ type cr .langs") == FF_OK);
+    CHECK(strcmp(g_out, "en\n* en  English\n") == 0);
     (void) utf8_valid;
 #endif
     ff_free(ff);

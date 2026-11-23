@@ -1876,10 +1876,22 @@ Each engine has a language of its own. `ff_platform_t::lang` gives it
 to `ff_new()`, `ff_set_lang()` changes it at any time — the next message
 raised or manual shown follows — and `ff_lang()` reports it. It takes a
 code or a locale name ("ru", "ru_RU.UTF-8"); NULL, "C" and "POSIX" are
-English. A language ff has no texts in is kept, for the host's own
-texts, and ff's show in English. Engines share nothing but the built-in
-tables, which are read-only, so engines in different languages run side
-by side.
+English. What is set is always the language in effect: the one named if
+ff has texts in it, else English — so `ff_set_lang(ff, "de")` sets, and
+returns, "en", and `ff_lang()` never names a language ff can't show. A
+string that names no language at all ("rus") is refused with NULL and
+changes nothing. Engines share nothing but the built-in tables, which
+are read-only, so engines in different languages run side by side.
+
+Forth code has the same in three words: `lang@ ( -- s )` leaves the
+language's code — a copy in the string arena, which `type` takes in a
+safe build and which outlives a later switch, so `lang@ >r … r> lang!`
+restores it; `lang! ( s -- )` sets it, -24 for a string that names no
+language; and `.langs` lists the languages ff has, marking the one in
+effect. A host learns the same list from `ff_tr_langs()` and each
+language's name from `ff_tr_lang_name()`. Since a program can switch the
+language, `ff_strerror()` may come back in another one than the host
+set; a host that needs it fixed sets it again after each call.
 
 The library never reads the environment. `ffsh` picks the language at
 start-up the way gettext picks a program's: the locale of messages
@@ -1888,7 +1900,8 @@ language of `$LANGUAGE` that ff has texts in — except under the C or
 POSIX locale, where `$LANGUAGE` is ignored, so that a script run with
 `LC_ALL=C` gets English. On Windows it takes the first of the user's
 display languages that ff has. `ff_tr_lang_of()` tells which languages
-those are.
+those are. From then on ffsh's own texts follow the engine's language,
+`lang!` included.
 
 ### Writing translated texts
 

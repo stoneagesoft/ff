@@ -60,9 +60,17 @@
 #define FFSH_DIR_SIZE   (FFSH_PATH_SIZE - 32)
 
 
-/* The language of the session, a code ff knows ("en", "ru"): set once by
-   main() before anything is printed, and handed to the engine. */
+/* The engine, once made: the SIGINT handler aborts it (see below), and
+   ffsh's own texts follow its language. */
+static ff_t * volatile g_ff = NULL;
+
+/* The language picked at start-up, a code ff knows ("en", "ru"): handed
+   to the engine, and used for ffsh's texts until the engine exists. */
 static const char *g_lang = "en";
+
+/* The language for ffsh's own texts: the engine's — which `lang!` can
+   change — once there is one. */
+#define FFSH_LANG()  (g_ff ? ff_lang(g_ff) : g_lang)
 
 #if FF_WITH_TR
 /* The language to show texts in, picked once at start-up the way gettext
@@ -211,7 +219,7 @@ static char *ffsh_readline(const char *prompt)
             char *grown = (char *)realloc(buffer, size + more);
             if (!grown)
             {
-                fputs(FF_TR_LANG(g_lang,
+                fputs(FF_TR_LANG(FFSH_LANG(),
                                  FF_TR_EN("ffsh: out of memory reading a line.\n"),
                                  FF_TR_RU("ffsh: не хватает памяти для чтения строки.\n")),
                       stderr);
@@ -266,7 +274,7 @@ static int ffsh_vtracef(void *ctx, ff_error_t e, const char *fmt, va_list args)
     (void) ctx;
 
     if (FF_ERR_SEV(e) == FF_SEV_WARNING)
-        fputs(FF_TR_LANG(g_lang, FF_TR_EN("Warning: "), FF_TR_RU("Предупреждение: ")),
+        fputs(FF_TR_LANG(FFSH_LANG(), FF_TR_EN("Warning: "), FF_TR_RU("Предупреждение: ")),
               stderr);
     const int n = vfprintf(stderr, fmt, args);
     fputc('\n', stderr);
@@ -296,7 +304,6 @@ typedef struct ffsh_watchdog_state
 
 static ffsh_wd_t g_wd;
 static volatile sig_atomic_t g_in_eval = 0;
-static ff_t * volatile g_ff = NULL;
 
 static uint64_t ffsh_now_ms(void)
 {
@@ -402,7 +409,7 @@ int main(int argc, char **argv)
     ff_t *ff = ff_new(&p);
     if (!ff)
     {
-        fputs(FF_TR_LANG(g_lang, FF_TR_EN("ffsh: out of memory.\n"),
+        fputs(FF_TR_LANG(FFSH_LANG(), FF_TR_EN("ffsh: out of memory.\n"),
                                  FF_TR_RU("ffsh: не хватает памяти.\n")), stderr);
         return EXIT_FAILURE;
     }

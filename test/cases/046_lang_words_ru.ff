@@ -1,0 +1,17 @@
+\ lang! switches ff's texts in the middle of a program; lang@ and .langs
+\ report the language in effect: English for one ff has no texts in.
+lang@ type cr
+.langs
+see dup
+"ru" lang!
+lang@ type cr
+.langs
+see dup
+"de" lang!
+lang@ type cr
+"ru_RU.UTF-8" lang!
+\ Saved and restored: lang@ leaves a copy that outlives the switch.
+: in-english  lang@ >r  "en" lang!  lang@ type cr  r> lang! ;
+in-english
+lang@ type cr
+man .langs

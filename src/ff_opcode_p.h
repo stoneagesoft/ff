@@ -279,7 +279,11 @@
     X(WORDSUNUSED,      NONE)  /* Complement of FF_OP_WORDSUSED. */ \
     X(MAN,              NONE)  /* Print manual entry for next-token word. */ \
     X(DUMP_WORD,        NONE)  /* Print raw heap of next-token word. */ \
-    X(SEE,              NONE)  /* Decompile next-token word back to Forth syntax. */
+    X(SEE,              NONE)  /* Decompile next-token word back to Forth syntax. */ \
+    /* --- Language of the texts --- */ \
+    X(LANG_FETCH,       NONE)  /* Push a copy of the engine's language code (lang@). */ \
+    X(LANG_STORE,       NONE)  /* Set the engine's language from a string (lang!). */ \
+    X(DOT_LANGS,        NONE)  /* List the languages ff has texts in (.langs). */
 
 /**
  * @enum ff_opcode

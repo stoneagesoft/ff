@@ -55,7 +55,11 @@ the project follows [Semantic Versioning](https://semver.org/).
 - **Translations.** Error messages, warnings, `man` entries, table
   labels and the prose `see` prints come in English or Russian. Each
   engine's language is set by `ff_platform_t.lang` and can change at any
-  time with `ff_set_lang()`; `ff_lang()` reports it. Texts are written in
+  time with `ff_set_lang()`, which sets and returns the language in
+  effect — English for one ff has no texts in, NULL for a name that
+  names none; `ff_lang()` reports it, and `ff_tr_langs()` /
+  `ff_tr_lang_name()` list the languages ff has. Forth code does the
+  same with `lang@ ( -- s )`, `lang! ( s -- )` and `.langs`. Texts are written in
   place with each literal marked, `FF_TR_EN()` / `FF_TR_RU()`, in any
   order, and `FF_TR()` picks one when a message is raised; GCC and Clang
   check every translation of a format against the call's arguments. A

@@ -187,26 +187,30 @@ const char *ff_tr(const char *lang, const char *tr1, const char *tr2)
 size_t ff_tr_copy(const char *lang, const char *text, char *buf, size_t size);
 
 /**
- * @return The language engine @p ff shows its texts in: a two-letter
- *         code, "en" unless set (always "en" when FF_WITH_TR is off).
- *         Owned by the engine.
+ * @return The language engine @p ff shows its texts in: the two-letter
+ *         code of one of ff_tr_langs(), "en" unless set (always "en" when
+ *         FF_WITH_TR is off). Owned by the engine. `lang@` in Forth.
  * @param ff Engine instance.
  */
 const char *ff_lang(const ff_t *ff);
 
 /**
  * Set the language engine @p ff shows its texts in, from the next one on
- * — messages raised and `man` entries shown after the call. Safe while a
- * native word runs; not from another thread or a signal handler.
+ * — messages raised and `man` entries shown after the call. What is set
+ * is the language in effect: the one @p lang names if ff has texts in it,
+ * else English. Safe while a native word runs; not from another thread or
+ * a signal handler. `lang!` in Forth.
  *
  * @param ff   Engine instance.
  * @param lang A two-letter ISO 639-1 code or a locale name that starts
- *             with one ("ru", "ru_RU.UTF-8", "ru-RU"). NULL, "C",
- *             "POSIX" and anything else are English. A language ff has
- *             no texts in is kept — a host's own texts may have it — and
- *             ff's texts show in English. A no-op when FF_WITH_TR is off.
+ *             with one ("ru", "ru_RU.UTF-8", "ru-RU"); NULL, "C" and
+ *             "POSIX" are English.
+ * @return The language now in effect, as ff_lang() reports it: "ru" for
+ *         "ru_RU.UTF-8", "en" for "de" (ff has no German) or any name when
+ *         FF_WITH_TR is off. NULL, the language left as it was, if @p lang
+ *         names no language at all ("rus", "").
  */
-void ff_set_lang(ff_t *ff, const char *lang);
+const char *ff_set_lang(ff_t *ff, const char *lang);
 
 /**
  * The language a locale name names, if ff has texts in it: for a host
@@ -218,6 +222,21 @@ void ff_set_lang(ff_t *ff, const char *lang);
  *         that language, or @p locale names none ("C", "POSIX", NULL).
  */
 const char *ff_tr_lang_of(const char *locale);
+
+/**
+ * @return The languages ff has texts in, for a host's language menu: a
+ *         NULL-terminated array of their codes, English first ({"en",
+ *         "ru", NULL}; {"en", NULL} when FF_WITH_TR is off). Static.
+ *         `.langs` in Forth lists them.
+ */
+const char *const *ff_tr_langs(void);
+
+/**
+ * @param lang A code or locale name.
+ * @return The name of that language in the language itself ("English",
+ *         "Русский"), a static string; NULL if ff has no texts in it.
+ */
+const char *ff_tr_lang_name(const char *lang);
 
 
 #ifdef __cplusplus

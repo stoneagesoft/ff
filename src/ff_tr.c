@@ -12,12 +12,22 @@
 #include <string.h>
 
 
-/* The languages ff's own texts are written in. */
-static const char g_langs[][3] =
+/* The languages ff's own texts are written in, English first, each with
+   its name in that language. ff_tr_langs() hands out the codes. */
+static const char *const g_langs[] =
 {
     "en",
 #if FF_WITH_TR
     "ru",
+#endif
+    NULL
+};
+
+static const char *const g_lang_names[] =
+{
+    "English",
+#if FF_WITH_TR
+    "Русский",
 #endif
 };
 
@@ -185,28 +195,56 @@ const char *ff_lang(const ff_t *ff)
     return ff ? ff->lang : "en";
 }
 
-/** @copydoc ff_set_lang */
-void ff_set_lang(ff_t *ff, const char *lang)
+/**
+ * @return The index in g_langs of the language @p locale names, if ff has
+ *         texts in it; -1 otherwise.
+ */
+static int ff_tr_lang_index(const char *locale)
 {
-#if FF_WITH_TR
     char code[3];
-    if (!ff_tr_code(lang, code))
-        memcpy(code, "en", sizeof(code));
-    memcpy(ff->lang, code, sizeof(ff->lang));
-#else
-    (void) ff;
-    (void) lang;
-#endif
+    if (!ff_tr_code(locale, code))
+        return -1;
+    for (int i = 0; g_langs[i]; ++i)
+        if (memcmp(g_langs[i], code, sizeof(code)) == 0)
+            return i;
+    return -1;
+}
+
+/** @copydoc ff_set_lang */
+const char *ff_set_lang(ff_t *ff, const char *lang)
+{
+    /* The C locale, under any of its names, is English. */
+    const bool c_locale = !lang
+                          || strcmp(lang, "C") == 0
+                          || strncmp(lang, "C.", 2) == 0
+                          || strcmp(lang, "POSIX") == 0;
+    char code[3] = "en";
+    if (!c_locale && !ff_tr_code(lang, code))
+        return NULL;
+
+    /* What is in effect: the language named if ff has texts in it, else
+       English. */
+    const int i = c_locale ? -1 : ff_tr_lang_index(code);
+    memcpy(ff->lang, i < 0 ? "en" : g_langs[i], sizeof(ff->lang));
+    return ff->lang;
 }
 
 /** @copydoc ff_tr_lang_of */
 const char *ff_tr_lang_of(const char *locale)
 {
-    char code[3];
-    if (!ff_tr_code(locale, code))
-        return NULL;
-    for (size_t i = 0; i < sizeof(g_langs) / sizeof(g_langs[0]); ++i)
-        if (memcmp(g_langs[i], code, sizeof(code)) == 0)
-            return g_langs[i];
-    return NULL;
+    const int i = ff_tr_lang_index(locale);
+    return i < 0 ? NULL : g_langs[i];
+}
+
+/** @copydoc ff_tr_langs */
+const char *const *ff_tr_langs(void)
+{
+    return g_langs;
+}
+
+/** @copydoc ff_tr_lang_name */
+const char *ff_tr_lang_name(const char *lang)
+{
+    const int i = ff_tr_lang_index(lang);
+    return i < 0 ? NULL : g_lang_names[i];
 }

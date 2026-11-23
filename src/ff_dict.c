@@ -587,6 +587,7 @@ static size_t ff_dict_builtin_count(void)
          + ff_word_def_count(FF_STACK2_WORDS)
          + ff_word_def_count(FF_STACK_WORDS)
          + ff_word_def_count(FF_STRING_WORDS)
+         + ff_word_def_count(FF_TR_WORDS)
          + ff_word_def_count(FF_VAR_WORDS);
 }
 
@@ -971,6 +972,7 @@ bool ff_builtins_init(ff_builtins_t *b)
     ff_builtins_define_static(b, FF_STACK2_WORDS, &pool_idx);
     ff_builtins_define_static(b, FF_STACK_WORDS,  &pool_idx);
     ff_builtins_define_static(b, FF_STRING_WORDS, &pool_idx);
+    ff_builtins_define_static(b, FF_TR_WORDS,     &pool_idx);
     ff_builtins_define_static(b, FF_VAR_WORDS,    &pool_idx);
     assert(pool_idx == b->static_pool_size);
     return true;

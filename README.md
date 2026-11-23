@@ -74,10 +74,11 @@ host-supplied native words.
   watchdog. Allocation failures raise errors instead of crashing.
 - **Messages and manuals in Russian too.** Every engine shows its error
   messages, warnings and `man` entries in the language its host sets —
-  English or Russian — and can switch at any time; `ffsh` follows the
-  user's locale. A host's own words can carry translated manuals the
-  same way. A build without translations (`FF_WITH_TR=OFF`) is
-  English-only and carries none of it.
+  English or Russian — and can switch at any time, from Forth too
+  (`"ru" lang!`, `lang@`, `.langs`); `ffsh` follows the user's locale. A
+  host's own words can carry translated manuals the same way. A build
+  without translations (`FF_WITH_TR=OFF`) is English-only and carries
+  none of it.
 - **Strings are C strings.** No counted-string convention; every
   string-valued word returns or accepts a single `char *` to a NUL-
   terminated sequence. `s!`, `s+`, `strlen`, `strcmp` are one-line

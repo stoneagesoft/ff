@@ -2502,6 +2502,7 @@ bool ff_exec(ff_t *ff, ff_word_t *w)
             #include "ff_words_scope_p.h"
             #include "ff_words_array_p.h"
             #include "ff_words_dict_p.h"
+            #include "ff_words_tr_p.h"
             #undef FF_IN_EXEC
 
             default:

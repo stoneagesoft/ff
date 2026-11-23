@@ -20,7 +20,9 @@ one gettext would pick: the first of `$LANGUAGE` that *ff* has, else
 that of `LC_ALL`, `LC_MESSAGES` or `LANG`; under the C locale it is
 English whatever `$LANGUAGE` says. On Windows it is the first of the
 user's display languages that *ff* has. So `LANGUAGE=ru ffsh` speaks
-Russian, and `LC_ALL=C ffsh` English.
+Russian, and `LC_ALL=C ffsh` English. Within a session, `"ru" lang!`
+switches to Russian and `"en" lang!` back, ffsh's own messages too;
+`.langs` lists the languages and marks the current one.
 
 Build it with the library (`cmake -B build -DFF_BUILD_EXAMPLES=ON`), or
 on its own against an installed *ff*:
