@@ -152,6 +152,16 @@ find_package(ff 1.0 REQUIRED)
 target_link_libraries(my_app PRIVATE ff::ff)
 ```
 
+Or build it as part of your CMake project — from a git submodule, say.
+Options go into the cache before the call; as a subproject *ff* leaves
+your build type alone and adds no install rules (`FF_INSTALL` is OFF):
+
+```cmake
+set(FF_32BIT ON CACHE BOOL "" FORCE)    # for a 32-bit target, say
+add_subdirectory(3rdparty/ff)
+target_link_libraries(my_app PRIVATE ff::ff)
+```
+
 
 ## Stack scopes
 
@@ -243,6 +253,8 @@ Configurable options:
 | `FF_BUILD_EXAMPLES`    | OFF     | Build the bundled example programs (currently `ffsh`) as part of the main build |
 | `FF_SAFE_MEM`          | OFF     | Validate every fetch/store/execute pointer (see below) |
 | `FF_WITH_TR`           | ON      | Include the translations (Russian) of messages and `man` entries; OFF is English-only |
+| `FF_32BIT`             | OFF     | 32-bit cells and single-precision reals, for 32-bit targets |
+| `FF_INSTALL`           | ON      | Generate the install rules, CMake package and pkg-config file; OFF by default when *ff* is a subproject |
 | `BUILD_SHARED_LIBS`    | OFF     | Shorthand: equivalent to `FF_BUILD_SHARED=ON`     |
 
 Run the test suite:

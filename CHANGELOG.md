@@ -69,6 +69,16 @@ the project follows [Semantic Versioning](https://semver.org/).
   Windows). `FF_WITH_TR=OFF` builds an English-only library, and
   `FF_TR_ONLY=ru` a check build that fails on any text missing its
   Russian. New header `ff_tr.h`.
+- **Subproject build.** A host's CMake build can take ff in with
+  `add_subdirectory()` and link `ff::ff`, setting ff's options in the
+  cache first. ff's paths are its own then, not the host's top-level
+  directory; it leaves the host's build type and ccache launcher alone,
+  and the new `FF_INSTALL` option — ON only when ff is the top-level
+  project — leaves the install rules, CMake package and pkg-config file
+  out.
+- `FF_32BIT` is a CMake option now (`-DFF_32BIT=ON`), not only a
+  compile definition: 32-bit cells and single-precision reals for
+  32-bit targets.
 
 ### Fixed
 

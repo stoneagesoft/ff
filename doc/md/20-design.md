@@ -178,9 +178,9 @@ typedef double   ff_real_t;
 #endif
 ~~~
 
-The default build is 64-bit. Defining `FF_32BIT` at compile time switches
-to 32-bit integers and single-precision floats, which can be useful on
-embedded targets.
+The default build is 64-bit. Defining `FF_32BIT` at compile time — the
+CMake option `-DFF_32BIT=ON` does it — switches to 32-bit integers and
+single-precision floats, which can be useful on embedded targets.
 
 Stacks and compiled-word heaps are both arrays of `ff_int_t`. Floating-point
 values, pointers, and function pointers are all stored as `ff_int_t` via
@@ -1453,8 +1453,9 @@ All buffer sizes are defined in `ff_config_p.h`:
 | `FF_ERROR_MSG_SIZE` | 512 | Error message buffer (bytes) |
 | `FF_LOAD_LINE_SIZE` | 4096 | Initial line buffer for `ff_load` (bytes; longer lines grow it) |
 
-Define `FF_32BIT` at compile time to select 32-bit cell and single-
-precision float modes for constrained targets. Define
+Define `FF_32BIT` at compile time (the CMake option `-DFF_32BIT=ON`)
+to select 32-bit cell and single-precision float modes for constrained
+targets. Define
 `FF_SAFE_MEM=1` to enable the address-validation pass — see *Memory
 safety*. How much memory Forth code may use, and whether it may run
 commands or touch files, the host sets per engine at run time — see

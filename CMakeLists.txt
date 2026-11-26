@@ -4,6 +4,20 @@ project(ff
     VERSION 1.0.0
     LANGUAGES C CXX)
 
+# ff builds on its own or as a subproject of a host's build:
+#   set(FF_32BIT ON CACHE BOOL "" FORCE)    # options, before the call
+#   add_subdirectory(path/to/ff)
+#   target_link_libraries(host PRIVATE ff::ff)
+# As a subproject it leaves the host's build type alone and adds no
+# install rules (FF_INSTALL is OFF); every path is ff's own
+# (PROJECT_SOURCE_DIR), not the host's top-level CMAKE_SOURCE_DIR.
+if(CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)
+    set(FF_TOP_LEVEL ON)
+else()
+    set(FF_TOP_LEVEL OFF)
+endif()
+option(FF_INSTALL "Generate the install rules, the CMake package and pkg-config files." ${FF_TOP_LEVEL})
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -13,7 +27,15 @@ set(CMAKE_INCLUDE_CURRENT_DIR_IN_INTERFACE ON)
 # Build helpers (private; never installed). Drives compile flags,
 # OS detection (FF_OS_*), and the file-glob / resource-compile macros
 # used below.
-include("${CMAKE_SOURCE_DIR}/cmake/ff-helpers.cmake")
+include("${PROJECT_SOURCE_DIR}/cmake/ff-helpers.cmake")
+
+# Cell width. The default build is 64-bit; FF_32BIT selects 32-bit cells
+# and single-precision reals, for 32-bit targets such as microcontrollers.
+# The public API is the same either way: it exchanges int64_t and double.
+option(FF_32BIT "32-bit cells and single-precision reals." OFF)
+if(FF_32BIT)
+    add_compile_definitions(FF_32BIT=1)
+endif()
 
 # Memory-safety mode. When ON, every word that takes an address, a
 # string, an xt or a file stream (`@`, `!`, `type`, `s!`, `find`,
@@ -153,7 +175,7 @@ ff_git_hash(FF_GIT_HASH)
 set(FF_VERSION_MAJOR ${PROJECT_VERSION_MAJOR})
 set(FF_VERSION_MINOR ${PROJECT_VERSION_MINOR})
 set(FF_VERSION_PATCH ${PROJECT_VERSION_PATCH})
-configure_file("${CMAKE_SOURCE_DIR}/src/ff_version.h.in" "${PROJECT_BINARY_DIR}/ff_version.h")
+configure_file("${PROJECT_SOURCE_DIR}/src/ff_version.h.in" "${PROJECT_BINARY_DIR}/ff_version.h")
 
 ff_files(ff_c_src
     "src/*.c"
@@ -233,7 +255,7 @@ foreach(_ff_t ${FF_INSTALL_TARGETS})
     target_include_directories(${_ff_t}
         INTERFACE
             $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}>
-            $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/src>
+            $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/ff>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/ff/3rdparty>
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -246,94 +268,98 @@ endforeach()
 # INSTALLATION #
 ################
 
-# Default to /usr/local on UNIX (GNUInstallDirs gives us the right
-# subdir layout for free). The WASM build keeps its dedicated prefix.
-if(FF_OS_WASM AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-    set(CMAKE_INSTALL_PREFIX "/opt/ff.wasm" CACHE PATH "Installation prefix" FORCE)
-endif()
+# A subproject leaves installing to its host (FF_INSTALL is OFF there).
+if(FF_INSTALL)
 
-install(TARGETS ${FF_INSTALL_TARGETS}
-        EXPORT ff-targets
-        ARCHIVE  DESTINATION ${CMAKE_INSTALL_LIBDIR}     COMPONENT libraries
-        LIBRARY  DESTINATION ${CMAKE_INSTALL_LIBDIR}     COMPONENT libraries
-        RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR}     COMPONENT libraries
-        INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ff)
+    # Default to /usr/local on UNIX (GNUInstallDirs gives us the right
+    # subdir layout for free). The WASM build keeps its dedicated prefix.
+    if(FF_OS_WASM AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+        set(CMAKE_INSTALL_PREFIX "/opt/ff.wasm" CACHE PATH "Installation prefix" FORCE)
+    endif()
 
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/
+    install(TARGETS ${FF_INSTALL_TARGETS}
+            EXPORT ff-targets
+            ARCHIVE  DESTINATION ${CMAKE_INSTALL_LIBDIR}     COMPONENT libraries
+            LIBRARY  DESTINATION ${CMAKE_INSTALL_LIBDIR}     COMPONENT libraries
+            RUNTIME  DESTINATION ${CMAKE_INSTALL_BINDIR}     COMPONENT libraries
+            INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ff)
+
+    install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/
+            DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ff
+            COMPONENT headers
+            FILES_MATCHING
+            PATTERN "*.h"
+            PATTERN "*.hpp"
+            PATTERN "*.hxx"
+            PATTERN "words" EXCLUDE)
+
+    install(
+        FILES "${PROJECT_BINARY_DIR}/ff_version.h"
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ff
-        COMPONENT headers
-        FILES_MATCHING
-        PATTERN "*.h"
-        PATTERN "*.hpp"
-        PATTERN "*.hxx"
-        PATTERN "words" EXCLUDE)
+        COMPONENT headers)
 
-install(
-    FILES "${PROJECT_BINARY_DIR}/ff_version.h"
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/ff
-    COMPONENT headers)
+    # Generated package config files. Live under
+    # <prefix>/lib/cmake/ff/ so multiple packages can coexist there.
+    set(FF_CMAKE_CONFIG_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/ff)
 
-# Generated package config files. Live under
-# <prefix>/lib/cmake/ff/ so multiple packages can coexist there.
-set(FF_CMAKE_CONFIG_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/ff)
+    install(EXPORT ff-targets
+            FILE ff-targets.cmake
+            NAMESPACE ff::
+            DESTINATION ${FF_CMAKE_CONFIG_DIR}
+            COMPONENT development)
 
-install(EXPORT ff-targets
-        FILE ff-targets.cmake
-        NAMESPACE ff::
+    configure_package_config_file(
+        "${PROJECT_SOURCE_DIR}/cmake/ff-config.cmake.in"
+        "${PROJECT_BINARY_DIR}/ff-config.cmake"
+        INSTALL_DESTINATION ${FF_CMAKE_CONFIG_DIR})
+
+    write_basic_package_version_file(
+        "${PROJECT_BINARY_DIR}/ff-config-version.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
+
+    install(FILES
+        "${PROJECT_BINARY_DIR}/ff-config.cmake"
+        "${PROJECT_BINARY_DIR}/ff-config-version.cmake"
         DESTINATION ${FF_CMAKE_CONFIG_DIR}
         COMPONENT development)
 
-configure_package_config_file(
-    "${CMAKE_SOURCE_DIR}/cmake/ff-config.cmake.in"
-    "${PROJECT_BINARY_DIR}/ff-config.cmake"
-    INSTALL_DESTINATION ${FF_CMAKE_CONFIG_DIR})
+    # pkg-config support for non-CMake consumers. Generated at configure
+    # time; consumers reach it via `pkg-config --cflags --libs ff`. Its paths
+    # are relative to the file, so the install can be moved or made with
+    # `cmake --install --prefix`, as the CMake package can. It links the
+    # shared library when there is one, else the archive — which needs libm
+    # in Libs: pkg-config lists Libs.private only for --static.
+    file(RELATIVE_PATH FF_PC_PREFIX
+         "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig" "${CMAKE_INSTALL_PREFIX}")
+    file(RELATIVE_PATH FF_PC_INCLUDEDIR
+         "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig" "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
+    string(REGEX REPLACE "/$" "" FF_PC_PREFIX "${FF_PC_PREFIX}")
+    string(REGEX REPLACE "/$" "" FF_PC_INCLUDEDIR "${FF_PC_INCLUDEDIR}")
+    set(_ff_pc_deps "")
+    foreach(_ff_lib ${FF_LIBS})
+        string(APPEND _ff_pc_deps " -l${_ff_lib}")
+    endforeach()
+    if(TARGET ff_shared)
+        set(FF_PC_LIBS "-lff")
+        set(FF_PC_LIBS_PRIVATE "Libs.private:${_ff_pc_deps}")
+    else()
+        set(FF_PC_LIBS "-lff_static${_ff_pc_deps}")
+        set(FF_PC_LIBS_PRIVATE "")
+    endif()
+    configure_file(
+        "${PROJECT_SOURCE_DIR}/cmake/ff.pc.in"
+        "${PROJECT_BINARY_DIR}/ff.pc"
+        @ONLY)
+    install(FILES "${PROJECT_BINARY_DIR}/ff.pc"
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
+            COMPONENT development)
 
-write_basic_package_version_file(
-    "${PROJECT_BINARY_DIR}/ff-config-version.cmake"
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion)
-
-install(FILES
-    "${PROJECT_BINARY_DIR}/ff-config.cmake"
-    "${PROJECT_BINARY_DIR}/ff-config-version.cmake"
-    DESTINATION ${FF_CMAKE_CONFIG_DIR}
-    COMPONENT development)
-
-# pkg-config support for non-CMake consumers. Generated at configure
-# time; consumers reach it via `pkg-config --cflags --libs ff`. Its paths
-# are relative to the file, so the install can be moved or made with
-# `cmake --install --prefix`, as the CMake package can. It links the
-# shared library when there is one, else the archive — which needs libm
-# in Libs: pkg-config lists Libs.private only for --static.
-file(RELATIVE_PATH FF_PC_PREFIX
-     "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig" "${CMAKE_INSTALL_PREFIX}")
-file(RELATIVE_PATH FF_PC_INCLUDEDIR
-     "${CMAKE_INSTALL_FULL_LIBDIR}/pkgconfig" "${CMAKE_INSTALL_FULL_INCLUDEDIR}")
-string(REGEX REPLACE "/$" "" FF_PC_PREFIX "${FF_PC_PREFIX}")
-string(REGEX REPLACE "/$" "" FF_PC_INCLUDEDIR "${FF_PC_INCLUDEDIR}")
-set(_ff_pc_deps "")
-foreach(_ff_lib ${FF_LIBS})
-    string(APPEND _ff_pc_deps " -l${_ff_lib}")
-endforeach()
-if(TARGET ff_shared)
-    set(FF_PC_LIBS "-lff")
-    set(FF_PC_LIBS_PRIVATE "Libs.private:${_ff_pc_deps}")
-else()
-    set(FF_PC_LIBS "-lff_static${_ff_pc_deps}")
-    set(FF_PC_LIBS_PRIVATE "")
+    # Documentation: install whatever the doc/ Makefile has produced
+    # (Doxygen HTML tree and the timestamped PDF). Both are optional —
+    # `make install` does not depend on `make pdf`.
+    add_subdirectory(doc)
 endif()
-configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/ff.pc.in"
-    "${PROJECT_BINARY_DIR}/ff.pc"
-    @ONLY)
-install(FILES "${PROJECT_BINARY_DIR}/ff.pc"
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig
-        COMPONENT development)
-
-# Documentation: install whatever the doc/ Makefile has produced
-# (Doxygen HTML tree and the timestamped PDF). Both are optional —
-# `make install` does not depend on `make pdf`.
-add_subdirectory(doc)
 
 
 # Test suite. Build with -DFF_BUILD_TESTS=OFF to skip.

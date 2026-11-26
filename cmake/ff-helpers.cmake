@@ -21,7 +21,8 @@
 # A build that names no type is optimised, as Release. The flags are the
 # build type's: a type or CMAKE_C_FLAGS given (-g, say, or a distro's
 # own) are kept, where every non-Debug build used to get -O3 -g0 on top.
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+# A subproject keeps its host's build type: the cache is the host's.
+if(FF_TOP_LEVEL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING
         "Build type: Debug, Release, RelWithDebInfo or MinSizeRel." FORCE)
 endif()
@@ -99,7 +100,7 @@ endmacro()
 
 macro(ff_git_hash output_hash)
     execute_process(COMMAND git log --no-decorate -1 --remove-empty --no-merges --format=%h .
-                    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+                    WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
                     OUTPUT_VARIABLE ${output_hash}
                     OUTPUT_STRIP_TRAILING_WHITESPACE
                     RESULT_VARIABLE FF_EXIT_CODE)
@@ -124,7 +125,7 @@ function(ff_dump_cmake_variables)
     message(CHECK_PASS "End")
 endfunction()
 
-ff_header_dirs("${CMAKE_SOURCE_DIR}/src" FF_INCLUDES)
+ff_header_dirs("${PROJECT_SOURCE_DIR}/src" FF_INCLUDES)
 
 ###########
 # General #
@@ -165,8 +166,9 @@ if(FF_DEBUG)
     add_compile_definitions(FF_DEBUG)
     message(STATUS "Debug mode")
 
-    if(NOT FF_OS_WASM)
-        # Use ccache for debug builds.
+    if(NOT FF_OS_WASM AND FF_TOP_LEVEL)
+        # Use ccache for debug builds. The launcher is a global property,
+        # so a subproject leaves it to its host.
         find_program(CCACHE_FOUND ccache)
         if(CCACHE_FOUND)
             set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE ccache)
