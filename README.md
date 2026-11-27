@@ -254,6 +254,7 @@ Configurable options:
 | `FF_SAFE_MEM`          | OFF     | Validate every fetch/store/execute pointer (see below) |
 | `FF_WITH_TR`           | ON      | Include the translations (Russian) of messages and `man` entries; OFF is English-only |
 | `FF_32BIT`             | OFF     | 32-bit cells and single-precision reals, for 32-bit targets |
+| `FF_PAD_INIT_SIZE`     | 32 KiB  | Slab size of the transient string arena, in bytes; each slab counts against `mem_limit` |
 | `FF_INSTALL`           | ON      | Generate the install rules, CMake package and pkg-config file; OFF by default when *ff* is a subproject |
 | `BUILD_SHARED_LIBS`    | OFF     | Shorthand: equivalent to `FF_BUILD_SHARED=ON`     |
 

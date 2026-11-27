@@ -49,8 +49,16 @@
  * lifetime (or until the next abort), eliminating the "silent ring
  * recycle" footgun where two long-lived stack pointers ended up
  * aliasing the same slot after >128 string pushes.
+ *
+ * It grows a slab of this size at a time, and each slab counts against
+ * ff_platform::mem_limit. A host short of memory — a microcontroller,
+ * say — sets a smaller one at build time (CMake
+ * `-DFF_PAD_INIT_SIZE=2048`); a longer string still gets a slab of its
+ * own size.
  */
+#ifndef FF_PAD_INIT_SIZE
 #define FF_PAD_INIT_SIZE    (32 * 1024)
+#endif
 
 /** @brief Maximum length of a single token, in bytes. */
 #define FF_TOKEN_SIZE       256

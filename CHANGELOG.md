@@ -79,6 +79,10 @@ the project follows [Semantic Versioning](https://semver.org/).
 - `FF_32BIT` is a CMake option now (`-DFF_32BIT=ON`), not only a
   compile definition: 32-bit cells and single-precision reals for
   32-bit targets.
+- `FF_PAD_INIT_SIZE`, the slab size of the transient string arena, can be
+  set at build time (CMake `-DFF_PAD_INIT_SIZE=2048`). Each slab counts
+  against `mem_limit`, and the default 32 KiB is half of what a
+  microcontroller host may give Forth.
 
 ### Fixed
 

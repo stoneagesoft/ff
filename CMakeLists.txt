@@ -37,6 +37,15 @@ if(FF_32BIT)
     add_compile_definitions(FF_32BIT=1)
 endif()
 
+# Slab size of the transient string arena, in bytes. Each slab counts
+# against ff_platform::mem_limit, so a host short of memory sets a smaller
+# one; empty keeps the default, FF_PAD_INIT_SIZE in src/ff_config_p.h
+# (32 KiB).
+set(FF_PAD_INIT_SIZE "" CACHE STRING "Bytes per transient-string slab; empty keeps the default (32 KiB).")
+if(FF_PAD_INIT_SIZE)
+    add_compile_definitions(FF_PAD_INIT_SIZE=${FF_PAD_INIT_SIZE})
+endif()
+
 # Memory-safety mode. When ON, every word that takes an address, a
 # string, an xt or a file stream (`@`, `!`, `type`, `s!`, `find`,
 # `execute`, `>name`, `fgets`, …) validates it against the engine's
