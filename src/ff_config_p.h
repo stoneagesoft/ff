@@ -60,6 +60,23 @@
 #define FF_PAD_INIT_SIZE    (32 * 1024)
 #endif
 
+/**
+ * @brief Slab size of the word-storage arena, in bytes.
+ *
+ * Word heaps — the bytecode of colon definitions, the bodies of data
+ * words — are carved from slabs of this size; a heap larger than a slab
+ * gets a slab of its own size. Each slab counts against
+ * ff_platform::mem_limit as a whole, and near the limit a new one is cut
+ * down to what's left. A host short of memory sets a smaller one at build
+ * time (CMake `-DFF_DICT_ARENA_SLAB=4096`): with the default, the first
+ * definition opens a 64 KiB slab, which a microcontroller's heap may not
+ * have in one piece, and under a limit of 64 KiB that slab takes all of
+ * it, leaving nothing for the next word.
+ */
+#ifndef FF_DICT_ARENA_SLAB
+#define FF_DICT_ARENA_SLAB  (64 * 1024)
+#endif
+
 /** @brief Maximum length of a single token, in bytes. */
 #define FF_TOKEN_SIZE       256
 

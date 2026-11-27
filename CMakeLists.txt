@@ -46,6 +46,15 @@ if(FF_PAD_INIT_SIZE)
     add_compile_definitions(FF_PAD_INIT_SIZE=${FF_PAD_INIT_SIZE})
 endif()
 
+# Slab size of the word-storage arena, in bytes. Each slab counts against
+# ff_platform::mem_limit, and the first definition opens one, so a host
+# short of memory sets a smaller one; empty keeps the default,
+# FF_DICT_ARENA_SLAB in src/ff_config_p.h (64 KiB).
+set(FF_DICT_ARENA_SLAB "" CACHE STRING "Bytes per word-storage slab; empty keeps the default (64 KiB).")
+if(FF_DICT_ARENA_SLAB)
+    add_compile_definitions(FF_DICT_ARENA_SLAB=${FF_DICT_ARENA_SLAB})
+endif()
+
 # Memory-safety mode. When ON, every word that takes an address, a
 # string, an xt or a file stream (`@`, `!`, `type`, `s!`, `find`,
 # `execute`, `>name`, `fgets`, …) validates it against the engine's

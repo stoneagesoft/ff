@@ -1447,6 +1447,7 @@ All buffer sizes are defined in `ff_config_p.h`:
 | `FF_BT_STACK_SIZE` | 256 | Backtrace stack depth (frames) |
 | `FF_INIT_HEAP_SIZE` | 64 | Initial heap allocation for a new word (cells) |
 | `FF_PAD_INIT_SIZE` | 32 KiB | Slab size of the transient string arena; each slab counts against `mem_limit`, and a host short of memory sets a smaller one (CMake `-DFF_PAD_INIT_SIZE=2048`) |
+| `FF_DICT_ARENA_SLAB` | 64 KiB | Slab size of the word-storage arena; each slab counts against `mem_limit` as a whole, so under a small limit the first definition's slab would take all of it — a host short of memory sets a smaller one (CMake `-DFF_DICT_ARENA_SLAB=4096`) |
 | `FF_CF_DEPTH` | 64 | Nesting of open control structures in one definition |
 | `FF_OPEN_FILES_MAX` | 32 | Streams one engine's Forth code can have open at once |
 | `FF_TOKEN_SIZE` | 256 | Tokenizer token buffer (bytes) |

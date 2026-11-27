@@ -83,6 +83,12 @@ the project follows [Semantic Versioning](https://semver.org/).
   set at build time (CMake `-DFF_PAD_INIT_SIZE=2048`). Each slab counts
   against `mem_limit`, and the default 32 KiB is half of what a
   microcontroller host may give Forth.
+- `FF_DICT_ARENA_SLAB`, the slab size of the word-storage arena, can be
+  set at build time too (CMake `-DFF_DICT_ARENA_SLAB=4096`). The first
+  definition opens a slab of the default 64 KiB, which a microcontroller's
+  heap may not have in one piece; and under a `mem_limit` of 64 KiB the
+  slab, cut down to the limit, took all of it, so the next definition
+  failed with -8.
 
 ### Fixed
 

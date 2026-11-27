@@ -6,6 +6,7 @@
 
 #include "ff_dict_p.h"
 
+#include "ff_config_p.h"
 #include "ff_word_p.h"
 
 #include <assert.h>
@@ -16,9 +17,6 @@
 
 /** @brief Bucket count of the freshly-initialized hash table. */
 #define FF_DICT_INITIAL_BUCKETS 256
-
-/** @brief Default slab capacity for the dict's word-heap arena. */
-#define FF_DICT_ARENA_SLAB     (64 * 1024)
 
 
 static bool ff_dict_ensure(ff_dict_t *d, size_t extra);
