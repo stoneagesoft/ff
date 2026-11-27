@@ -1,0 +1,18 @@
+\ ff-test: lines
+\ A `(` comment whose `)` is the last byte of the line.
+\
+\ A closing paren at the very end of the text given to ff_eval() - a line
+\ from an interactive host - used to read as an unclosed comment: the
+\ cursor sat at the end either way. The comment then ran on and swallowed
+\ the lines after it, up to a `)` with text behind it.
+
+( one line )
+1 . cr
+( two
+lines )
+2 . cr
+( open
+still open
+) 3 . cr
+: sq ( n -- n*n ) dup * ;
+4 sq . cr

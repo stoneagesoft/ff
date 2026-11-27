@@ -18,6 +18,7 @@
 
 static int ff_tok_get(const char *src, int *pos);
 static bool ff_tok_eof(const char *src, int pos);
+static bool ff_tok_skip_comment(const char *src, int *pos);
 
 
 /**
@@ -146,10 +147,7 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
         /* Handle pending block comment. */
         if ((t->state & FF_TOK_STATE_COMMENT))
         {
-            while (!ff_tok_eof(src, *pos)
-                        && ff_tok_get(src, pos) != ')')
-            {}
-            if (ff_tok_eof(src, *pos))
+            if (!ff_tok_skip_comment(src, pos))
                 return FF_TOKEN_NULL;
             t->state &= ~FF_TOK_STATE_COMMENT;
         }
@@ -293,10 +291,7 @@ ff_token_t ff_tokenizer_next(ff_tokenizer_t *t, const char *src, int *pos)
                 && t->token[0] == '('
                 && !(t->state & FF_TOK_STATE_SIG))
         {
-            while (!ff_tok_eof(src, *pos)
-                        && ff_tok_get(src, pos) != ')')
-            {}
-            if (ff_tok_eof(src, *pos))
+            if (!ff_tok_skip_comment(src, pos))
                 t->state |= FF_TOK_STATE_COMMENT;
             continue;
         }
@@ -363,4 +358,26 @@ static int ff_tok_get(const char *src, int *pos)
 static bool ff_tok_eof(const char *src, int pos)
 {
     return src[pos] == '\0';
+}
+
+/**
+ * Skip the rest of a `(` comment: the input up to and including the
+ * closing paren.
+ *
+ * Whether the comment closed can't be told from the cursor afterwards: a
+ * `)` that is the last byte of the input leaves it at the end, as an
+ * unclosed comment does. Telling them apart by the cursor kept such a
+ * comment open, and it swallowed the lines after it.
+ *
+ * @param src Source text.
+ * @param pos In/out cursor; left just past the `)`, or at the end.
+ * @return true if the comment closed in @p src.
+ */
+static bool ff_tok_skip_comment(const char *src, int *pos)
+{
+    int c;
+    while ((c = ff_tok_get(src, pos)) != -1)
+        if (c == ')')
+            return true;
+    return false;
 }

@@ -82,6 +82,10 @@ the project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- **Comment closed at the end of a line:** a `(` comment whose `)` is the
+  last byte of the text given to ff_eval() — a line from an interactive
+  host, which comes without its newline — no longer reads as unclosed
+  and swallows the lines after it (test case `047_comment_close`).
 - **Crashes on ordinary input:** `INT_MIN / -1` (and `mod`/`/mod`) no
   longer raise `SIGFPE`; a negative `pick`/`roll` index no longer reads
   past the stack top; `allot` with a negative count no longer truncates
