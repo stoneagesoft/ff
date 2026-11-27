@@ -1616,6 +1616,12 @@ transient string arena. A host bounds it with `ff_platform::mem_limit`
 (bytes; 0, the default, means no limit). Fixed-size state — the stacks
 and tables — is not counted.
 
+What is left the standard `unused` leaves (Core extension), and the host
+reads the same number with `ff_unused()`: the limit less the account, in
+bytes. Slabs are counted whole, so it falls a slab at a time rather than
+with every `allot`, and without a limit it is the largest positive
+cell, so a check such as `unused 1000 >` passes.
+
 An allocation beyond the limit, or one the host allocator refuses,
 does not crash the process. It fails softly — the heap operation that
 needed it writes nothing and records the refusal in the account — and

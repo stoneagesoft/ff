@@ -324,6 +324,16 @@ void ff_release_strings(ff_t *ff)
         ff_pad_release(ff);
 }
 
+/** @copydoc ff_unused */
+size_t ff_unused(const ff_t *ff)
+{
+    /* A cell's worth, so the host and the word see the same number;
+       without a limit that is the largest positive one, and a program's
+       `unused 1000 >` holds. */
+    size_t room = ff_mem_room(&ff->dict.mem);
+    return room < (size_t)FF_INT_MAX ? room : (size_t)FF_INT_MAX;
+}
+
 /** @copydoc ff_pop_real */
 bool ff_pop_real(ff_t *ff, double *out)
 {

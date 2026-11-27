@@ -398,6 +398,20 @@ void ff_throwf(ff_t *ff, int64_t code, const char *fmt, ...) FF_PRINTF_FMT(3, 4)
  */
 void ff_release_strings(ff_t *ff);
 
+/**
+ * Memory Forth code can still make the engine hold, as the `unused` word
+ * leaves it: ff_platform::mem_limit less what the engine holds for the
+ * words and strings Forth code has made. Word storage and strings are
+ * taken a slab at a time (FF_DICT_ARENA_SLAB, FF_PAD_INIT_SIZE), so the
+ * number falls in steps of a slab.
+ *
+ * @param ff Engine instance.
+ * @return Bytes, 0 at the limit; without a limit, the largest positive
+ *         cell value — INT64_MAX, or INT32_MAX on a 32-bit-cell build
+ *         (FF_32BIT).
+ */
+size_t ff_unused(const ff_t *ff);
+
 
 /* ===================================================================
  * Data-stack marshaling

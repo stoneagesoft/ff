@@ -26,7 +26,9 @@ the project follows [Semantic Versioning](https://semver.org/).
 - **Limits for untrusted code**, set per engine in `ff_platform_t`:
   - `mem_limit` caps the memory Forth code can make the engine hold —
     word storage, words, and the transient string arena. Beyond it an
-    allocation raises -8 (`FF_ERR_HEAP_OVER`).
+    allocation raises -8 (`FF_ERR_HEAP_OVER`). What is left, the
+    standard `unused ( -- u )` leaves, and `ff_unused()` returns the same
+    to the host; without a limit, the largest positive cell.
   - `deny` withholds `system` (`FF_CAP_SYSTEM`), the file words and
     `stdin` / `stdout` / `stderr` (`FF_CAP_FILES`) and `load`
     (`FF_CAP_LOAD`); a withheld word raises -21 when it runs.

@@ -1,0 +1,11 @@
+\ ff-test: lines mem=100000
+\ `unused` leaves what Forth code can still make the engine hold under
+\ the memory limit (mem= above): a definition takes some of it, and
+\ `forget` gives it back.
+
+unused 0> . cr
+unused
+: w 1 2 3 4 5 6 7 8 9 ;
+unused over < . cr
+forget w
+unused = . cr

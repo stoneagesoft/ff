@@ -224,6 +224,7 @@
     X(IS,               NONE)  /* Pop xt and store into next-token-named deferred word (ANS IS). */ \
     /* --- Heap --- */ \
     X(HERE,             NONE)  /* Push a pointer to the next free heap slot. */ \
+    X(UNUSED,           NONE)  /* ( -- u ) — bytes Forth code can still make the engine hold. */ \
     X(STORE,            NONE)  /* ( v a -- ) — store v at address a. */ \
     X(FETCH,            NONE)  /* ( a -- v ) — fetch from address a. */ \
     X(PLUS_STORE,       NONE)  /* ( v a -- ) — `*a += v`. */ \

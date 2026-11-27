@@ -23,6 +23,17 @@ const ff_word_def_t FF_HEAP_WORDS[] =
                "The current heap allocation address is placed on the top of the stack."),
       FF_TR_RU("Адрес кучи\n"
                "Кладёт на вершину стека текущий адрес выделения в куче.")),
+    _FF_W("unused", FF_OP_UNUSED, "( -- u )",
+      FF_TR_EN("Memory left\n"
+               "Leaves the number of bytes Forth code can still make the engine\n"
+               "hold: the host's memory limit less what the engine holds now.\n"
+               "Memory for words and strings is taken a slab at a time, so the\n"
+               "number falls in steps. Without a limit, the largest positive number."),
+      FF_TR_RU("Свободная память\n"
+               "Кладёт, сколько ещё байт может занять код Форта: предел памяти\n"
+               "хоста минус то, что движок уже держит. Память под слова и строки\n"
+               "берётся кусками, поэтому число убывает ступенями. Без предела —\n"
+               "наибольшее положительное число.")),
     _FF_W("!", FF_OP_STORE, "( n addr -- )",
       FF_TR_EN("Store into address\n"
                "Stores the value *n* into the address *addr*."),

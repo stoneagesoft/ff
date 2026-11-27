@@ -835,6 +835,41 @@ static void test_memory_limit(void)
     ff_free(ff);
 }
 
+/* `unused` and ff_unused() report what Forth code can still make the
+   engine hold: the limit less the account, which a definition takes
+   from and `forget` gives back; without a limit, the largest positive
+   cell, so a check such as `unused 1000 >` passes. */
+static void test_unused(void)
+{
+    int64_t n = 0;
+
+    ff_t *ff = new_engine(1000000);
+    CHECK(ff_unused(ff) == (size_t)FF_INT_MAX);
+    CHECK(ff_eval(ff, "unused") == FF_OK);
+    CHECK(ff_pop_int(ff, &n) && n == FF_INT_MAX);
+    ff_free(ff);
+
+    ff_platform_t p = { .vprintf = capture_vprintf, .mem_limit = 100000 };
+    ff = ff_new(&p);
+    size_t before = ff_unused(ff);
+    CHECK(before == 100000 - ff->dict.mem.used);
+    CHECK(ff_eval(ff, ": w 1 2 3 4 5 6 7 8 9 ;") == FF_OK);
+    CHECK(ff_unused(ff) < before);
+    CHECK(ff_unused(ff) == 100000 - ff->dict.mem.used);
+    CHECK(ff_eval(ff, "unused") == FF_OK);
+    CHECK(ff_pop_int(ff, &n) && n == (int64_t)ff_unused(ff));
+    CHECK(ff_eval(ff, "forget w") == FF_OK);
+    CHECK(ff_unused(ff) == before);
+
+    /* At the limit, nothing is left. */
+    ff_error_t ec = FF_OK;
+    for (int i = 0; i < 100000 && ec == FF_OK; ++i)
+        ec = ff_eval(ff, "\"0123456789012345678901234567890123456789\" drop");
+    CHECK(ec == FF_ERR_HEAP_OVER);
+    CHECK(ff_unused(ff) < 100);
+    ff_free(ff);
+}
+
 #if FF_WITH_SYSTEM && FF_WITH_FILES
 static int  g_commands;
 static char g_last_command[64];
@@ -1169,6 +1204,7 @@ int main(void)
 #endif
     test_definitions();
     test_memory_limit();
+    test_unused();
 #if FF_WITH_SYSTEM && FF_WITH_FILES
     test_sandbox();
 #endif

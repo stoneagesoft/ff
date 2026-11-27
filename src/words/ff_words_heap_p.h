@@ -22,6 +22,14 @@ case FF_OP_HERE:
     }
     _FF_NEXT();
 
+/** ( -- u )  `unused` — bytes Forth code can still make the engine hold
+    under the memory limit; without a limit, the largest positive cell
+    (ff_unused()). */
+case FF_OP_UNUSED:
+    _FF_SO(1);
+    _FF_PUSH((ff_int_t)ff_unused(ff));
+    _FF_NEXT();
+
 /** ( v a -- )  `!` — store v at address a. */
 case FF_OP_STORE:
     _FF_SL(2);
