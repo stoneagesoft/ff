@@ -77,14 +77,36 @@
 #define FF_DICT_ARENA_SLAB  (64 * 1024)
 #endif
 
+/**
+ * @def FF_EVAL_DEPTH
+ * @brief How many evaluations can be in progress at once: the host's
+ *        ff_eval() or ff_load(), and every `evaluate` and `load` Forth
+ *        code runs inside it.
+ *
+ * Each one is a C call on the host's stack, a few hundred bytes deep, so
+ * past this depth ff_eval() raises -5 (return stack overflow) instead of
+ * evaluating: a runaway `: r "r" evaluate ; r` ends in an error, not in
+ * a crashed host. A host on a small stack — a microcontroller task —
+ * sets a smaller one at build time (CMake `-DFF_EVAL_DEPTH=16`). At least
+ * 2: ff_load() and each line it evaluates take one each.
+ */
+#ifndef FF_EVAL_DEPTH
+#define FF_EVAL_DEPTH       256
+#endif
+#if FF_EVAL_DEPTH < 2
+#  error "FF_EVAL_DEPTH must be at least 2: ff_load() and each line it evaluates take one each."
+#endif
+
 /** @brief Maximum length of a single token, in bytes. */
 #define FF_TOKEN_SIZE       256
 
 /** @brief Bytes reserved for the most recent error message. */
 #define FF_ERROR_MSG_SIZE   512
 
-/** @brief Bytes for a `man` entry in one language, its Markdown before
- *         rendering (the longest built-in one needs about 1.7 KB). */
+/** @brief Most bytes of a `man` entry in one language, its Markdown
+ *         before rendering, that `man` shows (the longest built-in one
+ *         needs about 1.7 KB). It is copied to the heap at its own size,
+ *         not to a buffer of this size on the stack. */
 #define FF_MAN_SIZE         4096
 
 /** @brief Initial line buffer size for ff_load(); longer lines grow it. */

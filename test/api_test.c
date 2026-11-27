@@ -17,6 +17,7 @@
  */
 
 #include <ff_p.h>
+#include <3rdparty/fort/fort.h>
 
 #include <errno.h>
 #include <locale.h>
@@ -870,6 +871,57 @@ static void test_unused(void)
     ff_free(ff);
 }
 
+/* libfort draws the tables of `.s`, `man` and `dump-word` with memory of
+   its own, from the host's heap. Run out of it at each of its
+   allocations in turn, in English and in Russian (whose manuals have
+   dashes, wider than one byte): the word either prints its table or
+   raises -59, and never crashes; the next word runs as usual. */
+static int g_fort_left;
+
+static void *fort_malloc_limited(size_t size)
+{
+    if (g_fort_left <= 0)
+        return NULL;
+    --g_fort_left;
+    return malloc(size);
+}
+
+static void test_table_oom(void)
+{
+    static const char *const SOURCES[] = { "1 2 3 .s", "man dup", "man unused", "dump-word dup" };
+    static const char *const LANGS[] = { "\"en\" lang!", "\"ru\" lang!" };
+
+    ff_t *ff = new_engine(1000000);
+    CHECK(ff_eval(ff, ": clear  begin depth while drop repeat ;") == FF_OK);
+    for (size_t k = 0; k < 2 * sizeof(SOURCES) / sizeof(SOURCES[0]); ++k)
+    {
+        const size_t i = k % (sizeof(SOURCES) / sizeof(SOURCES[0]));
+        if (i == 0)
+            CHECK(ff_eval(ff, LANGS[k / (sizeof(SOURCES) / sizeof(SOURCES[0]))]) == FF_OK);
+        bool printed = false;
+        for (int n = 0; n < 100000 && !printed; ++n)
+        {
+            reset_output();
+            g_fort_left = n;
+            ft_set_memory_funcs(fort_malloc_limited, free);
+            ff_error_t ec = ff_eval(ff, SOURCES[i]);
+            ft_set_memory_funcs(NULL, NULL);
+
+            CHECK(ec == FF_OK || ec == FF_ERR_OOM);
+            if (n == 0)
+                CHECK(ec == FF_ERR_OOM);
+            /* libfort got all it asked for: the table is out. */
+            printed = g_fort_left > 0;
+            if (printed)
+                CHECK(ec == FF_OK && g_out_len > 0);
+            CHECK(ff_eval(ff, "clear") == FF_OK);
+        }
+        CHECK(printed);
+    }
+    CHECK(ff_eval(ff, "2 3 + .") == FF_OK);
+    ff_free(ff);
+}
+
 #if FF_WITH_SYSTEM && FF_WITH_FILES
 static int  g_commands;
 static char g_last_command[64];
@@ -1205,6 +1257,7 @@ int main(void)
     test_definitions();
     test_memory_limit();
     test_unused();
+    test_table_oom();
 #if FF_WITH_SYSTEM && FF_WITH_FILES
     test_sandbox();
 #endif

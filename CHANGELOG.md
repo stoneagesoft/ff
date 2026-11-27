@@ -91,9 +91,23 @@ the project follows [Semantic Versioning](https://semver.org/).
   heap may not have in one piece; and under a `mem_limit` of 64 KiB the
   slab, cut down to the limit, took all of it, so the next definition
   failed with -8.
+- `FF_EVAL_DEPTH` (CMake `-DFF_EVAL_DEPTH=16`, default 256) bounds the
+  evaluations in progress at once — the host's `ff_eval()` or
+  `ff_load()` and every `evaluate` and `load` inside it. Past it
+  ff_eval() raises -5 (return stack overflow), which `evaluate` leaves
+  as its status, instead of recursing until the host's stack
+  overflows (test case `049_eval_depth`).
 
 ### Fixed
 
+- **Tables out of memory:** `.s`, `man`, `dump-word` and `dump` raise
+  -59 when libfort can't get memory for their table, instead of
+  writing through NULL; ff counts a cell's width itself, since
+  libfort's count copies the cell to a buffer it doesn't check
+  (`test_table_oom`, which fails libfort's allocations one by one).
+- **`man` on a small stack:** it took 12 KB of the host's stack — the
+  manual and its rendering in buffers of 4 KB each. Both go to the
+  heap at their own size now, and `man` needs about 4 KB of stack.
 - **Comment closed at the end of a line:** a `(` comment whose `)` is the
   last byte of the text given to ff_eval() — a line from an interactive
   host, which comes without its newline — no longer reads as unclosed

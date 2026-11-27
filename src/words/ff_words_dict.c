@@ -75,9 +75,20 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
     }
 
     /* The manual in the engine's language: the stack effect every
-       language shares, then that language's title and text. */
-    char man[FF_MAN_SIZE];
-    ff_tr_copy(ff_lang(ff), w->manual, man, sizeof(man));
+       language shares, then that language's title and text. Both it and
+       its rendering go to the heap at their own size — a few KB, which a
+       host running ff on a small stack (a microcontroller task) can't
+       spare there. */
+    size_t man_size = ff_tr_copy(ff_lang(ff), w->manual, NULL, 0) + 1;
+    if (man_size > FF_MAN_SIZE)
+        man_size = FF_MAN_SIZE;
+    char *man = malloc(man_size);
+    if (!man)
+    {
+        ff_fail_oom(ff, man_size);
+        return;
+    }
+    ff_tr_copy(ff_lang(ff), w->manual, man, man_size);
 
     /* Its first line is the prototype; the rest is the synopsis. */
     const char *p = man;
@@ -102,27 +113,38 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
        since it's tabular by nature. The flag picks ANSI vs plain at
        compile time; both renderers ship and either is callable
        directly via ff_md_snprintf / ff_md_vt_snprintf. */
-    char synbuf[4096];
 #if FF_VT_COLORS
-    int synlen = ff_md_vt_snprintf(synbuf, sizeof(synbuf), synopsis, 76);
+#  define FF_MD_RENDER ff_md_vt_snprintf
 #else
-    int synlen = ff_md_snprintf(synbuf, sizeof(synbuf), synopsis, 76);
+#  define FF_MD_RENDER ff_md_snprintf
 #endif
+    /* The first pass only measures (the renderer counts what it would
+       write), the second renders into a buffer of that size. */
+    size_t syn_size = (size_t)FF_MD_RENDER(NULL, 0, synopsis, 76) + 1;
+    char *synbuf = malloc(syn_size);
+    if (!synbuf)
+    {
+        free(man);
+        ff_fail_oom(ff, syn_size);
+        return;
+    }
+    int synlen = FF_MD_RENDER(synbuf, syn_size, synopsis, 76);
+#undef FF_MD_RENDER
     /* The Markdown renderer terminates each paragraph with `\n\n` so
        independent paragraphs separate visually; for a single fort
        cell that creates spurious blank lines after the last
        paragraph. Trim them. */
-    if ((size_t)synlen >= sizeof(synbuf))
-    {
-        ff_utf8_cut(synbuf);
-        synlen = (int)strlen(synbuf);
-    }
     while (synlen > 0
            && (synbuf[synlen - 1] == '\n' || synbuf[synlen - 1] == ' '))
         synbuf[--synlen] = '\0';
 
-    ft_table_t *table = ft_create_table();
-    ft_set_border_style(table, FT_SOLID_ROUND_STYLE);
+    ft_table_t *table = ff_table_new(ff);
+    if (!table)
+    {
+        free(synbuf);
+        free(man);
+        return;
+    }
 
     /* Header row: Name | Prototype | Immediate. */
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
@@ -146,8 +168,9 @@ void ff_print_manual(ff_t *ff, const ff_word_t *w)
     ft_set_cell_prop(table, 2, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_LEFT);
     ft_u8write_ln(table, synbuf);
 
-    ff_printf(ff, "%s", (const char *)ft_to_u8string(table));
-    ft_destroy_table(table);
+    ff_table_print(ff, table, "");
+    free(synbuf);
+    free(man);
 }
 
 void ff_w_man_impl(ff_t *ff)
@@ -165,8 +188,9 @@ void ff_w_dump_word_impl(ff_t *ff)
     if (!w)
         return;
 
-    ft_table_t *table = ft_create_table();
-    ft_set_border_style(table, FT_SOLID_ROUND_STYLE);
+    ft_table_t *table = ff_table_new(ff);
+    if (!table)
+        return;
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
@@ -191,8 +215,9 @@ void ff_w_dump_word_impl(ff_t *ff)
                    w->heap.size,
                    w->heap.size * sizeof(ff_int_t));
 
-    ff_printf(ff, "%s", (const char *)ft_to_u8string(table));
-    ft_destroy_table(table);
+    ff_table_print(ff, table, "");
+    if (ff->state & FF_STATE_THROWN)
+        return;
 
     ff_dump_bytes(ff, (const char *)w->heap.data,
                   w->heap.size * sizeof(ff_int_t));

@@ -55,6 +55,15 @@ if(FF_DICT_ARENA_SLAB)
     add_compile_definitions(FF_DICT_ARENA_SLAB=${FF_DICT_ARENA_SLAB})
 endif()
 
+# How many evaluations can be in progress at once: the host's ff_eval()
+# or ff_load() and every `evaluate` and `load` inside it. Each is a C
+# call on the host's stack, so a host on a small stack sets a smaller
+# one; empty keeps the default, FF_EVAL_DEPTH in src/ff_config_p.h (256).
+set(FF_EVAL_DEPTH "" CACHE STRING "Evaluations in progress at once; empty keeps the default (256).")
+if(FF_EVAL_DEPTH)
+    add_compile_definitions(FF_EVAL_DEPTH=${FF_EVAL_DEPTH})
+endif()
+
 # Memory-safety mode. When ON, every word that takes an address, a
 # string, an xt or a file stream (`@`, `!`, `type`, `s!`, `find`,
 # `execute`, `>name`, `fgets`, …) validates it against the engine's

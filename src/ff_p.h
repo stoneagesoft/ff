@@ -313,6 +313,23 @@ FF_COLD ff_error_t ff_fail_token_long(ff_t *ff);
 FF_COLD ff_error_t ff_fail_bad_escape(ff_t *ff);
 /** @brief Raise "unterminated string literal". */
 FF_COLD ff_error_t ff_fail_open_string(ff_t *ff);
+/** @brief Raise -59 "out of memory": the host allocator refused @p size
+ *         bytes, or, with @p size 0, an amount not known (a table libfort
+ *         could not build). */
+FF_COLD ff_error_t ff_fail_oom(ff_t *ff, size_t size);
+
+/* libfort tables, as `.s`, `man` and the dump words print them. libfort
+   allocates as it goes, from the host's heap; both helpers raise "out of
+   memory" when it fails, so a word that gets NULL just returns. */
+
+typedef struct ft_table ft_table_t;
+
+/** @brief A new libfort table with ff's rounded border, or NULL with "out
+ *         of memory" raised. */
+ft_table_t *ff_table_new(ff_t *ff);
+/** @brief Print @p table after @p prefix and destroy it; if libfort
+ *         cannot render it, raise "out of memory" instead of printing. */
+void ff_table_print(ff_t *ff, ft_table_t *table, const char *prefix);
 
 /**
  * @brief Drop a character a cut at a byte count left half-written at the

@@ -926,6 +926,31 @@ ff_error_t ff_fail_open_string(ff_t *ff)
                                FF_TR_RU("Строковый литерал не закрыт.")));
 }
 
+/** @copydoc ff_fail_oom */
+ff_error_t ff_fail_oom(ff_t *ff, size_t size)
+{
+    if (size)
+        return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
+                         FF_TR(ff, FF_TR_EN("Out of memory allocating %zu bytes."),
+                                   FF_TR_RU("Не хватает памяти (запрошено байт: %zu).")),
+                         size);
+    return ff_tracef(ff, FF_SEV_ERROR | FF_ERR_OOM,
+                     FF_TR(ff, FF_TR_EN("Out of memory."),
+                               FF_TR_RU("Не хватает памяти.")));
+}
+
+/**
+ * Raise -5 for an evaluation nested past FF_EVAL_DEPTH.
+ * @param ff Engine.
+ */
+static FF_COLD void ff_fail_eval_depth(ff_t *ff)
+{
+    ff_tracef(ff, FF_SEV_ERROR | FF_ERR_RSTACK_OVER,
+              FF_TR(ff, FF_TR_EN("Evaluations nested more than %d deep."),
+                        FF_TR_RU("Вычисления вложены глубже %d уровней.")),
+              FF_EVAL_DEPTH);
+}
+
 /**
  * Raise ABORT (THROW -1), for `abort` and for ff_abort() called from a
  * running native word.
@@ -953,10 +978,7 @@ static bool ff_mem_check(ff_t *ff)
         return false;
     m->failed = false;
     if (m->oom)
-        ff_raise(ff, FF_THROW_ALLOCATE, FF_SEV_ERROR | FF_ERR_OOM,
-                 FF_TR(ff, FF_TR_EN("Out of memory allocating %zu bytes."),
-                           FF_TR_RU("Не хватает памяти (запрошено байт: %zu).")),
-                 m->refused);
+        ff_fail_oom(ff, m->refused);
     else if (m->limit && m->refused != SIZE_MAX)
         ff_raise(ff, FF_THROW_DICT_OVER, FF_SEV_ERROR | FF_ERR_HEAP_OVER,
                  FF_TR(ff, FF_TR_EN("Memory limit reached: %zu more bytes wanted, "
@@ -1761,12 +1783,20 @@ ff_error_t ff_eval(ff_t *ff, const char *src)
     ff->input_pos = 0;
     ff->tokenizer.pos = 0;
 
-    ff_eval_enter(ff);
-
     int pos = 0;
     ff_dict_t *d = &ff->dict;
     ff_tokenizer_t *t = &ff->tokenizer;
     ff_error_t ec = FF_OK;
+
+    ff_eval_enter(ff);
+
+    /* Every nested evaluation is another C call on the host's stack:
+       past FF_EVAL_DEPTH of them, raise -5 rather than run it out. */
+    if (ff_unlikely(ff->eval_depth > FF_EVAL_DEPTH))
+    {
+        ff_fail_eval_depth(ff);
+        goto out;
+    }
 
     for (;;)
     {
@@ -2000,8 +2030,9 @@ static FF_NOINLINE void ff_fix_range_error(ff_t *ff, ff_real_t r)
 static FF_NOINLINE void ff_print_stack(ff_t *ff)
 {
     const ff_stack_t *S = &ff->stack;
-    ft_table_t *tbl = ft_create_table();
-    ft_set_border_style(tbl, FT_SOLID_ROUND_STYLE);
+    ft_table_t *tbl = ff_table_new(ff);
+    if (!tbl)
+        return;
     ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
     ft_set_cell_prop(tbl, 0, FT_ANY_COLUMN, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
     ft_set_cell_prop(tbl, FT_ANY_ROW, FT_ANY_COLUMN, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_RIGHT);
@@ -2025,8 +2056,75 @@ static FF_NOINLINE void ff_print_stack(ff_t *ff)
         ft_u8printf_ln(tbl, "%zu|%" FF_PRIdCELL "|%" FF_PRIXCELL "|%s|%c|%p",
                        n, v, (ff_uint_t)v, num, c, (void *)(intptr_t)v);
     }
-    ff_printf(ff, "\n%s", (const char *)ft_to_u8string(tbl));
-    ft_destroy_table(tbl);
+    ff_table_print(ff, tbl, "\n");
+}
+
+/**
+ * The width of a UTF-8 cell for libfort, counted in place. libfort's own
+ * count copies the cell to a buffer of its own, and when it can't get one
+ * writes through NULL. Below U+2E80 a character takes one column, as
+ * libfort counts it too — all but the Hangul Jamo (U+1100–U+11FF) and
+ * the angle brackets U+2329–U+232A, which it counts as two. A cell with
+ * those, with anything from U+2E80 on, where its other wide characters
+ * are, or with malformed UTF-8 goes back to libfort's count.
+ *
+ * @param beg First byte of the cell's text.
+ * @param end Byte past its last.
+ * @param width Where to put the width, in columns.
+ * @return 0 if counted, non-zero to leave it to libfort.
+ */
+static int ff_table_width(const void *beg, const void *end, size_t *width)
+{
+    const unsigned char *p = beg;
+    const unsigned char *e = end;
+    size_t columns = 0;
+    while (p < e)
+    {
+        if (*p < 0x80)
+            p += 1;
+        else if ((*p & 0xE0) == 0xC0 && e - p >= 2)
+            p += 2;
+        else if ((*p & 0xF0) == 0xE0 && e - p >= 3)
+        {
+            const unsigned c = ((unsigned)(*p & 0x0F) << 12)
+                               | ((unsigned)(p[1] & 0x3F) << 6) | (unsigned)(p[2] & 0x3F);
+            if ((c >= 0x1100 && c < 0x1200) || c == 0x2329 || c == 0x232A || c >= 0x2E80)
+                return 1;
+            p += 3;
+        }
+        else
+            return 1;
+        ++columns;
+    }
+    *width = columns;
+    return 0;
+}
+
+/** @copydoc ff_table_new */
+ft_table_t *ff_table_new(ff_t *ff)
+{
+    ft_set_u8strwid_func(ff_table_width);
+    ft_table_t *table = ft_create_table();
+    if (!table)
+    {
+        ff_fail_oom(ff, 0);
+        return NULL;
+    }
+    ft_set_border_style(table, FT_SOLID_ROUND_STYLE);
+    return table;
+}
+
+/** @copydoc ff_table_print */
+void ff_table_print(ff_t *ff, ft_table_t *table, const char *prefix)
+{
+    /* libfort renders into a buffer of its own; NULL means it could not
+       get one. */
+    const char *text = (const char *)ft_to_u8string(table);
+    if (text)
+        ff_printf(ff, "%s%s", prefix, text);
+    else
+        ff_fail_oom(ff, 0);
+    ft_destroy_table(table);
 }
 
 /** @copydoc ff_exec */

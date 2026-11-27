@@ -1,0 +1,16 @@
+\ ff-test: lines
+\ Evaluations nested past FF_EVAL_DEPTH.
+\
+\ Each `evaluate` is a C call of ff_eval() on the host's stack, so a
+\ recursion through it used to run until the host's stack overflowed.
+\ Past FF_EVAL_DEPTH evaluations the next one raises -5 (return stack
+\ overflow): `evaluate` leaves it as its status, the levels above it
+\ finish, and the engine carries on.
+
+variable levels  0 levels !
+variable status  0 status !
+: r  1 levels +!  "r" evaluate ?dup if status ! then ;
+r
+status @ . cr
+levels @ 1 > . cr
+1 2 + . cr

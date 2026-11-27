@@ -711,7 +711,11 @@ bounded by the return stack like any other call, and an exception inside
 the target unwinds through the caller like any other. The only C
 re-entry left is where a word evaluates source (`evaluate`, `load`), runs
 an exception frame (`catch`), or calls a native word — each of which
-checks for an exception when the nested run returns.
+checks for an exception when the nested run returns. Evaluation is
+the one that can recurse without bound — `: r "r" evaluate ; r` —
+so ff_eval() counts the evaluations in progress and past
+`FF_EVAL_DEPTH` of them raises -5 (return stack overflow) instead of
+running the host out of stack; `evaluate` leaves it as its status.
 
 An operand-free opcode can tell whether it is running straight from a
 stub — the interpreter or `execute` running the word itself — rather
@@ -1448,6 +1452,7 @@ All buffer sizes are defined in `ff_config_p.h`:
 | `FF_INIT_HEAP_SIZE` | 64 | Initial heap allocation for a new word (cells) |
 | `FF_PAD_INIT_SIZE` | 32 KiB | Slab size of the transient string arena; each slab counts against `mem_limit`, and a host short of memory sets a smaller one (CMake `-DFF_PAD_INIT_SIZE=2048`) |
 | `FF_DICT_ARENA_SLAB` | 64 KiB | Slab size of the word-storage arena; each slab counts against `mem_limit` as a whole, so under a small limit the first definition's slab would take all of it — a host short of memory sets a smaller one (CMake `-DFF_DICT_ARENA_SLAB=4096`) |
+| `FF_EVAL_DEPTH` | 256 | Evaluations in progress at once: the host's `ff_eval()` or `ff_load()` and every `evaluate` and `load` inside it, each a C call on the host's stack. Past it ff_eval() raises -5 (return stack overflow); a host on a small stack sets a smaller one (CMake `-DFF_EVAL_DEPTH=16`) |
 | `FF_CF_DEPTH` | 64 | Nesting of open control structures in one definition |
 | `FF_OPEN_FILES_MAX` | 32 | Streams one engine's Forth code can have open at once |
 | `FF_TOKEN_SIZE` | 256 | Tokenizer token buffer (bytes) |
@@ -1633,6 +1638,17 @@ the allocator raises -59 (`FF_ERR_OOM`). A definition that was being
 compiled is abandoned with it, and a word that was being created is
 removed. Near the limit, new slabs are cut down to what's left, so a
 request that fits still succeeds.
+
+The tables of `.s`, `man`, `dump-word` and `dump` are drawn by libfort,
+with memory it takes from the host's heap as it goes, outside the
+account: `.s` of a few cells borrows about 17 KB while it prints,
+most of it the buffer the finished table is rendered into. When
+libfort can't get memory, the word raises -59 instead of printing
+(`ff_table_new()`, `ff_table_print()`); and ff counts the width of a
+cell itself (`ft_set_u8strwid_func()`), since libfort's own count
+copies the cell to a buffer it doesn't check. `man` copies the
+manual and renders it on the heap at their own size, not in buffers
+of 4 KB each on the stack.
 
 Sizes are checked before anything is allocated: a negative count to
 `allot`, `array`, `string` or `dump` (and a zero one to `allot`) raises

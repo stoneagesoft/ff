@@ -28,8 +28,9 @@ void ff_dump_bytes(ff_t *ff, const char *addr, size_t size)
     if (size == 0)
         return;
 
-    ft_table_t *table = ft_create_table();
-    ft_set_border_style(table, FT_SOLID_ROUND_STYLE);
+    ft_table_t *table = ff_table_new(ff);
+    if (!table)
+        return;
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
     ft_set_cell_prop(table, 0, FT_ANY_COLUMN, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
     ft_set_cell_prop(table, 0, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_CENTER);
@@ -72,8 +73,7 @@ void ff_dump_bytes(ff_t *ff, const char *addr, size_t size)
         ft_u8write_ln(table, addr_buf, hex, ascii);
     }
 
-    ff_printf(ff, "%s", (const char *)ft_to_u8string(table));
-    ft_destroy_table(table);
+    ff_table_print(ff, table, "");
 }
 
 #ifdef FF_OS_UNIX
@@ -107,8 +107,9 @@ void ff_print_memstat(ff_t *ff)
 
     const long page_size = sysconf(_SC_PAGE_SIZE);
 
-    ft_table_t *table = ft_create_table();
-    ft_set_border_style(table, FT_SOLID_ROUND_STYLE);
+    ft_table_t *table = ff_table_new(ff);
+    if (!table)
+        return;
     ft_set_cell_prop(table, FT_ANY_ROW, 0, FT_CPROP_ROW_TYPE, FT_ROW_HEADER);
     ft_set_cell_prop(table, FT_ANY_ROW, 0, FT_CPROP_CELL_TEXT_STYLE, FT_TSTYLE_BOLD);
     ft_set_cell_prop(table, FT_ANY_ROW, 0, FT_CPROP_TEXT_ALIGN, FT_ALIGNED_RIGHT);
@@ -137,8 +138,7 @@ void ff_print_memstat(ff_t *ff)
                    FF_TR(ff, FF_TR_EN("Total"), FF_TR_RU("Всего")),
                    (long)(size * page_size));
 
-    ff_printf(ff, "%s", (const char *)ft_to_u8string(table));
-    ft_destroy_table(table);
+    ff_table_print(ff, table, "");
 }
 #endif
 

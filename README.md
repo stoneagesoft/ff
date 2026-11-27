@@ -256,6 +256,7 @@ Configurable options:
 | `FF_32BIT`             | OFF     | 32-bit cells and single-precision reals, for 32-bit targets |
 | `FF_PAD_INIT_SIZE`     | 32 KiB  | Slab size of the transient string arena, in bytes; each slab counts against `mem_limit` |
 | `FF_DICT_ARENA_SLAB`   | 64 KiB  | Slab size of the word-storage arena, in bytes; each slab counts against `mem_limit` |
+| `FF_EVAL_DEPTH`        | 256     | Evaluations in progress at once — the host's `ff_eval()` or `ff_load()` and each `evaluate` and `load` inside it; past it -5 |
 | `FF_INSTALL`           | ON      | Generate the install rules, CMake package and pkg-config file; OFF by default when *ff* is a subproject |
 | `BUILD_SHARED_LIBS`    | OFF     | Shorthand: equivalent to `FF_BUILD_SHARED=ON`     |
 
